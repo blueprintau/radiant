@@ -70,6 +70,8 @@ final class Database
     /**
      * The active connection, narrowed to a SQL connection.
      *
+     * @param string|null $name The connection name; defaults to the
+     *        current connection.
      * @return SqlConnection The active connection.
      * @throws UnsupportedFeatureException When the active connection is not
      *         a {@see SqlConnection}.
