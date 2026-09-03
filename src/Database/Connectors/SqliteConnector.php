@@ -42,7 +42,7 @@ final class SqliteConnector extends SqlConnector
     /**
      * Create a SQLite connection from the given config.
      *
-     * @param array{database: mixed, options?: array<int, int|bool|array<mixed>>, ...} $config The connection config (database path, options, …).
+     * @param array{database: mixed, options?: array<int, int|bool|array<mixed>>, ...<mixed>} $config The connection config (database path, options, …).
      * @return SqliteConnection A ready-to-use SQLite connection.
      * @throws \InvalidArgumentException If the database path is not a string.
      */

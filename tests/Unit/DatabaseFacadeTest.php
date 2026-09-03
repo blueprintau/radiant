@@ -56,6 +56,25 @@ final class DatabaseFacadeTest extends TestCase
     }
 
     /**
+     * sqlConnection() narrows to a SQL connection by name.
+     */
+    public function testSqlConnection(): void
+    {
+        self::assertInstanceOf(SqliteConnection::class, Database::sqlConnection());
+        self::assertInstanceOf(SqliteConnection::class, Database::sqlConnection('sqlite'));
+    }
+
+    /**
+     * sqlConnection() on a non-SQL connection throws.
+     */
+    public function testSqlConnectionOnNonSqlConnectionThrows(): void
+    {
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('The active connection is not a SQL connection.');
+        Database::usingConnection('csv', fn () => Database::sqlConnection());
+    }
+
+    /**
      * table() returns a builder bound to the default connection.
      */
     public function testTable(): void

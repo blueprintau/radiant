@@ -76,7 +76,20 @@ final class Database
      * @throws UnsupportedFeatureException When the active connection is not
      *         a {@see SqlConnection}.
      */
-    private static function sql(?string $name = null): SqlConnection
+    /**
+     * The active connection, narrowed to a SQL connection.
+     *
+     * Use this to reach SQL-only connection methods — such as transactions,
+     * `insertGetId()` or `getPdo()` — through the facade, mirroring how
+     * {@see connection()} hands out the untyped connection.
+     *
+     * @param string|null $name The connection name; defaults to the
+     *        current connection.
+     * @return SqlConnection The active connection.
+     * @throws UnsupportedFeatureException When the active connection is not
+     *         a {@see SqlConnection}.
+     */
+    public static function sqlConnection(?string $name = null): SqlConnection
     {
         $connection = self::manager()->connection($name);
         if (!$connection instanceof SqlConnection) {
@@ -111,7 +124,7 @@ final class Database
      */
     public static function select(string $query, array $args = []): Collection
     {
-        return self::sql()->selectSql($query, $args);
+        return self::sqlConnection()->selectSql($query, $args);
     }
 
     /**
@@ -126,7 +139,7 @@ final class Database
      */
     public static function statement(string $query, array $args = []): void
     {
-        self::sql()->statement($query, $args);
+        self::sqlConnection()->statement($query, $args);
     }
 
     /**
@@ -142,7 +155,7 @@ final class Database
      */
     public static function affectingStatement(string $query, array $args = []): int
     {
-        return self::sql()->affectingStatement($query, $args);
+        return self::sqlConnection()->affectingStatement($query, $args);
     }
 
     /**
