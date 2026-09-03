@@ -1,0 +1,41 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BlueprintAU\Radiant\Database\Schema;
+
+/**
+ * The logical column types understood by the schema layer.
+ *
+ * A `ColumnType` is the portable, dialect-agnostic description of a column;
+ * each {@see SchemaGrammar} maps it to the dialect's native type via
+ * {@see SchemaGrammar::type()}. Using an enum (rather than a bare string)
+ * makes an invalid type a compile-time error instead of a silently-wrong
+ * column.
+ */
+enum ColumnType: string
+{
+    /** A variable-length string (requires a length). */
+    case String = 'string';
+
+    /** A 64-bit integer. */
+    case BigInt = 'bigint';
+
+    /** A 32-bit integer. */
+    case Int = 'int';
+
+    /** A floating-point number. */
+    case Float = 'float';
+
+    /** A boolean. */
+    case Boolean = 'boolean';
+
+    /** A date-time value. */
+    case DateTime = 'datetime';
+
+    /** A Unix timestamp. */
+    case Timestamp = 'timestamp';
+
+    /** A JSON document. */
+    case Json = 'json';
+}

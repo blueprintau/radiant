@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BlueprintAU\Radiant\Database\Query\Enums;
+
+/**
+ * The shape of a where clause stored on the builder.
+ *
+ * Each case names the clause's array shape, so the Grammar can match
+ * exhaustively on it and the builder can store exactly the keys each shape
+ * needs. A bare string would let an invalid type silently fall through to a
+ * default branch; an enum makes an unknown type a compile-time error.
+ */
+enum WhereType: string
+{
+    /** A comparison like `column = ?` — keys: column, operator, value, boolean. */
+    case Basic = 'basic';
+
+    /** A range like `column between ? and ?` — keys: column, operator, value, boolean. */
+    case Between = 'between';
+
+    /** A null check like `column is null` — keys: column, operator, boolean. */
+    case Null = 'null';
+
+    /** A raw SQL condition — keys: sql, boolean. */
+    case Raw = 'raw';
+
+    /** A column-to-column comparison — keys: first, operator, second, boolean. */
+    case Column = 'column';
+
+    /** A nested group of wheres — keys: query, boolean. */
+    case Nested = 'nested';
+}

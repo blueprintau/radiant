@@ -1,0 +1,969 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BlueprintAU\Radiant\Database\Query;
+
+use BlueprintAU\Collections\Collection;
+use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
+use BlueprintAU\Radiant\Database\Query\Enums\LockType;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
+
+/**
+ * Builds a database query fluently.
+ *
+ * Chain methods like `where()`, `orderBy()`, and `limit()` to describe what
+ * you want, then run it with `get()`. For example:
+ *
+ *     $users = $db->table('users')
+ *         ->where('active', 1)
+ *         ->orderBy('name')
+ *         ->get();
+ *
+ * The same builder works against any backend: SQL databases compile it to
+ * SQL, while a CSV connection applies the filters directly in PHP. Features
+ * that only make sense for SQL (joins, having, transactions) throw an
+ * {@see \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException}
+ * on backends that don't support them.
+ *
+ * **Bindings are stored per category** — {@see BindingCategory} — so a
+ * statement root only flattens the categories it actually compiled (an
+ * `update` never pulls in `having`/`order`/`union` bindings it doesn't use).
+ * The Grammar emits `?` placeholders in the same canonical category order, so
+ * the flattened list always matches the compiled SQL.
+ *
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator|string, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator|string, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
+ * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
+ *
+ * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
+ */
+class QueryBuilder
+{
+    /**
+     * The columns to select.
+     *
+     * @var list<string|Expression>
+     */
+    protected array $columns = ['*'];
+
+    /**
+     * Whether the select is `DISTINCT`.
+     *
+     * @var bool
+     */
+    protected bool $distinct = false;
+
+    /**
+     * The from clause — a table name or a subquery builder.
+     *
+     * @var string|QueryBuilder
+     */
+    protected string|QueryBuilder $from;
+
+    /**
+     * The alias of the from subquery, when `fromSub()` was used.
+     *
+     * @var string|null
+     */
+    protected ?string $fromAlias = null;
+
+    /**
+     * The joins to apply.
+     *
+     * @var list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean}>}>
+     */
+    protected array $joins = [];
+
+    /**
+     * The where clauses.
+     *
+     * @var list<WhereClause>
+     */
+    protected array $wheres = [];
+
+    /**
+     * The group-by columns.
+     *
+     * @var list<string>
+     */
+    protected array $groups = [];
+
+    /**
+     * The having clauses.
+     *
+     * @var list<array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed}>
+     */
+    protected array $havings = [];
+
+    /**
+     * The order-by clauses.
+     *
+     * @var list<array{column: string|Expression, direction: string}>
+     */
+    protected array $orders = [];
+
+    /**
+     * The unions to append.
+     *
+     * @var list<array{query: QueryBuilder, all: bool}>
+     */
+    protected array $unions = [];
+
+    /**
+     * The row lock to apply, or null for none.
+     *
+     * @var LockType|null
+     */
+    protected ?LockType $lock = null;
+
+    /**
+     * The maximum number of rows to return.
+     *
+     * @var int|null
+     */
+    protected ?int $limit = null;
+
+    /**
+     * The number of rows to skip.
+     *
+     * @var int|null
+     */
+    protected ?int $offset = null;
+
+    /**
+     * The PK column to return on insert, if known (null for raw).
+     *
+     * @var string|null
+     */
+    protected ?string $insertIdColumn = null;
+
+    /**
+     * Bindings grouped by the clause they belong to.
+     *
+     * @var array<string, list<BindingValue>>
+     */
+    protected array $bindings = [
+        BindingCategory::Select->value => [],
+        BindingCategory::From->value => [],
+        BindingCategory::Join->value => [],
+        BindingCategory::Where->value => [],
+        BindingCategory::GroupBy->value => [],
+        BindingCategory::Having->value => [],
+        BindingCategory::Order->value => [],
+        BindingCategory::Union->value => [],
+        BindingCategory::Lock->value => [],
+    ];
+
+    /**
+     * Create a new query builder bound to a table on a connection.
+     *
+     * @param ConnectionInterface $connection The backend the query will run on.
+     * @param string $table The table (or fully-qualified identifier) to query.
+     */
+    public function __construct(
+        public readonly ConnectionInterface $connection,
+        public readonly string $table,
+    ) {
+        $this->from = $table;
+    }
+
+    // ---- Selection ----
+
+    /**
+     * Set the columns to select.
+     *
+     * @param array<int, string|Expression>|string $columns A column list, or a single column.
+     * @return $this
+     */
+    public function select(array|string $columns = ['*']): static
+    {
+        $this->columns = is_array($columns) ? array_values($columns) : func_get_args();
+        return $this;
+    }
+
+    /**
+     * Add a raw SQL expression to the select list.
+     *
+     * @param string $expression The raw SQL to select.
+     * @return $this
+     */
+    public function selectRaw(string $expression): static
+    {
+        if ($this->columns === ['*']) {
+            $this->columns = [];
+        }
+        $this->columns[] = new Expression($expression);
+        return $this;
+    }
+
+    /**
+     * Make the select distinct.
+     *
+     * @return $this
+     */
+    public function distinct(): static
+    {
+        $this->distinct = true;
+        return $this;
+    }
+
+    // ---- From ----
+
+    /**
+     * Set the from clause to a subquery.
+     *
+     * Set-once like the table: the from cannot be changed after the builder
+     * is created, so calling this on a builder that already has a subquery
+     * from fails fast.
+     *
+     * @param QueryBuilder $query The subquery to select from.
+     * @param string $alias The alias the subquery is referenced by.
+     * @return $this
+     */
+    public function fromSub(QueryBuilder $query, string $alias): static
+    {
+        if ($this->from instanceof QueryBuilder) {
+            throw new \LogicException('The query from is already set and cannot be changed.');
+        }
+        $this->from = $query;
+        $this->fromAlias = $alias;
+        return $this;
+    }
+
+    // ---- Joins ----
+
+    /**
+     * Add an inner join.
+     *
+     * @param string $table The table to join.
+     * @param string $first The first column of the join condition.
+     * @param string $operator The comparison operator.
+     * @param string $second The second column of the join condition.
+     * @return $this
+     */
+    public function join(string $table, string $first, string $operator = '=', string $second = ''): static
+    {
+        return $this->addJoin(JoinType::Inner, $table, $first, $operator, $second);
+    }
+
+    /**
+     * Add a left join.
+     *
+     * @param string $table The table to join.
+     * @param string $first The first column of the join condition.
+     * @param string $operator The comparison operator.
+     * @param string $second The second column of the join condition.
+     * @return $this
+     */
+    public function leftJoin(string $table, string $first, string $operator = '=', string $second = ''): static
+    {
+        return $this->addJoin(JoinType::Left, $table, $first, $operator, $second);
+    }
+
+    /**
+     * Add a right join.
+     *
+     * @param string $table The table to join.
+     * @param string $first The first column of the join condition.
+     * @param string $operator The comparison operator.
+     * @param string $second The second column of the join condition.
+     * @return $this
+     */
+    public function rightJoin(string $table, string $first, string $operator = '=', string $second = ''): static
+    {
+        return $this->addJoin(JoinType::Right, $table, $first, $operator, $second);
+    }
+
+    /**
+     * Add a cross join.
+     *
+     * @param string $table The table to join.
+     * @return $this
+     */
+    public function crossJoin(string $table): static
+    {
+        return $this->addJoin(JoinType::Cross, $table, '', '=', '');
+    }
+
+    /**
+     * Append a join clause to the query.
+     *
+     * @param JoinType $type The join type.
+     * @param string $table The table to join.
+     * @param string $first The first column of the join condition.
+     * @param string $operator The comparison operator.
+     * @param string $second The second column of the join condition.
+     * @return $this
+     */
+    protected function addJoin(JoinType $type, string $table, string $first, string $operator, string $second): static
+    {
+        $this->joins[] = [
+            'type' => $type,
+            'table' => $table,
+            'wheres' => $second === ''
+                ? []
+                : [[
+                    'type' => WhereType::Column,
+                    'first' => $first,
+                    'operator' => $operator,
+                    'second' => $second,
+                    'boolean' => WhereBoolean::And,
+                ]],
+        ];
+        return $this;
+    }
+
+    // ---- Wheres ----
+
+    /**
+     * Add a where clause.
+     *
+     * @param string $column The column to compare.
+     * @param WhereOperator|string $operator The comparison operator.
+     * @param mixed $value The value to compare against.
+     * @param WhereBoolean $boolean The boolean connector to the previous clause.
+     * @return $this
+     */
+    public function where(string $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
+
+        if ($operator === WhereOperator::In || $operator === WhereOperator::NotIn) {
+            $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+            array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
+                array_values($value),
+                fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
+            ));
+            return $this;
+        }
+
+        if ($operator === WhereOperator::Between || $operator === WhereOperator::NotBetween) {
+            $this->wheres[] = ['type' => WhereType::Between, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+            array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
+                array_values($value),
+                fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
+            ));
+            return $this;
+        }
+
+        if ($operator === WhereOperator::Null || $operator === WhereOperator::NotNull) {
+            $this->wheres[] = ['type' => WhereType::Null, 'column' => $column, 'operator' => $operator, 'boolean' => $boolean];
+            return $this;
+        }
+
+        $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+        if ($value !== null && !$value instanceof Expression && !$value instanceof ToSqlValue) {
+            $this->bindings[BindingCategory::Where->value][] = $value;
+        }
+        return $this;
+    }
+
+    /**
+     * Add an `or where` clause.
+     *
+     * @param string $column The column to compare.
+     * @param WhereOperator|string $operator The comparison operator.
+     * @param mixed $value The value to compare against.
+     * @return $this
+     */
+    public function orWhere(string $column, WhereOperator|string $operator, mixed $value): static
+    {
+        return $this->where($column, $operator, $value, WhereBoolean::Or);
+    }
+
+    /**
+     * Add a `where in` clause.
+     *
+     * @param string $column The column to test.
+     * @param array<int, mixed> $values The list of values.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereIn(string $column, array $values, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::In, $values, $boolean);
+    }
+
+    /**
+     * Add a `where not in` clause.
+     *
+     * @param string $column The column to test.
+     * @param array<int, mixed> $values The list of values.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereNotIn(string $column, array $values, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::NotIn, $values, $boolean);
+    }
+
+    /**
+     * Add a `where null` clause.
+     *
+     * @param string $column The column to test.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::Null, null, $boolean);
+    }
+
+    /**
+     * Add a `where not null` clause.
+     *
+     * @param string $column The column to test.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereNotNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::NotNull, null, $boolean);
+    }
+
+    /**
+     * Add a `where between` clause.
+     *
+     * @param string $column The column to test.
+     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::Between, $range, $boolean);
+    }
+
+    /**
+     * Add a `where not between` clause.
+     *
+     * @param string $column The column to test.
+     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereNotBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->where($column, WhereOperator::NotBetween, $range, $boolean);
+    }
+
+    /**
+     * Add a raw SQL where clause.
+     *
+     * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
+     * @param array<int, mixed> $bindings The values to bind into the condition.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        $this->wheres[] = ['type' => WhereType::Raw, 'sql' => $sql, 'boolean' => $boolean];
+        array_push($this->bindings[BindingCategory::Where->value], ...$bindings);
+        return $this;
+    }
+
+    /**
+     * Add a column-to-column comparison.
+     *
+     * @param string $first The first column.
+     * @param string $operator The comparison operator.
+     * @param string $second The second column.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereColumn(string $first, string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        $this->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $operator, 'second' => $second, 'boolean' => $boolean];
+        return $this;
+    }
+
+    /**
+     * Add a nested group of where clauses.
+     *
+     * @param callable(QueryBuilder): void $callback Receives a fresh builder
+     *        to constrain; its clauses are wrapped in parentheses.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return $this
+     */
+    public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        $query = new self($this->connection, $this->table);
+        $callback($query);
+        $this->wheres[] = ['type' => WhereType::Nested, 'query' => $query, 'boolean' => $boolean];
+        array_push($this->bindings[BindingCategory::Where->value], ...$query->getBindings([BindingCategory::Where]));
+        return $this;
+    }
+
+    // ---- Grouping / Having ----
+
+    /**
+     * Group rows by one or more columns (for aggregate + select combos).
+     *
+     * @param string|array<int, string> $columns The column(s) to group by.
+     * @return $this
+     */
+    public function groupBy(string|array $columns): static
+    {
+        $this->groups = array_merge($this->groups, is_array($columns) ? $columns : func_get_args());
+        return $this;
+    }
+
+    /**
+     * Filter groups after aggregation (HAVING).
+     *
+     * @param string $column The column (or aggregate expression) to compare.
+     * @param WhereOperator|string $operator The comparison operator.
+     * @param mixed $value The value to compare against.
+     * @return $this
+     */
+    public function having(string $column, WhereOperator|string $operator, mixed $value): static
+    {
+        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
+        $this->havings[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value];
+        if ($value !== null && !$value instanceof Expression && !$value instanceof ToSqlValue) {
+            $this->bindings[BindingCategory::Having->value][] = $value;
+        }
+        return $this;
+    }
+
+    // ---- Ordering / Limit / Offset ----
+
+    /**
+     * Add an order-by clause.
+     *
+     * @param string $column The column to order by.
+     * @param string $direction `ASC` or `DESC`.
+     * @return $this
+     */
+    public function orderBy(string $column, string $direction = 'ASC'): static
+    {
+        $this->orders[] = ['column' => $column, 'direction' => strtoupper($direction)];
+        return $this;
+    }
+
+    /**
+     * Add a raw SQL order-by expression.
+     *
+     * @param string $sql The raw SQL (e.g. `FIELD(status, 'new', 'done')`).
+     * @return $this
+     */
+    public function orderByRaw(string $sql): static
+    {
+        $this->orders[] = ['column' => new Expression($sql), 'direction' => ''];
+        return $this;
+    }
+
+    /**
+     * Set the maximum number of rows to return.
+     *
+     * @param int $limit The row limit.
+     * @return $this
+     */
+    public function limit(int $limit): static
+    {
+        $this->limit = $limit;
+        return $this;
+    }
+
+    /**
+     * Set the number of rows to skip.
+     *
+     * @param int $offset The row offset.
+     * @return $this
+     */
+    public function offset(int $offset): static
+    {
+        $this->offset = $offset;
+        return $this;
+    }
+
+    // ---- Unions ----
+
+    /**
+     * Append a union to the query.
+     *
+     * @param QueryBuilder $query The query to union with.
+     * @param bool $all Whether to use `UNION ALL`.
+     * @return $this
+     */
+    public function union(QueryBuilder $query, bool $all = false): static
+    {
+        $this->unions[] = ['query' => $query, 'all' => $all];
+        array_push($this->bindings[BindingCategory::Union->value], ...$query->getBindings());
+        return $this;
+    }
+
+    // ---- Locks ----
+
+    /**
+     * Lock the selected rows for update.
+     *
+     * @return $this
+     */
+    public function lockForUpdate(): static
+    {
+        $this->lock = LockType::Update;
+        return $this;
+    }
+
+    /**
+     * Lock the selected rows in shared mode.
+     *
+     * @return $this
+     */
+    public function sharedLock(): static
+    {
+        $this->lock = LockType::Shared;
+        return $this;
+    }
+
+    // ---- Execution ----
+
+    /**
+     * Run the query and return the matching rows.
+     *
+     * @return Collection<int, \stdClass> The matching rows, each as an object.
+     */
+    public function get(): Collection
+    {
+        return $this->connection->select($this);
+    }
+
+    /**
+     * Run the query and return the first matching row.
+     *
+     * @return \stdClass|null The first row, or null when none match.
+     */
+    public function first(): ?object
+    {
+        return $this->limit(1)->get()->first();
+    }
+
+    /**
+     * The scalar method — the value of a single column from the first row.
+     *
+     * @param string $column The column to read.
+     * @return mixed The column value, or null when no row matches.
+     */
+    public function value(string $column): mixed
+    {
+        return $this->select($column)->first()->{$column} ?? null;
+    }
+
+    /**
+     * A collection of a single column's values from all rows.
+     *
+     * @param string $column The column to pluck.
+     * @return Collection<int, mixed> The column values.
+     */
+    public function pluck(string $column): Collection
+    {
+        return $this->select($column)->get()->pluck($column);
+    }
+
+    // ---- Aggregates are just select fields (built on select()) ----
+
+    /**
+     * Count the matching rows.
+     *
+     * @return int The row count.
+     */
+    public function count(): int
+    {
+        return (int) $this->value('count(*)');
+    }
+
+    /**
+     * Whether any matching rows exist.
+     *
+     * @return bool True when at least one row matches.
+     */
+    public function exists(): bool
+    {
+        return $this->count() > 0;
+    }
+
+    /**
+     * The maximum value of a column.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The maximum value.
+     */
+    public function max(string $column): mixed
+    {
+        return $this->value("max({$column})");
+    }
+
+    /**
+     * The minimum value of a column.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The minimum value.
+     */
+    public function min(string $column): mixed
+    {
+        return $this->value("min({$column})");
+    }
+
+    /**
+     * The sum of a column's values.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The sum.
+     */
+    public function sum(string $column): mixed
+    {
+        return $this->value("sum({$column})");
+    }
+
+    /**
+     * The average of a column's values.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The average.
+     */
+    public function avg(string $column): mixed
+    {
+        return $this->value("avg({$column})");
+    }
+
+    /**
+     * Multiple aggregates in one query.
+     *
+     * @param array<string, array{0: string, 1: string}> $aggregates
+     *        `['total' => ['count', '*'], 'max_price' => ['max', 'price']]`.
+     * @return array<string, mixed> The aggregate values keyed by alias.
+     */
+    public function aggregates(array $aggregates): array
+    {
+        $columns = [];
+        foreach ($aggregates as $alias => [$function, $column]) {
+            $columns[] = "{$function}({$column}) as {$alias}";
+        }
+        return (array) $this->select($columns)->first();
+    }
+
+    // ---- Writes ----
+
+    /**
+     * Insert one or more rows.
+     *
+     * @param array<string, mixed>|list<array<string, mixed>> $values A single
+     *        row or a list of rows.
+     * @return int The number of rows inserted.
+     */
+    public function insert(array $values): int
+    {
+        return $this->connection->insert($this, $values);
+    }
+
+    /**
+     * Insert a single row and return the generated id.
+     *
+     * @param array<string, mixed> $values The row to insert.
+     * @return string|int|null The generated id, or null when there is none.
+     */
+    public function insertGetId(array $values): string|int|null
+    {
+        return $this->connection->insertGetId($this, $values);
+    }
+
+    /**
+     * Update the rows matching the query's conditions.
+     *
+     * @param array<string, mixed> $values The columns to change and their new values.
+     * @return int How many rows were updated.
+     */
+    public function update(array $values): int
+    {
+        return $this->connection->update($this, $values);
+    }
+
+    /**
+     * Delete the rows matching the query's conditions.
+     *
+     * @return int How many rows were deleted.
+     */
+    public function delete(): int
+    {
+        return $this->connection->delete($this);
+    }
+
+    // ---- Bindings ----
+
+    /**
+     * Flatten the bindings for the given categories, in canonical order.
+     *
+     * @param list<BindingCategory>|null $categories The categories to flatten;
+     *        null flattens every category in canonical order.
+     * @return list<BindingValue> The flattened bindings.
+     */
+    public function getBindings(?array $categories = null): array
+    {
+        $categories ??= array_keys($this->bindings);
+        $bindings = [];
+        foreach ($categories as $category) {
+            $key = $category instanceof BindingCategory ? $category->value : $category;
+            array_push($bindings, ...$this->bindings[$key]);
+        }
+        return $bindings;
+    }
+
+    /**
+     * Declare the PK column so insertGetId() can return it (RETURNING / lastInsertId).
+     *
+     * @param string $column The primary key column.
+     * @return $this
+     */
+    public function insertIdColumn(string $column): static
+    {
+        $this->insertIdColumn = $column;
+        return $this;
+    }
+
+    // ---- Accessors used by the Grammar ----
+
+    /**
+     * The columns to select.
+     *
+     * @return list<string|Expression>
+     */
+    public function getColumns(): array
+    {
+        return $this->columns;
+    }
+
+    /**
+     * Whether the select is distinct.
+     *
+     * @return bool True when distinct.
+     */
+    public function isDistinct(): bool
+    {
+        return $this->distinct;
+    }
+
+    /**
+     * The from clause — a table name or a subquery builder.
+     *
+     * @return string|QueryBuilder
+     */
+    public function getFrom(): string|QueryBuilder
+    {
+        return $this->from;
+    }
+
+    /**
+     * The alias of the from subquery, when `fromSub()` was used.
+     *
+     * @return string|null The alias, or null when there is none.
+     */
+    public function getFromAlias(): ?string
+    {
+        return $this->fromAlias;
+    }
+
+    /**
+     * The joins to apply.
+     *
+     * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean}>}>
+     */
+    public function getJoins(): array
+    {
+        return $this->joins;
+    }
+
+    /**
+     * The where clauses.
+     *
+     * @return list<WhereClause>
+     */
+    public function getWheres(): array
+    {
+        return $this->wheres;
+    }
+
+    /**
+     * The group-by columns.
+     *
+     * @return list<string>
+     */
+    public function getGroups(): array
+    {
+        return $this->groups;
+    }
+
+    /**
+     * The having clauses.
+     *
+     * @return list<array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed}>
+     */
+    public function getHavings(): array
+    {
+        return $this->havings;
+    }
+
+    /**
+     * The order-by clauses.
+     *
+     * @return list<array{column: string|Expression, direction: string}>
+     */
+    public function getOrders(): array
+    {
+        return $this->orders;
+    }
+
+    /**
+     * The unions to append.
+     *
+     * @return list<array{query: QueryBuilder, all: bool}>
+     */
+    public function getUnions(): array
+    {
+        return $this->unions;
+    }
+
+    /**
+     * The row lock to apply, or null for none.
+     *
+     * @return LockType|null The lock, or null when there is none.
+     */
+    public function getLock(): ?LockType
+    {
+        return $this->lock;
+    }
+
+    /**
+     * The maximum number of rows to return.
+     *
+     * @return int|null The limit, or null when there is none.
+     */
+    public function getLimit(): ?int
+    {
+        return $this->limit;
+    }
+
+    /**
+     * The number of rows to skip.
+     *
+     * @return int|null The offset, or null when there is none.
+     */
+    public function getOffset(): ?int
+    {
+        return $this->offset;
+    }
+
+    /**
+     * The PK column to return on insert, if known.
+     *
+     * @return string|null The PK column, or null when unknown.
+     */
+    public function getInsertIdColumn(): ?string
+    {
+        return $this->insertIdColumn;
+    }
+}

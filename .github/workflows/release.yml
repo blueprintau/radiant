@@ -1,0 +1,52 @@
+name: Release
+
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Version tag (e.g., v1.0.0)"
+                required: true
+                type: string
+
+permissions:
+    contents: write
+
+jobs:
+    check-tag:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Check tag does not already exist
+              run: |
+                  if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+                      echo "Tag ${{ inputs.version }} already exists. Aborting."
+                      exit 1
+                  else
+                      echo "Tag ${{ inputs.version }} does not exist. Continuing."
+                  fi
+
+    test:
+        needs: check-tag
+        uses: ./.github/workflows/tests.yml
+
+    release:
+        needs: [check-tag, test]
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v3
+              with:
+                  tag_name: ${{ inputs.version }}
+                  generate_release_notes: true
+                  draft: false
+                  prerelease: false
+                  make_latest: true

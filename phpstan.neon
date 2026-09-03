@@ -1,0 +1,25 @@
+parameters:
+    level: 8
+    paths:
+        - src
+        - tests
+        - phpstan
+
+services:
+    -
+        class: BlueprintAU\Radiant\PHPStan\Rules\RequireStrictTypesRule
+        tags:
+            - phpstan.rules.rule
+    -
+        class: BlueprintAU\Radiant\PHPStan\Rules\RequireDocCommentRule
+        tags:
+            - phpstan.rules.rule
+    -
+        class: BlueprintAU\Radiant\PHPStan\Rules\RequireNamespaceRule
+        arguments:
+            psr4Map:
+                'BlueprintAU\Radiant\': 'src/'
+                'BlueprintAU\Radiant\Tests\': 'tests/'
+                'BlueprintAU\Radiant\PHPStan\': 'phpstan/'
+        tags:
+            - phpstan.rules.rule

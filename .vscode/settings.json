@@ -1,0 +1,18 @@
+{
+    "intelephense.diagnostics.exclude": {
+        "phpstan/Rules/RequireDocCommentRule.php": [
+            "P1009",
+            "P1133"
+        ],
+        "phpstan/Rules/RequireNamespaceRule.php": [
+            "P1009",
+            "P1013",
+            "P1133"
+        ],
+        "phpstan/Rules/RequireStrictTypesRule.php": [
+            "P1009",
+            "P1013",
+            "P1133"
+        ]
+    }
+}
