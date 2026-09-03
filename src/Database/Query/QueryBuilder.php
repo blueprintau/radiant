@@ -646,23 +646,56 @@ class QueryBuilder
     /**
      * The scalar method — the value of a single column from the first row.
      *
+     * The column is selected under a stable alias so the result can be read
+     * back by name regardless of how the dialect names the raw expression
+     * (SQLite keeps `sum("price")`, Postgres strips to `sum`, MySQL keeps
+     * the backticks). Only the aliased header is guaranteed portable. When
+     * the caller already provides an `as` alias on the column, that alias
+     * is used instead.
+     *
      * @param string $column The column to read.
      * @return mixed The column value, or null when no row matches.
      */
     public function value(string $column): mixed
     {
-        return $this->select($column)->first()->{$column} ?? null;
+        [$sql, $alias] = $this->scalarColumn($column);
+        return $this->select($sql)->first()->{$alias} ?? null;
     }
 
     /**
      * A collection of a single column's values from all rows.
+     *
+     * The column is selected under a stable alias so the value can be read
+     * back by name regardless of how the dialect names the raw expression
+     * (see {@see value()}). When the caller already provides an `as` alias
+     * on the column, that alias is used instead.
      *
      * @param string $column The column to pluck.
      * @return Collection<int, mixed> The column values.
      */
     public function pluck(string $column): Collection
     {
-        return $this->select($column)->get()->pluck($column);
+        [$sql, $alias] = $this->scalarColumn($column);
+        return $this->select($sql)->get()->pluck($alias);
+    }
+
+    /**
+     * Resolve a column into the SQL to select and the alias to read back.
+     *
+     * Returns the column unchanged with its own alias when one is given
+     * (`sum(price) as total` → read `total`); otherwise the column is
+     * selected under the stable `radiant_scalar` alias so scalar reads
+     * are portable across dialects.
+     *
+     * @param string $column The column expression.
+     * @return array{0: string, 1: string} The select SQL and result alias.
+     */
+    private function scalarColumn(string $column): array
+    {
+        if (preg_match('/\s+as\s+[`"]?([a-z_][a-z0-9_]*)[`"]?$/i', $column, $matches)) {
+            return [$column, $matches[1]];
+        }
+        return [$column . ' as radiant_scalar', 'radiant_scalar'];
     }
 
     // ---- Aggregates are just select fields (built on select()) ----

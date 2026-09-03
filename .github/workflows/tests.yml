@@ -14,8 +14,45 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                php: ["8.3", "8.4", "8.5"]
+                php: ["8.4", "8.5"]
                 dependencies: ["lowest", "highest"]
+        services:
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: root
+                    MYSQL_DATABASE: radiant
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping --silent"
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 5
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: postgres
+                    POSTGRES_PASSWORD: postgres
+                    POSTGRES_DB: radiant
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres"
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 5
+        env:
+            RADIANT_MYSQL_HOST: 127.0.0.1
+            RADIANT_MYSQL_PORT: "3306"
+            RADIANT_MYSQL_USER: root
+            RADIANT_MYSQL_PASSWORD: root
+            RADIANT_MYSQL_DATABASE: radiant
+            RADIANT_PGSQL_HOST: 127.0.0.1
+            RADIANT_PGSQL_PORT: "5432"
+            RADIANT_PGSQL_USER: postgres
+            RADIANT_PGSQL_PASSWORD: postgres
+            RADIANT_PGSQL_DATABASE: radiant
         steps:
             - uses: actions/checkout@v7
 
@@ -25,6 +62,7 @@ jobs:
                   php-version: ${{ matrix.php }}
                   tools: composer:v2
                   coverage: none
+                  extensions: pdo, pdo_mysql, pdo_pgsql
 
             - name: Validate composer.json
               run: composer validate --strict

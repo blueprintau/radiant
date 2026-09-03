@@ -197,4 +197,60 @@ final class SqlConnectionTest extends TestCase
         self::assertNotNull($row);
         self::assertSame('2024-01-02 03:04:05', $row->created_at);
     }
+
+    /**
+     * Aggregates select under a stable alias — portable across dialects.
+     */
+    public function testAggregates(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+            ['name' => 'Carol', 'email' => 'c@example.com', 'age' => 40],
+        ]);
+
+        self::assertSame(3, $this->connection->table('users')->count());
+        self::assertSame(95, (int) $this->connection->table('users')->sum('age'));
+        self::assertSame(40, (int) $this->connection->table('users')->max('age'));
+        self::assertSame(25, (int) $this->connection->table('users')->min('age'));
+    }
+
+    /**
+     * value() honors a user-supplied alias on the column expression.
+     */
+    public function testValueWithUserAlias(): void
+    {
+        $this->connection->table('users')->insert(['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30]);
+
+        $value = $this->connection->table('users')->value('sum(age) as total');
+        self::assertSame(30, (int) $value);
+    }
+
+    /**
+     * pluck() honors a user-supplied alias on the column expression.
+     */
+    public function testPluckWithUserAlias(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $values = $this->connection->table('users')->orderBy('age', 'DESC')->pluck('age as ages');
+        self::assertSame([30, 25], array_map('intval', $values->all()));
+    }
+
+    /**
+     * pluck() without an alias falls back to the stable internal alias.
+     */
+    public function testPluckWithoutAlias(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $values = $this->connection->table('users')->orderBy('age', 'DESC')->pluck('age');
+        self::assertSame([30, 25], array_map('intval', $values->all()));
+    }
 }
