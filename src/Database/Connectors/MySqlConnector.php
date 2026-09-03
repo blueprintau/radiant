@@ -42,7 +42,7 @@ final class MySqlConnector extends SqlConnector
      *
      * @param array<string,mixed> $config The connection config (host, port,
      *        database, username, password, charset, …).
-     * @return SqlConnection A ready-to-use MySQL connection.
+     * @return MySqlConnection A ready-to-use MySQL connection.
      * @throws \InvalidArgumentException If a required field is missing or
      *         malformed.
      */

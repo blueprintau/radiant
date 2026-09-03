@@ -20,7 +20,7 @@ final class PostgresConnector extends SqlConnector
      *
      * @param array<string,mixed> $config The connection config (host, port,
      *        database, username, password, …).
-     * @return SqlConnection A ready-to-use Postgres connection.
+     * @return PostgresConnection A ready-to-use Postgres connection.
      * @throws \InvalidArgumentException If $host or $database is missing.
      */
     #[Override]
