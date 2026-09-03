@@ -12,6 +12,8 @@ use Override;
  * SQLite connector — builds a PDO SQLite connection from config.
  *
  * @see \BlueprintAU\Radiant\Database\Connections\SqlConnection
+ *
+ * @phpstan-import-type PdoOptions from \BlueprintAU\Radiant\Database\Connectors\SqlConnector
  */
 final class SqliteConnector extends SqlConnector
 {
@@ -42,13 +44,14 @@ final class SqliteConnector extends SqlConnector
     /**
      * Create a SQLite connection from the given config.
      *
-     * @param array{database: mixed, options?: array<int, int|bool|array<mixed>>, ...<mixed>} $config The connection config (database path, options, …).
+     * @param array{database: mixed, options?: PdoOptions, ...<mixed>} $config The connection config (database path, options, …).
      * @return SqliteConnection A ready-to-use SQLite connection.
      * @throws \InvalidArgumentException If the database path is not a string.
      */
     #[Override]
     public function connect(array $config): SqlConnection
     {
+        $this->validConfig($config);
         $path = $config['database'];
 
         if (!is_string($path)) {
@@ -74,9 +77,9 @@ final class SqliteConnector extends SqlConnector
     /**
      * Validate the shape of a SQLite connection config.
      *
-     * SQLite needs a `database` path string — the only field it consumes
-     * beyond the shared `driver`. The shared {@see SqlConnector::validConfig()}
-     * already checked `driver`; this checks the SQLite-specific field.
+     * SQLite needs a `database` path string — the only field it consumes. The
+     * shared `driver` key is owned (and validated) by
+     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
      *
      * @param array<string,mixed> $config The connection config to validate.
      * @throws \InvalidArgumentException When the database path is not a

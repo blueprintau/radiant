@@ -22,13 +22,16 @@ final class CsvConnector implements ConnectorInterface
     /**
      * Create a CSV connection from the given config.
      *
-     * @param array<string,mixed> $config The connection config (path, …).
+     * @param array{path: mixed, readonly?: bool, ...<mixed>} $config The
+     *        connection config (path, readonly, …).
      * @return ConnectionInterface A ready-to-use CSV connection.
      * @throws \InvalidArgumentException If the path is not a string.
      */
     #[Override]
     public function connect(array $config): ConnectionInterface
     {
+        $this->validConfig($config);
+
         $path = $config['path'];
 
         if (!is_string($path)) {
@@ -43,8 +46,9 @@ final class CsvConnector implements ConnectorInterface
     /**
      * Validate the shape of a CSV connection config.
      *
-     * CSV needs a `path` string — the only field it consumes beyond the
-     * shared `driver`.
+     * CSV needs a `path` string, and an optional `readonly` boolean. The
+     * shared `driver` key is owned by the {@see DatabaseManager} and is not
+     * validated here.
      *
      * @param array<string,mixed> $config The connection config to validate.
      * @throws \InvalidArgumentException When the path is not a string.
@@ -52,14 +56,6 @@ final class CsvConnector implements ConnectorInterface
     #[Override]
     public function validConfig(array $config): void
     {
-        if (!isset($config['driver']) || !is_string($config['driver']) || $config['driver'] === '') {
-            throw new \InvalidArgumentException(
-                'Each connection must declare a non-empty string "driver"; got '
-                    . (isset($config['driver']) ? get_debug_type($config['driver']) : 'nothing')
-                    . '.'
-            );
-        }
-
         if (!isset($config['path']) || !is_string($config['path'])) {
             throw new \InvalidArgumentException(
                 'CSV requires a "path" string; got '

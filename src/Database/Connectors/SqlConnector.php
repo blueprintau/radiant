@@ -17,6 +17,8 @@ use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
  * dropped.
  *
  * @see \BlueprintAU\Radiant\Database\Connections\SqlConnection
+ *
+ * @phpstan-type PdoOptions array<int, int|bool|array<mixed>>
  */
 abstract class SqlConnector implements ConnectorInterface
 {
@@ -77,26 +79,24 @@ abstract class SqlConnector implements ConnectorInterface
      * Validate the shape of a connection config before it reaches
      * {@see connect()}.
      *
-     * `driver` is the only field shared by every SQL driver — SQLite uses
-     * `database` (a path) while the server-based drivers use
-     * `host`/`port`/`database`/`username`/`password`/`charset`. So this
-     * validates the shared `driver` key; each driver connector validates its
-     * own fields (e.g. {@see SqliteConnector} checks `database` is a path
+     * The shared `driver` key is owned and validated by
+     * {@see \BlueprintAU\Radiant\Database\DatabaseManager} — it is the only
+     * consumer that reads it (to pick the connector from its registry).
+     * Connectors validate only the fields they themselves consume, so the
+     * base implementation validates the one field every SQL connector
+     * shares — `options` — and each driver connector validates its own
+     * fields (e.g. {@see SqliteConnector} checks `database` is a path
      * string).
      *
      * @param array<string,mixed> $config The connection config to validate.
-     * @throws \InvalidArgumentException When the config does not declare a
-     *         string `driver`.
+     * @throws \InvalidArgumentException When the config is not shaped like
+     *         this connector expects.
      */
     #[\Override]
     public function validConfig(array $config): void
     {
-        if (!isset($config['driver']) || !is_string($config['driver']) || $config['driver'] === '') {
-            throw new \InvalidArgumentException(
-                'Each connection must declare a non-empty string "driver"; got '
-                . (isset($config['driver']) ? get_debug_type($config['driver']) : 'nothing')
-                . '.'
-            );
+        if (array_key_exists('options', $config)) {
+            $this->validateOptions($config['options']);
         }
     }
 
@@ -164,8 +164,7 @@ abstract class SqlConnector implements ConnectorInterface
      * @param string $dsn The driver-specific DSN (e.g. "mysql:host=…").
      * @param string|null $username The username, or null if not required.
      * @param string|null $password The password, or null if not required.
-     * @param array<int, int|bool|array<mixed>> $options User-supplied PDO
-     *        attributes.
+     * @param PdoOptions $options User-supplied PDO attributes.
      * @return \PDO A configured PDO instance (a Pdo\* driver subclass),
      *         ready to use.
      * @throws ConnectionException When the PDO constructor fails — the

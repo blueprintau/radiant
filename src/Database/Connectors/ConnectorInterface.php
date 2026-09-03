@@ -21,8 +21,13 @@ interface ConnectorInterface
     /**
      * Create a connection from the given config.
      *
-     * @param array<string,mixed> $config The connection config (driver, host,
-     *        port, database, username, password, …).
+     * The config shape is driver-specific — each concrete connector types
+     * the keys it actually consumes. `driver` is optional here because it is
+     * owned by the {@see \BlueprintAU\Radiant\Database\DatabaseManager} (used
+     * to pick the connector), not by the connector itself.
+     *
+     * @param array<string, mixed> $config The connection config
+     *        (driver, host, port, database, username, password, …).
      * @return ConnectionInterface A ready-to-use connection.
      */
     public function connect(array $config): ConnectionInterface;

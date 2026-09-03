@@ -12,6 +12,8 @@ use Override;
  * MySQL connector — builds a PDO MySQL connection from config.
  *
  * @see \BlueprintAU\Radiant\Database\Connections\SqlConnection
+ *
+ * @phpstan-import-type PdoOptions from \BlueprintAU\Radiant\Database\Connectors\SqlConnector
  */
 final class MySqlConnector extends SqlConnector
 {
@@ -40,8 +42,10 @@ final class MySqlConnector extends SqlConnector
      * The charset is set once at connect time, driven by config, so it can't
      * be a static forced option.
      *
-     * @param array<string,mixed> $config The connection config (host, port,
-     *        database, username, password, charset, …).
+     * @param array{host?: mixed, port?: mixed, database?: mixed, username?: string|null,
+     *        password?: string|null, charset?: string, options?: PdoOptions,
+     *        ...<mixed>} $config The connection config (host, port, database,
+     *        username, password, charset, …).
      * @return MySqlConnection A ready-to-use MySQL connection.
      * @throws \InvalidArgumentException If a required field is missing or
      *         malformed.
@@ -49,6 +53,8 @@ final class MySqlConnector extends SqlConnector
     #[Override]
     public function connect(array $config): SqlConnection
     {
+        $this->validConfig($config);
+
         $host = $config['host'] ?? null;
         $port = $config['port'] ?? 3306;
         $database = $config['database'] ?? null;
@@ -81,9 +87,9 @@ final class MySqlConnector extends SqlConnector
     /**
      * Validate the shape of a MySQL connection config.
      *
-     * MySQL needs `host`, `port` and `database` (the only fields it consumes
-     * beyond the shared `driver`). The shared {@see SqlConnector::validConfig()}
-     * already checked `driver`; this checks the MySQL-specific fields.
+     * MySQL needs `host`, `port` and `database` — the only fields it consumes.
+     * The shared `driver` key is owned (and validated) by
+     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
      *
      * @param array<string,mixed> $config The connection config to validate.
      * @throws \InvalidArgumentException When a required field is missing or

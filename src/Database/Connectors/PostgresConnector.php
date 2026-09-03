@@ -12,20 +12,26 @@ use Override;
  * Postgres connector — builds a PDO Postgres connection from config.
  *
  * @see \BlueprintAU\Radiant\Database\Connections\SqlConnection
+ *
+ * @phpstan-import-type PdoOptions from \BlueprintAU\Radiant\Database\Connectors\SqlConnector
  */
 final class PostgresConnector extends SqlConnector
 {
     /**
      * Create a Postgres connection from the given config.
      *
-     * @param array<string,mixed> $config The connection config (host, port,
-     *        database, username, password, …).
+     * @param array{host?: mixed, port?: mixed, database?: mixed, username?: string|null,
+     *        password?: string|null, options?: PdoOptions,
+     *        ...<mixed>} $config The connection config (host, port, database,
+     *        username, password, …).
      * @return PostgresConnection A ready-to-use Postgres connection.
      * @throws \InvalidArgumentException If $host or $database is missing.
      */
     #[Override]
     public function connect(array $config): SqlConnection
     {
+        $this->validConfig($config);
+
         $host = $config['host'] ?? null;
         $port = $config['port'] ?? 5432;
         $database = $config['database'] ?? null;
@@ -57,9 +63,9 @@ final class PostgresConnector extends SqlConnector
     /**
      * Validate the shape of a Postgres connection config.
      *
-     * Postgres needs `host` and `database` (the only fields it consumes
-     * beyond the shared `driver`). The shared {@see SqlConnector::validConfig()}
-     * already checked `driver`; this checks the Postgres-specific fields.
+     * Postgres needs `host` and `database` — the only fields it consumes. The
+     * shared `driver` key is owned (and validated) by
+     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
      *
      * @param array<string,mixed> $config The connection config to validate.
      * @throws \InvalidArgumentException When a required field is missing or

@@ -90,7 +90,7 @@ final class SqlServerIntegrationTest extends TestCase
             'username' => getenv('RADIANT_MYSQL_USER') ?: 'root',
             'password' => getenv('RADIANT_MYSQL_PASSWORD') ?: '',
         ];
-        yield 'mysql' => [$mysql, new MySqlConnector(), 'MySQL', 'MySQL requires a string host, an integer port and a string database.'];
+        yield 'mysql' => [$mysql, new MySqlConnector(), 'MySQL', 'MySQL requires a non-empty string "host"; got nothing.'];
 
         $postgres = [
             'driver' => 'pgsql',
@@ -100,7 +100,7 @@ final class SqlServerIntegrationTest extends TestCase
             'username' => getenv('RADIANT_PGSQL_USER') ?: 'postgres',
             'password' => getenv('RADIANT_PGSQL_PASSWORD') ?: 'postgres',
         ];
-        yield 'postgres' => [$postgres, new PostgresConnector(), 'Postgres', 'Postgres requires a string host, an integer port and a string database.'];
+        yield 'postgres' => [$postgres, new PostgresConnector(), 'Postgres', 'Postgres requires a non-empty string "host"; got nothing.'];
     }
 
     /**
