@@ -100,6 +100,20 @@ final class Database
     }
 
     /**
+     * Run a callback with a different active connection, restoring the
+     * previous one afterwards.
+     *
+     * @template T
+     * @param string $name The connection name to use inside the callback.
+     * @param \Closure(): T $callback The work to run.
+     * @return T Whatever the callback returns.
+     */
+    public static function usingConnection(string $name, \Closure $callback): mixed
+    {
+        return self::manager()->usingConnection($name, $callback);
+    }
+
+    /**
      * Start a fluent query against a table on the active connection.
      *
      * @param string $name The table name (or fully-qualified identifier).
@@ -156,19 +170,5 @@ final class Database
     public static function affectingStatement(string $query, array $args = []): int
     {
         return self::sqlConnection()->affectingStatement($query, $args);
-    }
-
-    /**
-     * Run a callback with a different active connection, restoring the
-     * previous one afterwards.
-     *
-     * @template T
-     * @param string $name The connection name to use inside the callback.
-     * @param \Closure(): T $callback The work to run.
-     * @return T Whatever the callback returns.
-     */
-    public static function usingConnection(string $name, \Closure $callback): mixed
-    {
-        return self::manager()->usingConnection($name, $callback);
     }
 }
