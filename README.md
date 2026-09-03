@@ -7,6 +7,10 @@ A **database + ORM package** for the BlueprintAU ecosystem — a fail-fast,
 explicit query builder, SQL connection layer, and attribute-driven ORM.
 Radiant is the database layer split out of the Lucent restructure.
 
+> **Status:** the `Database\` layer is implemented and tested. The ORM
+> (`Model`, `#[Column]`, relations, …) is the next milestone — the examples
+> below are the planned API.
+
 ## Dependencies
 
 - `blueprintau/collections` — the only concrete-class dependency. Radiant's
@@ -50,22 +54,23 @@ $users = $db->table('users')
     ->get();
 ```
 
-### ORM
+### ORM *(planned)*
 
 ```php
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Column;
+use BlueprintAU\Radiant\Database\Schema\ColumnType;
 use Carbon\Carbon;
 
 class User extends Model
 {
-    #[Column(type: 'bigint', primaryKey: true, autoIncrement: true)]
+    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
     public int $id;
 
-    #[Column(type: 'string', length: 255, fillable: true)]
+    #[Column(type: ColumnType::String, length: 255, fillable: true)]
     public string $name;
 
-    #[Column(type: 'datetime', nullable: true)]
+    #[Column(type: ColumnType::DateTime, nullable: true)]
     public ?Carbon $emailVerifiedAt;
 }
 
@@ -73,6 +78,10 @@ $user = User::find(1);
 $user->name = 'Alicia';
 $user->save();
 ```
+
+The `ColumnType` enum is the shared, dialect-agnostic type vocabulary for
+both the schema layer (`Blueprint`, `SchemaGrammar`) and the `#[Column]`
+attribute — one portable type system, mapped per dialect.
 
 ## Philosophy
 
@@ -93,32 +102,9 @@ $user->save();
   handles dialect specifics (Postgres' microsecond datetimes, …). The field
   is always set to the type the user expects.
 
-## Structure
-
-```
-BlueprintAU\Radiant\              ← ORM (the brand)
-    ├── Model.php
-    ├── Collection.php
-    ├── ModelQueryBuilder.php
-    ├── Column.php
-    ├── MetadataFactory.php
-    ├── SoftDeletes.php
-    └── Database\                 ← DB layer (plumbing, standalone-usable)
-        ├── Connections\
-        │   ├── Connection.php    ← generic interface (portable subset)
-        │   ├── SqlConnection.php ← SQL implementation (grammar, tx, schema)
-        │   ├── CsvConnection.php ← non-SQL example
-        │   └── ...
-        ├── Connectors\
-        ├── Query\Builder.php
-        ├── Grammars\
-        ├── Schema\
-        └── ...
-```
-
 ## Requirements
 
-PHP **8.3 or newer**.
+PHP **8.4 or newer**.
 
 ## Testing
 
@@ -129,8 +115,9 @@ composer analyse       # PHPStan (level 8)
 composer security:audit  # dependency security advisories
 ```
 
-CI runs the test suite across PHP 8.3 / 8.4 / 8.5 (lowest and highest
-dependencies) on every push and pull request. Releases are cut from the
+CI runs the test suite across PHP 8.4 / 8.5 (lowest and highest
+dependencies) on every push and pull request, with MySQL and Postgres
+service containers for the integration suite. Releases are cut from the
 **Release** workflow (Actions → Release), which takes a version tag, verifies
 it does not already exist, runs the full test suite, then creates the tag and
 GitHub Release.
