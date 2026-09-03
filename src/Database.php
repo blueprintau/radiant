@@ -32,7 +32,7 @@ final class Database
      *
      * @var ?DatabaseManager
      */
-    public private(set) static ?DatabaseManager $manager = null;
+    private static ?DatabaseManager $manager = null;
 
     /**
      * Inject the manager that backs every static call.
@@ -45,6 +45,17 @@ final class Database
     }
 
     /**
+     * The injected manager, or fail when none was set.
+     *
+     * @return DatabaseManager The injected manager.
+     * @throws \RuntimeException When no manager has been injected yet.
+     */
+    public static function manager(): DatabaseManager
+    {
+        return self::$manager ?? throw new \RuntimeException('Database manager not set.');
+    }
+
+    /**
      * Get a connection by name, building and caching it on first use.
      *
      * @param string|null $name The connection name; defaults to the
@@ -54,6 +65,23 @@ final class Database
     public static function connection(?string $name = null): ConnectionInterface
     {
         return self::manager()->connection($name);
+    }
+
+    /**
+     * The active connection, narrowed to a SQL connection.
+     *
+     * @return SqlConnection The active connection.
+     * @throws UnsupportedFeatureException When the active connection is not
+     *         a {@see SqlConnection}.
+     */
+    private static function sql(?string $name = null): SqlConnection
+    {
+        $connection = self::manager()->connection($name);
+        if (!$connection instanceof SqlConnection) {
+            throw new UnsupportedFeatureException('The active connection is not a SQL connection.');
+        }
+
+        return $connection;
     }
 
     /**
@@ -127,33 +155,5 @@ final class Database
     public static function usingConnection(string $name, \Closure $callback): mixed
     {
         return self::manager()->usingConnection($name, $callback);
-    }
-
-    /**
-     * The active connection, narrowed to a SQL connection.
-     *
-     * @return SqlConnection The active connection.
-     * @throws UnsupportedFeatureException When the active connection is not
-     *         a {@see SqlConnection}.
-     */
-    private static function sql(): SqlConnection
-    {
-        $connection = self::manager()->connection();
-        if (!$connection instanceof SqlConnection) {
-            throw new UnsupportedFeatureException('The active connection is not a SQL connection.');
-        }
-
-        return $connection;
-    }
-
-    /**
-     * The injected manager, or fail when none was set.
-     *
-     * @return DatabaseManager The injected manager.
-     * @throws \RuntimeException When no manager has been injected yet.
-     */
-    private static function manager(): DatabaseManager
-    {
-        return self::$manager ?? throw new \RuntimeException('Database manager not set.');
     }
 }
