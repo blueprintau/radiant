@@ -93,31 +93,50 @@ tables, or shared tables. The attribute is designed to grow other
 table-level settings later, so `name` is optional there — `#[Table]` with
 no name keeps the convention (empty string still fails fast).
 
-There is no separate `#[Index]` attribute planned. Simple indexes ride on
-`#[Column]`'s `index:`/`unique:` flags. Composite indexes use named
-groups: set the same group name on every participating column, and the
-metadata factory emits one index per group — no duplicated column-name
-strings, so renaming a property can't silently drop a column out of its
-index. A column may join several groups at once by passing an array (a
-`country` column often belongs to both `(country, created_at)` and
-`(country, status)`).
+Simple indexes and unique flags ride on `#[Column]` (`index: true`,
+`unique: true`, `foreign: 'users.id'`). Composite constraints use
+class-level attributes — one uniform rule: **a constraint over more than
+one column, or one needing explicit configuration, is a class-level
+attribute.**
 
 ```php
-#[Column(type: ColumnType::String, length: 2,
-         indexGroup: ['country_created', 'country_status'])]
-public string $country;
+#[Unique(columns: ['country', 'tracking'])]
+#[ForeignKey(
+    columns: ['region_id', 'country'],
+    references: 'geo_regions',
+    referencesColumns: ['id', 'country'],
+    onDelete: 'cascade',
+)]
+#[CompositeIndex(columns: ['country', 'created_at'])]
+class Shipment extends Model
+{
+    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
 
-#[Column(type: ColumnType::DateTime, indexGroup: 'country_created')]
-public ?Carbon $createdAt;
+    #[Column(type: ColumnType::String, length: 64, unique: true)]  // single: flag
+    public string $slug;
 
-#[Column(type: ColumnType::String, length: 16, indexGroup: 'country_status')]
-public string $status;
-// → CREATE INDEX ... ON users ("country", "created_at")
-// → CREATE INDEX ... ON users ("country", "status")
+    #[Column(type: ColumnType::BigInt)]
+    public int $regionId;
+
+    #[Column(type: ColumnType::String, length: 2)]
+    public string $country;
+
+    #[Column(type: ColumnType::String, length: 64)]
+    public string $tracking;
+
+    #[Column(type: ColumnType::DateTime, nullable: true)]
+    public ?Carbon $createdAt;
+}
 ```
 
-*(Planned — the attribute classes and metadata factory are not
-implemented yet; see the plan, §13–14.)*
+Every column name in a constraint attribute is validated against the
+model's `#[Column]` set at build time — renaming a property fails loudly,
+never silently drops out of a constraint. A flag and an attribute covering
+the same column is a build-time error, so constraints can't double-declare.
+
+*(Planned — the attribute classes and metadata factory are not implemented
+yet.)*
 
 The `ColumnType` enum is the shared, dialect-agnostic type vocabulary for
 both the schema layer (`Blueprint`, `SchemaGrammar`) and the `#[Column]`
