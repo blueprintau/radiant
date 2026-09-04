@@ -81,4 +81,29 @@ interface ConnectionInterface
      * @return int How many rows were deleted.
      */
     public function delete(QueryBuilder $query): int;
+    
+    /**
+     * Whether this connection has been marked dead and should be discarded
+     * by a caching layer before reuse.
+     *
+     * The shared failure contract behind connection caching: a backend
+     * flags itself when an error indicates its transport is gone (a SQL
+     * server restart, a network blip), and a caching layer (e.g.
+     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}) consults this
+     * before handing the cached instance out again — so one transient
+     * outage does not poison every subsequent request in a long-running
+     * process. A backend with no meaningful failure mode (e.g. a CSV file
+     * handle) returns false forever.
+     *
+     * @return bool True when the connection should be rebuilt before reuse.
+     */
+    public function isStale(): bool;
+
+    /**
+     * Mark this connection dead so a caching layer rebuilds it.
+     *
+     * Backends set this automatically on connection-class errors; it is on
+     * the interface so a caching layer can also force-evict.
+     */
+    public function markStale(): void;
 }

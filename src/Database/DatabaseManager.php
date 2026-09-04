@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database;
 
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connectors\ConnectorInterface;
 
 /**
@@ -133,6 +134,11 @@ final class DatabaseManager
     /**
      * Get a connection by name, building and caching it on first use.
      *
+     * A cached connection that has been marked stale — its run path hit a
+     * connection-loss error (server restart, network blip) — is discarded
+     * and rebuilt here, so one transient outage does not poison the
+     * connection for the life of the process.
+     *
      * @param string|null $name The connection name; defaults to the
      *        current connection.
      * @return ConnectionInterface The resolved connection.
@@ -140,6 +146,11 @@ final class DatabaseManager
     public function connection(?string $name = null): ConnectionInterface
     {
         $name ??= $this->current_connection;
+        if (isset($this->resolved[$name])
+            && $this->resolved[$name] instanceof SqlConnection
+            && $this->resolved[$name]->isStale()) {
+            unset($this->resolved[$name]);
+        }
         return $this->resolved[$name] ??= $this->makeConnection($this->connections[$name]);
     }
 

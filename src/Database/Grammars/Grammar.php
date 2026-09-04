@@ -8,8 +8,9 @@ use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Query\Expression;
+use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
-use BlueprintAU\Radiant\Database\Query\Enums\LockType;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\ToSqlValue;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
@@ -373,7 +374,7 @@ abstract class Grammar
     /**
      * Compile a join's on conditions.
      *
-     * @param list<array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean}> $wheres The join's on clauses.
+     * @param list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}> $wheres The join's on clauses.
      * @return string The on conditions, or an empty string when there are none.
      */
     protected function compileJoinWheres(array $wheres): string
@@ -381,7 +382,8 @@ abstract class Grammar
         $segments = [];
         foreach ($wheres as $i => $where) {
             $boolean = $i === 0 ? '' : strtoupper($where['boolean']->value) . ' ';
-            $segments[] = $boolean . $this->wrapSegments($where['first']) . ' ' . $where['operator'] . ' ' . $this->wrapSegments($where['second']);
+            $operator = $where['operator'] instanceof ColumnOperator ? $where['operator']->value : $where['operator'];
+            $segments[] = $boolean . $this->wrapSegments($where['first']) . ' ' . $operator . ' ' . $this->wrapSegments($where['second']);
         }
         return implode(' ', $segments);
     }
@@ -430,7 +432,7 @@ abstract class Grammar
             WhereType::Between => $this->compileBetweenWhere($where),
             WhereType::Null => $this->compileNullWhere($where),
             WhereType::Raw => $where['sql'],
-            WhereType::Column => $this->wrapSegments($where['first']) . ' ' . $where['operator'] . ' ' . $this->wrapSegments($where['second']),
+            WhereType::Column => $this->wrapSegments($where['first']) . ' ' . ($where['operator'] instanceof ColumnOperator ? $where['operator']->value : $where['operator']) . ' ' . $this->wrapSegments($where['second']),
             WhereType::Nested => '(' . $this->compileWhereGroup($where['query']->getWheres()) . ')',
         };
     }
@@ -596,7 +598,16 @@ abstract class Grammar
     {
         foreach ($builder->getUnions() as $union) {
             $keyword = $union['all'] ? 'UNION ALL' : 'UNION';
-            $sql .= ' ' . $keyword . ' (' . $this->compileSelect($union['query']) . ')';
+            $sub = $union['query'];
+            // Compile the sub-builder's SQL and pull its bindings in the
+            // same pass, in the same order — the sub-builder's placeholders
+            // appear in this SQL, so its bindings must land in the Union
+            // category now, in exactly the compiled order. Snapshotting at
+            // union() call time desynchronized the two whenever the
+            // sub-builder gained clauses afterwards.
+            $unionSql = $this->compileSelect($sub);
+            $builder->pushBindings(BindingCategory::Union, $sub->getBindings());
+            $sql .= ' ' . $keyword . ' (' . $unionSql . ')';
         }
         return $sql;
     }

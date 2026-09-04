@@ -18,6 +18,44 @@ use Override;
 final class MySqlConnector extends SqlConnector
 {
     /**
+     * Charsets MySQL accepts on `SET NAMES` — the allowlist the configured
+     * charset must match.
+     *
+     * The charset is interpolated into both the DSN and a raw `SET NAMES`
+     * statement, so an unvalidated value is a config-driven SQL-injection
+     * sink. Collation suffixes (`utf8mb4_unicode_ci`-style) are not accepted:
+     * `SET NAMES` takes a charset, with an optional separate collation —
+     * pass a bare charset here.
+     *
+     * @var list<string>
+     */
+    private const ALLOWED_CHARSETS = [
+        'utf8mb4', 'utf8mb3', 'utf8', 'latin1', 'latin2', 'ascii', 'binary',
+        'cp1250', 'cp1251', 'cp1256', 'cp932', 'euckr', 'gb18030', 'gb2312',
+        'gbk', 'koi8r', 'koi8u', 'macce', 'macroman', 'sjis', 'tis620',
+        'ucs2', 'ujis', 'utf16', 'utf16le', 'utf32',
+    ];
+
+    /**
+     * Validate a configured charset against the allowlist.
+     *
+     * @param mixed $charset The raw charset config value.
+     * @return string The validated charset.
+     * @throws \InvalidArgumentException When the charset is not a known MySQL charset.
+     */
+    private function validCharset(mixed $charset): string
+    {
+        if (!is_string($charset) || $charset === ''
+            || !in_array(strtolower($charset), self::ALLOWED_CHARSETS, true)) {
+            throw new \InvalidArgumentException(
+                'MySQL "charset" must be one of: ' . implode(', ', self::ALLOWED_CHARSETS)
+                . '; got ' . (is_string($charset) ? "[{$charset}]" : get_debug_type($charset)) . '.'
+            );
+        }
+        return strtolower($charset);
+    }
+
+    /**
      * MySQL-mandated PDO attributes — merged last, cannot be overridden by
      * the user.
      *
@@ -58,7 +96,7 @@ final class MySqlConnector extends SqlConnector
         $host = $config['host'] ?? null;
         $port = $config['port'] ?? 3306;
         $database = $config['database'] ?? null;
-        $charset = $config['charset'] ?? 'utf8mb4';
+        $charset = $this->validCharset($config['charset'] ?? 'utf8mb4');
 
         if (!is_string($host) || !is_int($port) || !is_string($database)) {
             throw new \InvalidArgumentException(
@@ -103,6 +141,12 @@ final class MySqlConnector extends SqlConnector
         $host = $config['host'] ?? null;
         $port = $config['port'] ?? null;
         $database = $config['database'] ?? null;
+
+        // The charset reaches the DSN and a raw SET NAMES statement — validate
+        // it at construction time (fail-fast) as well as at connect time.
+        if (array_key_exists('charset', $config)) {
+            $this->validCharset($config['charset']);
+        }
 
         if (!is_string($host) || $host === '') {
             throw new \InvalidArgumentException(

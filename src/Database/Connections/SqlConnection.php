@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Connections;
 
 use BlueprintAU\Collections\Collection;
+use BlueprintAU\Radiant\Database\Concerns\DetectsConnectionLoss;
 use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
@@ -31,6 +32,7 @@ use Override;
 abstract class SqlConnection implements ConnectionInterface
 {
     use NormalizesInsertRows;
+    use DetectsConnectionLoss;
     /**
      * Converts values between PHP types and what the database driver expects.
      *
@@ -222,6 +224,103 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
+     * Run a raw SQL query and yield each matching row as it arrives.
+     *
+     * Unlike {@see selectSql()}, which buffers the whole result set in
+     * memory, this streams: memory stays O(1) in the result size regardless
+     * of row count. Consume the generator fully (or let it be garbage
+     * collected) before running another query on this connection — an
+     * unfinished cursor holds the statement, and MySQL's unbuffered mode
+     * forbids a second query until the first result set is drained.
+     *
+     * @param string $sql The SQL to run.
+     * @param array<string|int, mixed> $bindings The values to bind.
+     * @return \Generator<int, \stdClass> The matching rows, one at a time.
+     * @throws QueryException When the statement fails to prepare or execute.
+     */
+    final public function cursorSql(string $sql, array $bindings = []): \Generator
+    {
+        $stmt = $this->prepareAndExecute($sql, $bindings);
+        try {
+            while ($row = $stmt->fetch(\PDO::FETCH_OBJ)) {
+                yield $row;
+            }
+        } finally {
+            $stmt->closeCursor();
+        }
+    }
+
+    /**
+     * Run a callback over the query's rows in fixed-size chunks.
+     *
+     * Memory stays bounded by the chunk size, not the result size — the
+     * convenient wrapper over {@see cursorSql()} for batch processing.
+     *
+     * **Chunk sizing.** Every chunk passed to the callback is exactly
+     * `$size` rows, except possibly the last, which holds the remaining
+     * rows (1..$size). A chunk is never larger than `$size`: the cursor
+     * yields one row at a time and the buffer flushes as soon as it reaches
+     * `$size`, so there is no code path that can over-fill it.
+     *
+     * **Early stop.** The callback returning `false` (strictly) stops the
+     * iteration immediately — the cursor is abandoned and closed. Any other
+     * return value, including `void`, `null`, and `0`, continues; return
+     * `false` deliberately, not as a by-product.
+     *
+     * @param string $sql The SQL to run.
+     * @param array<string|int, mixed> $bindings The values to bind.
+     * @param int $size Rows per chunk (must be >= 1).
+     * @param callable(list<\stdClass>): mixed $callback Receives each chunk;
+     *        return `false` to stop early.
+     * @return void
+     * @throws \InvalidArgumentException When the chunk size is below 1.
+     * @throws QueryException When the statement fails to prepare or execute.
+     */
+    final public function chunkSql(string $sql, array $bindings, int $size, callable $callback): void
+    {
+        if ($size < 1) {
+            throw new \InvalidArgumentException("Chunk size must be at least 1; got {$size}.");
+        }
+        $chunk = [];
+        foreach ($this->cursorSql($sql, $bindings) as $row) {
+            $chunk[] = $row;
+            if (count($chunk) === $size) {
+                if ($callback($chunk) === false) {
+                    return;
+                }
+                $chunk = [];
+            }
+        }
+        if ($chunk !== []) {
+            $callback($chunk);
+        }
+    }
+
+    /**
+     * Prepare, bind, and execute — returning the statement for callers
+     * that manage the cursor themselves ({@see cursorSql()}).
+     *
+     * @param string $sql The SQL to run.
+     * @param array<string|int, mixed> $bindings The values to bind.
+     * @return \PDOStatement The executed statement.
+     * @throws QueryException When the statement fails to prepare or execute.
+     */
+    private function prepareAndExecute(string $sql, array $bindings): \PDOStatement
+    {
+        try {
+            $stmt = $this->pdo->prepare($sql);
+            $this->bindValues($stmt, $bindings);
+            $stmt->execute();
+            return $stmt;
+        } catch (\PDOException $e) {
+            if ($this->isConnectionLoss($e)) {
+                $this->stale = true;
+            }
+            throw new QueryException($sql, $bindings, $e);
+        }
+    }
+
+    /**
      * Run a raw SQL statement that returns no result set.
      *
      * Use this for schema changes and other statements where you don't care
@@ -303,6 +402,9 @@ abstract class SqlConnection implements ConnectionInterface
             $stmt->execute();
             return $callback($stmt);
         } catch (\PDOException $e) {
+            if ($this->isConnectionLoss($e)) {
+                $this->stale = true;
+            }
             throw new QueryException($sql, $bindings, $e);
         }
     }
@@ -446,40 +548,56 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Commit the current transaction (or release the innermost savepoint).
+     *
+     * The level is decremented *before* the PDO call: if `commit()` throws
+     * (e.g. the connection dropped mid-transaction), the counter stays
+     * consistent with the database — the transaction is over server-side
+     * either way. Without this, one failed commit leaves the connection
+     * permanently convinced it is in a transaction.
      */
     final public function commit(): void
     {
         $toLevel = $this->transactionLevel - 1;
+        $this->transactionLevel = $toLevel;
         if ($toLevel === 0) {
             $this->pdo->commit();
         } elseif ($this->supportsSavepoints()) {
             $this->releaseSavepoint('trans' . ($toLevel + 1));
         }
-        $this->transactionLevel = $toLevel;
     }
 
     /**
      * Roll back the current transaction (or to the innermost savepoint).
+     *
+     * As with {@see commit()}, the level is decremented before the PDO call:
+     * a failed `rollBack()` must not leave the connection stuck believing a
+     * transaction exists that the server has already aborted.
      */
     final public function rollBack(): void
     {
         $toLevel = $this->transactionLevel - 1;
+        $this->transactionLevel = $toLevel;
         if ($toLevel === 0) {
             $this->pdo->rollBack();
         } elseif ($this->supportsSavepoints()) {
             $this->rollbackToSavepoint('trans' . ($toLevel + 1));
         }
-        $this->transactionLevel = $toLevel;
     }
 
     /**
      * Run a callback inside a transaction, committing on success and
      * rolling back on any exception.
      *
+     * If the rollback itself fails (a frequent companion of whatever threw
+     * in the first place — usually the connection died), the *original*
+     * exception propagates; the rollback failure is discarded rather than
+     * replacing it. The level was already decremented, so the connection is
+     * not left believing it is still in a transaction.
+     *
      * @param callable(SqlConnection): mixed $callback The work to run inside
      *        the transaction; receives this connection.
      * @return mixed The callback's return value.
-     * @throws \Throwable Re-throws whatever the callback throws, after
+     * @throws \Throwable Re-throws whatever the callback threw, after
      *         rolling back.
      */
     final public function transaction(callable $callback): mixed
@@ -490,7 +608,12 @@ abstract class SqlConnection implements ConnectionInterface
             $this->commit();
             return $result;
         } catch (\Throwable $e) {
-            $this->rollBack();
+            try {
+                $this->rollBack();
+            } catch (\Throwable) {
+                // The original failure is what the caller needs; a failed
+                // rollback is secondary (and usually shares its cause).
+            }
             throw $e;
         }
     }

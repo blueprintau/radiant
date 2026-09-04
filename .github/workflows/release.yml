@@ -9,7 +9,7 @@ on:
                 type: string
 
 permissions:
-    contents: write
+    contents: read
 
 jobs:
     check-tag:
@@ -21,21 +21,27 @@ jobs:
                   fetch-depth: 0
 
             - name: Check tag does not already exist
+              env:
+                  VERSION: ${{ inputs.version }}
               run: |
-                  if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
-                      echo "Tag ${{ inputs.version }} already exists. Aborting."
+                  if git rev-parse "$VERSION" >/dev/null 2>&1; then
+                      echo "Tag $VERSION already exists. Aborting."
                       exit 1
                   else
-                      echo "Tag ${{ inputs.version }} does not exist. Continuing."
+                      echo "Tag $VERSION does not exist. Continuing."
                   fi
 
     test:
         needs: check-tag
+        permissions:
+            contents: read
         uses: ./.github/workflows/tests.yml
 
     release:
         needs: [check-tag, test]
         runs-on: ubuntu-latest
+        permissions:
+            contents: write
         steps:
             - name: Checkout code
               uses: actions/checkout@v7

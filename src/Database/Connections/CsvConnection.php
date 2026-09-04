@@ -133,10 +133,19 @@ final class CsvConnection implements ConnectionInterface
     public function insert(QueryBuilder $query, array $values): int
     {
         $this->assertWritable();
-        $rows = $this->readRows();
-        $normalized = $this->normalizeInsertRows($values);
-        array_push($rows, ...$normalized);
-        $this->writeRows($rows);
+        // One exclusive lock spans the whole read-modify-write: no other
+        // process can read between our read and our write, so no lost
+        // updates. writeRows() reuses (and releases) the handle.
+        $handle = $this->openLocked();
+        try {
+            $rows = $this->readRowsLocked($handle);
+            $normalized = $this->normalizeInsertRows($values);
+            array_push($rows, ...$normalized);
+            $this->writeRows($rows, $handle);
+        } catch (\Throwable $e) {
+            $this->releaseIfOpen($handle);
+            throw $e;
+        }
         return count($normalized);
     }
 
@@ -167,16 +176,23 @@ final class CsvConnection implements ConnectionInterface
     public function update(QueryBuilder $query, array $values): int
     {
         $this->assertWritable();
-        $rows = $this->readRows();
-        $affected = 0;
-        foreach ($rows as &$row) {
-            if ($this->matchesAll($query, $row)) {
-                $row = array_merge($row, $values);
-                $affected++;
+        // Same read-modify-write lock discipline as insert().
+        $handle = $this->openLocked();
+        try {
+            $rows = $this->readRowsLocked($handle);
+            $affected = 0;
+            foreach ($rows as &$row) {
+                if ($this->matchesAll($query, $row)) {
+                    $row = array_merge($row, $values);
+                    $affected++;
+                }
             }
+            unset($row);
+            $this->writeRows($rows, $handle);
+        } catch (\Throwable $e) {
+            $this->releaseIfOpen($handle);
+            throw $e;
         }
-        unset($row);
-        $this->writeRows($rows);
         return $affected;
     }
 
@@ -190,10 +206,17 @@ final class CsvConnection implements ConnectionInterface
     public function delete(QueryBuilder $query): int
     {
         $this->assertWritable();
-        $rows = $this->readRows();
-        $kept = array_filter($rows, fn (array $row) => !$this->matchesAll($query, $row));
-        $affected = count($rows) - count($kept);
-        $this->writeRows(array_values($kept));
+        // Same read-modify-write lock discipline as insert().
+        $handle = $this->openLocked();
+        try {
+            $rows = $this->readRowsLocked($handle);
+            $kept = array_filter($rows, fn (array $row) => !$this->matchesAll($query, $row));
+            $affected = count($rows) - count($kept);
+            $this->writeRows(array_values($kept), $handle);
+        } catch (\Throwable $e) {
+            $this->releaseIfOpen($handle);
+            throw $e;
+        }
         return $affected;
     }
 
@@ -474,6 +497,29 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
+     * A file-backed connection has no transport to lose — it is never stale.
+     *
+     * The interface method exists so a caching layer can treat every
+     * backend uniformly; the CSV backend simply never asks to be evicted.
+     *
+     * @return bool Always false.
+     */
+    #[Override]
+    public function isStale(): bool
+    {
+        return false;
+    }
+
+    /**
+     * A no-op for the CSV backend — see {@see isStale()}.
+     */
+    #[Override]
+    public function markStale(): void
+    {
+        // Nothing to lose: the file is opened per operation.
+    }
+
+    /**
      * Whether a row matches every where clause of the query.
      *
      * @param QueryBuilder $query The query.
@@ -486,49 +532,222 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Read the CSV file into an array of associative rows.
+     * Read the CSV file into an array of associative rows, under an
+     * exclusive lock that is released before returning.
      *
      * @return list<array<string,mixed>> The rows.
      * @throws \RuntimeException When the file cannot be opened or read.
      */
     private function readRows(): array
     {
-        $handle = fopen($this->filePath, 'r');
-        if ($handle === false) {
-            throw new \RuntimeException("Could not open CSV file [{$this->filePath}].");
+        $handle = $this->openLocked();
+        try {
+            return $this->readRowsLocked($handle);
+        } finally {
+            $this->closeLocked($handle);
         }
+    }
+
+    /**
+     * Read rows from an already-locked handle without releasing the lock.
+     *
+     * Used by the mutation path, which keeps the exclusive lock across the
+     * whole read-modify-write cycle and hands the handle to
+     * {@see writeRows()}.
+     *
+     * @param resource $handle The locked handle from {@see openLocked()}.
+     * @return list<array<string,mixed>> The rows.
+     */
+    private function readRowsLocked($handle): array
+    {
+        rewind($handle);
         $rows = [];
         $header = fgetcsv($handle, escape: '');
         if ($header === false) {
-            fclose($handle);
             return [];
         }
         $header = array_map(strval(...), $header);
         while (($line = fgetcsv($handle, escape: '')) !== false) {
             $rows[] = array_combine($header, array_map(strval(...), $line));
         }
-        fclose($handle);
         return $rows;
     }
 
     /**
-     * Write the rows back to the file, rewriting the header.
+     * Best-effort lock release on a failure path.
      *
-     * @param list<array<string,mixed>> $rows The rows to write.
-     * @throws \RuntimeException When the file cannot be opened or written.
+     * After writeRows() succeeded it has already released the handle; this
+     * guard makes double-release harmless so the mutation methods can use
+     * one catch block for every failure point.
+     *
+     * @param resource $handle The handle to release, if still open.
      */
-    private function writeRows(array $rows): void
+    private function releaseIfOpen($handle): void
     {
-        $handle = fopen($this->filePath, 'w');
-        if ($handle === false) {
-            throw new \RuntimeException("Could not write CSV file [{$this->filePath}].");
+        if (is_resource($handle)) {
+            $this->closeLocked($handle);
         }
-        if ($rows !== []) {
-            fputcsv($handle, array_keys($rows[0]), escape: '');
-            foreach ($rows as $row) {
-                fputcsv($handle, $row, escape: '');
+    }
+
+    /**
+     * Open the CSV file with an exclusive advisory lock.
+     *
+     * @return resource The locked file handle. Keep it; pass to
+     *         {@see closeLocked()} (or {@see writeRows()}, which takes
+     *         ownership of the handle).
+     * @throws \RuntimeException When the file cannot be opened or locked.
+     */
+    private function openLocked()
+    {
+        $handle = fopen($this->filePath, 'r+');
+        if ($handle === false) {
+            // Read-only file (or missing) — fall back to a plain read handle,
+            // which still serializes against other LOCK_SH readers.
+            $handle = fopen($this->filePath, 'r');
+            if ($handle === false) {
+                throw new \RuntimeException("Could not open CSV file [{$this->filePath}].");
             }
         }
+        if (!flock($handle, LOCK_EX)) {
+            fclose($handle);
+            throw new \RuntimeException("Could not lock CSV file [{$this->filePath}].");
+        }
+        return $handle;
+    }
+
+    /**
+     * Release the lock and close the handle.
+     *
+     * @param resource $handle The handle from {@see openLocked()}.
+     */
+    private function closeLocked($handle): void
+    {
+        flock($handle, LOCK_UN);
         fclose($handle);
+    }
+
+    /**
+     * Write rows back to the file atomically, replacing the write path's
+     * old truncate-then-write behavior.
+     *
+     * The data goes to a sibling temp file which then `rename()`s over the
+     * original — rename is atomic on POSIX, so a crash, OOM, or kill at any
+     * point leaves either the complete old file or the complete new one,
+     * never a truncated half-dataset. Call with the handle from
+     * {@see openLocked()} to keep the exclusive lock across the whole
+     * read-modify-write; call with null to take the lock for a write-only
+     * cycle.
+     *
+     * Every value is passed through {@see neutralizeFormula()} so a value
+     * that begins with `=`, `+`, `-`, `@`, tab, or CR cannot execute as a
+     * spreadsheet formula when the file is opened in Excel/Sheets.
+     *
+     * Rows are aligned to the canonical column order — the header row —
+     * so a row whose keys were reordered (e.g. by an update adding a new
+     * column) cannot drift out of alignment with its neighbors.
+     *
+     * @param list<array<string,mixed>> $rows The rows to write.
+     * @param resource|null $handle An existing locked handle to reuse, or
+     *        null to open and lock for this write.
+     * @throws \RuntimeException When the file cannot be opened or written.
+     */
+    private function writeRows(array $rows, $handle = null): void
+    {
+        $ownsHandle = $handle === null;
+        if ($ownsHandle) {
+            $handle = $this->openLocked();
+        }
+
+        $tempPath = $this->filePath . '.radiant-tmp';
+        $temp = fopen($tempPath, 'w');
+        if ($temp === false) {
+            if ($ownsHandle) {
+                $this->closeLocked($handle);
+            }
+            throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
+        }
+
+        $columns = $this->canonicalColumns($rows);
+        $written = fputcsv($temp, $columns, escape: '') !== false;
+        foreach ($rows as $row) {
+            $aligned = [];
+            foreach ($columns as $column) {
+                $value = $row[$column] ?? null;
+                $aligned[] = is_string($value) ? $this->neutralizeFormula($value) : $value;
+            }
+            if (fputcsv($temp, $aligned, escape: '') === false) {
+                $written = false;
+                break;
+            }
+        }
+
+        if (!fclose($temp) || !$written) {
+            @unlink($tempPath);
+            if ($ownsHandle) {
+                $this->closeLocked($handle);
+            }
+            throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
+        }
+
+        if (!rename($tempPath, $this->filePath)) {
+            @unlink($tempPath);
+            if ($ownsHandle) {
+                $this->closeLocked($handle);
+            }
+            throw new \RuntimeException("Could not replace CSV file [{$this->filePath}].");
+        }
+
+        if ($ownsHandle) {
+            $this->closeLocked($handle);
+        }
+    }
+
+    /**
+     * The canonical column order for a write: the union of the header row's
+     * keys and every row's keys, in first-seen order.
+     *
+     * Every row is then aligned to this order in {@see writeRows()}, so a
+     * row that gained or reordered columns cannot shift its values under
+     * the wrong header — the silent-corruption mode of the old
+     * `array_keys($rows[0])` header.
+     *
+     * @param list<array<string,mixed>> $rows The rows.
+     * @return list<string> The column names.
+     */
+    private function canonicalColumns(array $rows): array
+    {
+        $columns = [];
+        foreach ($rows as $row) {
+            foreach (array_keys($row) as $column) {
+                if (!in_array($column, $columns, true)) {
+                    $columns[] = $column;
+                }
+            }
+        }
+        return $columns;
+    }
+
+    /**
+     * Neutralize a value that a spreadsheet would evaluate as a formula.
+     *
+     * A leading `=`, `+`, `-`, `@`, tab, or CR is prefixed with a single
+     * quote — the standard CSV formula-injection defense. A leading `-` or
+     * `+` on a number is preserved (the quote would corrupt ordinary
+     * numeric data); the check only fires when the payload after the sign
+     * is not numeric.
+     *
+     * @param string $value The raw value.
+     * @return string The neutralized value.
+     */
+    private function neutralizeFormula(string $value): string
+    {
+        $first = $value === '' ? '' : $value[0];
+        if (in_array($first, ['=', '@', "\t", "\r"], true)) {
+            return "'" . $value;
+        }
+        if (in_array($first, ['+', '-'], true) && !is_numeric($value)) {
+            return "'" . $value;
+        }
+        return $value;
     }
 }

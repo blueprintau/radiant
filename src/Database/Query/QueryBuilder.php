@@ -7,8 +7,10 @@ namespace BlueprintAU\Radiant\Database\Query;
 use BlueprintAU\Collections\Collection;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\Enums\LockType;
+use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
@@ -36,7 +38,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator|string, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator|string, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator|string, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator|string, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -74,7 +76,7 @@ class QueryBuilder
     /**
      * The joins to apply.
      *
-     * @var list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean}>}>
+     * @var list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}>}>
      */
     protected array $joins = [];
 
@@ -241,11 +243,11 @@ class QueryBuilder
      *
      * @param string $table The table to join.
      * @param string $first The first column of the join condition.
-     * @param string $operator The comparison operator.
+     * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
      * @return $this
      */
-    public function join(string $table, string $first, string $operator = '=', string $second = ''): static
+    public function join(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
         return $this->addJoin(JoinType::Inner, $table, $first, $operator, $second);
     }
@@ -255,11 +257,11 @@ class QueryBuilder
      *
      * @param string $table The table to join.
      * @param string $first The first column of the join condition.
-     * @param string $operator The comparison operator.
+     * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
      * @return $this
      */
-    public function leftJoin(string $table, string $first, string $operator = '=', string $second = ''): static
+    public function leftJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
         return $this->addJoin(JoinType::Left, $table, $first, $operator, $second);
     }
@@ -269,11 +271,11 @@ class QueryBuilder
      *
      * @param string $table The table to join.
      * @param string $first The first column of the join condition.
-     * @param string $operator The comparison operator.
+     * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
      * @return $this
      */
-    public function rightJoin(string $table, string $first, string $operator = '=', string $second = ''): static
+    public function rightJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
         return $this->addJoin(JoinType::Right, $table, $first, $operator, $second);
     }
@@ -292,15 +294,22 @@ class QueryBuilder
     /**
      * Append a join clause to the query.
      *
+     * The operator is resolved to a {@see ColumnOperator} — either passed as
+     * the enum directly, or validated from a string — and stored as the
+     * enum. The compiled SQL renders `->value`, so no raw string ever
+     * reaches the statement.
+     *
      * @param JoinType $type The join type.
      * @param string $table The table to join.
      * @param string $first The first column of the join condition.
-     * @param string $operator The comparison operator.
+     * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
      * @return $this
+     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
-    protected function addJoin(JoinType $type, string $table, string $first, string $operator, string $second): static
+    protected function addJoin(JoinType $type, string $table, string $first, ColumnOperator|string $operator, string $second): static
     {
+        $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
         $this->joins[] = [
             'type' => $type,
             'table' => $table,
@@ -309,7 +318,7 @@ class QueryBuilder
                 : [[
                     'type' => WhereType::Column,
                     'first' => $first,
-                    'operator' => $operator,
+                    'operator' => $resolved,
                     'second' => $second,
                     'boolean' => WhereBoolean::And,
                 ]],
@@ -333,6 +342,17 @@ class QueryBuilder
         $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
 
         if ($operator === WhereOperator::In || $operator === WhereOperator::NotIn) {
+            if (!is_array($value)) {
+                throw new \InvalidArgumentException(
+                    'whereIn()/whereNotIn() require an array of values; got ' . get_debug_type($value) . '.'
+                );
+            }
+            if ($value === []) {
+                throw new \InvalidArgumentException(
+                    'whereIn()/whereNotIn() require a non-empty array of values; '
+                    . 'an empty list compiles to invalid SQL. Filter in PHP or skip the clause instead.'
+                );
+            }
             $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
             array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
                 array_values($value),
@@ -469,15 +489,22 @@ class QueryBuilder
     /**
      * Add a column-to-column comparison.
      *
+     * The operator is interpolated verbatim between two identifiers in the
+     * compiled SQL, so it is resolved to a {@see ColumnOperator} — either
+     * passed as the enum directly, or validated from a string. The enum is
+     * stored, not a string: nothing raw ever reaches the SQL.
+     *
      * @param string $first The first column.
-     * @param string $operator The comparison operator.
+     * @param ColumnOperator|string $operator The comparison operator (=, !=, <, <=, >, >=).
      * @param string $second The second column.
      * @param WhereBoolean $boolean The boolean connector.
      * @return $this
+     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
-    public function whereColumn(string $first, string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
+    public function whereColumn(string $first, ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $this->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $operator, 'second' => $second, 'boolean' => $boolean];
+        $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
+        $this->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $resolved, 'second' => $second, 'boolean' => $boolean];
         return $this;
     }
 
@@ -535,13 +562,23 @@ class QueryBuilder
     /**
      * Add an order-by clause.
      *
+     * The direction is validated against {@see SortDirection} — a
+     * non-`ASC`/`DESC` direction is a caller bug or injection attempt and
+     * fails fast, so the direction is always safe to interpolate into the
+     * compiled SQL. Pass a {@see SortDirection} case for static-analysis
+     * safety, or a string for convenience.
+     *
      * @param string $column The column to order by.
-     * @param string $direction `ASC` or `DESC`.
+     * @param SortDirection|string $direction `ASC` or `DESC` (case-insensitive string).
      * @return $this
+     * @throws \InvalidArgumentException When the direction is not `ASC` or `DESC`.
      */
-    public function orderBy(string $column, string $direction = 'ASC'): static
+    public function orderBy(string $column, SortDirection|string $direction = 'ASC'): static
     {
-        $this->orders[] = ['column' => $column, 'direction' => strtoupper($direction)];
+        $normalized = $direction instanceof SortDirection
+            ? $direction->value
+            : SortDirection::fromChecked($direction)->value;
+        $this->orders[] = ['column' => $column, 'direction' => $normalized];
         return $this;
     }
 
@@ -586,6 +623,13 @@ class QueryBuilder
     /**
      * Append a union to the query.
      *
+     * The sub-builder's bindings are NOT copied here — the grammar compiles
+     * each union's SQL at compile time and pulls the sub-builder's bindings
+     * then (see {@see \BlueprintAU\Radiant\Database\Grammars\Grammar::compileUnions()}).
+     * Snapshotting at call time desynchronized the `?` order from the
+     * flattened binding list whenever the sub-builder gained clauses after
+     * the union() call; deferring to compile time keeps them in lockstep.
+     *
      * @param QueryBuilder $query The query to union with.
      * @param bool $all Whether to use `UNION ALL`.
      * @return $this
@@ -593,7 +637,6 @@ class QueryBuilder
     public function union(QueryBuilder $query, bool $all = false): static
     {
         $this->unions[] = ['query' => $query, 'all' => $all];
-        array_push($this->bindings[BindingCategory::Union->value], ...$query->getBindings());
         return $this;
     }
 
@@ -847,6 +890,23 @@ class QueryBuilder
     }
 
     /**
+     * Append bindings to a category at compile time.
+     *
+     * Internal: the Grammar calls this while compiling unions, so a
+     * sub-builder's bindings land in the Union category in exactly the
+     * order its SQL was compiled — placeholders and flattened bindings stay
+     * in lockstep even when clauses were added after union() was called.
+     *
+     * @param BindingCategory $category The category to append to.
+     * @param list<mixed> $bindings The values to append.
+     * @return void
+     */
+    public function pushBindings(BindingCategory $category, array $bindings): void
+    {
+        array_push($this->bindings[$category->value], ...$bindings);
+    }
+
+    /**
      * Declare the PK column so insertGetId() can return it (RETURNING / lastInsertId).
      *
      * @param string $column The primary key column.
@@ -903,7 +963,7 @@ class QueryBuilder
     /**
      * The joins to apply.
      *
-     * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: string, second: string, boolean: WhereBoolean}>}>
+     * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}>}>
      */
     public function getJoins(): array
     {

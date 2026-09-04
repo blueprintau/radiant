@@ -52,6 +52,24 @@ class NullConnection implements ConnectionInterface
     }
 
     /**
+     * The test stub has no transport to lose — never stale.
+     *
+     * @return bool Always false.
+     */
+    public function isStale(): bool
+    {
+        return false;
+    }
+
+    /**
+     * A no-op for the test stub.
+     */
+    public function markStale(): void
+    {
+        // Nothing to mark.
+    }
+
+    /**
      * Insert a single row and return its generated id.
      *
      * @param QueryBuilder $query The query.
