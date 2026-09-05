@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace BlueprintAU\Radiant\Database\Schema;
+namespace BlueprintAU\Radiant\Database\Schema\Enums;
 
 /**
  * The kind of `ALTER TABLE` operation to compile.

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace BlueprintAU\Radiant\Database\Schema;
+namespace BlueprintAU\Radiant\Database\Schema\Enums;
 
 /**
  * The logical column types understood by the schema layer.

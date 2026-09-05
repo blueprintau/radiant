@@ -10,8 +10,8 @@ use BlueprintAU\Radiant\Database\Connectors\MySqlConnector;
 use BlueprintAU\Radiant\Database\Connectors\PostgresConnector;
 use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\ColumnType;
-use BlueprintAU\Radiant\Database\Schema\SchemaOperation;
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 

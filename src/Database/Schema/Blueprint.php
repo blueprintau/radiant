@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema;
 
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+
 /**
  * A fluent column definition for a `CREATE TABLE` / `ALTER TABLE`.
  *

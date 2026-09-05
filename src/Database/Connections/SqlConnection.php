@@ -13,7 +13,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\SchemaOperation;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\ValueCodecs\DefaultValueCodec;
 use BlueprintAU\Radiant\Database\ValueCodecs\ValueCodecInterface;
 use Override;

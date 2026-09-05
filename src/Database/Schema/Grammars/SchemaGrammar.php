@@ -7,8 +7,8 @@ namespace BlueprintAU\Radiant\Database\Schema\Grammars;
 use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\ColumnType;
-use BlueprintAU\Radiant\Database\Schema\SchemaOperation;
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /**
  * Compiles schema definitions into dialect DDL.
