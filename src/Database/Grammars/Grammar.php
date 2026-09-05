@@ -199,7 +199,16 @@ abstract class Grammar
     // ---- Output helpers ----
 
     /**
-     * Join non-empty segments with a single space.
+     * Join statement segments with a single space, dropping empty ones.
+     *
+     * This is the STATEMENT ASSEMBLY join: each argument is an optional part
+     * of one statement (a clause that may not apply, e.g. an empty WHERE),
+     * and an empty segment means "not present", not "zero items".
+     *
+     * Do NOT use this to join list items (columns, orders, bindings) — those
+     * are non-optional and joined with plain `implode(', ' ...)` or
+     * `implode(' ' ...)`; silently filtering a genuinely empty list item
+     * there would hide a bug instead of surfacing it.
      *
      * @param list<string> $segments The SQL segments.
      * @return string The joined SQL.
@@ -374,7 +383,7 @@ abstract class Grammar
     /**
      * Compile a join's on conditions.
      *
-     * @param list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}> $wheres The join's on clauses.
+     * @param list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}> $wheres The join's on clauses.
      * @return string The on conditions, or an empty string when there are none.
      */
     protected function compileJoinWheres(array $wheres): string
@@ -382,8 +391,7 @@ abstract class Grammar
         $segments = [];
         foreach ($wheres as $i => $where) {
             $boolean = $i === 0 ? '' : strtoupper($where['boolean']->value) . ' ';
-            $operator = $where['operator'] instanceof ColumnOperator ? $where['operator']->value : $where['operator'];
-            $segments[] = $boolean . $this->wrapSegments($where['first']) . ' ' . $operator . ' ' . $this->wrapSegments($where['second']);
+            $segments[] = $boolean . $this->wrapSegments($where['first']) . ' ' . $where['operator']->value . ' ' . $this->wrapSegments($where['second']);
         }
         return implode(' ', $segments);
     }
@@ -432,7 +440,7 @@ abstract class Grammar
             WhereType::Between => $this->compileBetweenWhere($where),
             WhereType::Null => $this->compileNullWhere($where),
             WhereType::Raw => $where['sql'],
-            WhereType::Column => $this->wrapSegments($where['first']) . ' ' . ($where['operator'] instanceof ColumnOperator ? $where['operator']->value : $where['operator']) . ' ' . $this->wrapSegments($where['second']),
+            WhereType::Column => $this->wrapSegments($where['first']) . ' ' . $where['operator']->value . ' ' . $this->wrapSegments($where['second']),
             WhereType::Nested => '(' . $this->compileWhereGroup($where['query']->getWheres()) . ')',
         };
     }
@@ -440,53 +448,50 @@ abstract class Grammar
     /**
      * Compile a basic comparison where clause.
      *
-     * @param array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileBasicWhere(array $where): string
     {
         $column = $this->wrapSegments($where['column']);
         $operator = $where['operator'];
-        if ($operator instanceof WhereOperator) {
-            return match ($operator) {
-                WhereOperator::Null => "{$column} IS NULL",
-                WhereOperator::NotNull => "{$column} IS NOT NULL",
-                WhereOperator::In => "{$column} IN (" . $this->parameterize($where['value']) . ')',
-                WhereOperator::NotIn => "{$column} NOT IN (" . $this->parameterize($where['value']) . ')',
-                WhereOperator::Between => "{$column} BETWEEN " . $this->parameterize($where['value']),
-                WhereOperator::NotBetween => "{$column} NOT BETWEEN " . $this->parameterize($where['value']),
-                WhereOperator::Eq, WhereOperator::NotEq, WhereOperator::Lt, WhereOperator::LtEq,
-                WhereOperator::Gt, WhereOperator::GtEq, WhereOperator::Like, WhereOperator::NotLike,
-                WhereOperator::Is, WhereOperator::IsNot => "{$column} {$operator->value} " . $this->parameter($where['value']),
-            };
-        }
-        return "{$column} {$operator} " . $this->parameter($where['value']);
+        return match ($operator) {
+            WhereOperator::Null => "{$column} IS NULL",
+            WhereOperator::NotNull => "{$column} IS NOT NULL",
+            WhereOperator::In => "{$column} IN (" . $this->parameterize($where['value']) . ')',
+            WhereOperator::NotIn => "{$column} NOT IN (" . $this->parameterize($where['value']) . ')',
+            WhereOperator::Between => "{$column} BETWEEN " . $this->parameterize($where['value']),
+            WhereOperator::NotBetween => "{$column} NOT BETWEEN " . $this->parameterize($where['value']),
+            WhereOperator::Eq, WhereOperator::NotEq, WhereOperator::Lt, WhereOperator::LtEq,
+            WhereOperator::Gt, WhereOperator::GtEq, WhereOperator::Like, WhereOperator::NotLike,
+            WhereOperator::Is, WhereOperator::IsNot => "{$column} {$operator->value} " . $this->parameter($where['value']),
+        };
     }
 
     /**
      * Compile a between where clause.
      *
-     * @param array{type: WhereType::Between, column: string, operator: WhereOperator|string, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileBetweenWhere(array $where): string
     {
         $column = $this->wrapSegments($where['column']);
-        $operator = $where['operator'] instanceof WhereOperator ? $where['operator']->value : $where['operator'];
-        return "{$column} {$operator} " . $this->parameter($where['value'][0]) . ' AND ' . $this->parameter($where['value'][1]);
+        $operator = $where['operator'];
+        return "{$column} {$operator->value} " . $this->parameter($where['value'][0]) . ' AND ' . $this->parameter($where['value'][1]);
     }
 
     /**
      * Compile a null where clause.
      *
-     * @param array{type: WhereType::Null, column: string, operator: WhereOperator|string, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileNullWhere(array $where): string
     {
         $column = $this->wrapSegments($where['column']);
-        $operator = $where['operator'] instanceof WhereOperator ? $where['operator']->value : $where['operator'];
-        return "{$column} IS {$operator}";
+        $operator = $where['operator'];
+        return "{$column} IS {$operator->value}";
     }
 
     /**
@@ -520,8 +525,7 @@ abstract class Grammar
         foreach ($havings as $i => $having) {
             $boolean = $i === 0 ? '' : 'AND ';
             $column = $this->wrapColumn($having['column']);
-            $operator = $having['operator'] instanceof WhereOperator ? $having['operator']->value : $having['operator'];
-            $segments[] = $boolean . $column . ' ' . $operator . ' ' . $this->parameter($having['value']);
+            $segments[] = $boolean . $column . ' ' . $having['operator']->value . ' ' . $this->parameter($having['value']);
         }
         return 'HAVING ' . implode(' ', $segments);
     }
@@ -541,7 +545,7 @@ abstract class Grammar
         $segments = [];
         foreach ($orders as $order) {
             $column = $this->wrapColumn($order['column']);
-            $segments[] = $order['direction'] !== '' ? $column . ' ' . $order['direction'] : $column;
+            $segments[] = $order['direction'] !== null ? $column . ' ' . $order['direction']->value : $column;
         }
         return 'ORDER BY ' . implode(', ', $segments);
     }

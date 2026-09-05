@@ -64,9 +64,6 @@ final class MySqlConnector extends SqlConnector
      * contract is "affected rows", and dirty-tracking save() depends on that
      * being honest — so this is forced on.
      *
-     * Note: FOUND_ROWS is a recommendation from the plan, not yet verified
-     * against a live MySQL server.
-     *
      * @var array<int, int|bool>
      */
     protected static array $FORCED_OPTIONS = [

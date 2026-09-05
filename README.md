@@ -53,15 +53,16 @@ $users = $db->table('users')
     ->get(); // Collection<int, \stdClass>
 ```
 
-Streaming large result sets without buffering them all in memory works on any
-backend via `cursor()` — the memory-light counterpart of `get()`. Each backend
-materializes rows however its transport allows (a SQL connection fetches row by
-row from the statement; a CSV connection, whose file is fully in memory anyway,
-yields the rows `get()` would return):
+Streams large result sets without materializing them all as PHP objects via
+`cursor()` — the memory-light counterpart of `get()`. Each backend
+materializes rows however its transport allows: a SQL connection fetches row by
+row from the statement (memory bounded by a single row); a CSV connection,
+whose file is already fully in memory anyway, simply yields the rows `get()`
+would return:
 
 ```php
 foreach ($db->table('logs')->where('level', '=', 'warn')->cursor() as $row) {
-    // Rows arrive one at a time — memory stays bounded by a single row.
+    // Rows arrive one at a time — on SQL, memory stays bounded by a single row.
 }
 ```
 
@@ -259,6 +260,14 @@ $updated = $db->table('users')
 $deleted = $db->table('users')->where('active', '=', 0)->delete();
 ```
 
+`insertGetId()` returns the new row's id only when the builder knows which
+column holds it — declare it with `insertIdColumn()` first; otherwise the
+insert runs and the method returns `null`:
+
+```php
+$id = $db->table('users')->insertIdColumn('id')->insertGetId(['name' => 'Alicia']);
+```
+
 Aggregates and reads:
 
 ```php
@@ -293,7 +302,7 @@ at construction and fails fast with a message naming the problem.
 
 | Driver | Key | Required config |
 |---|---|---|
-| MySQL | `mysql` | `host`, `port`, `database`, `username`, `password`; optional `charset` (allowlisted) and PDO `options` |
+| MySQL | `mysql` | `host`, `port` (integer), `database`; optional `username`, `password`, `charset` (allowlisted) and PDO `options` |
 | SQLite | `sqlite` | `database` (path string); optional PDO `options` |
 | Postgres | `pgsql` | `host`, `database`; optional `port` (default 5432), `username`, `password`, PDO `options` |
 | CSV | `csv` | `path`; optional `readonly` boolean |

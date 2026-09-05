@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
@@ -300,6 +301,32 @@ final class SchemaGrammarTest extends TestCase
         self::assertSame(['teams', 'id'], $foreignKeys[0]['references']);
         self::assertSame(['team_id', 'user_id'], $foreignKeys[1]['columns']);
         self::assertSame(['memberships', 'team_id', 'user_id'], $foreignKeys[1]['references']);
+    }
+
+    /**
+     * FK actions are validated at the boundary and stored as the enum —
+     * a non-action string is rejected before it can reach the DDL.
+     */
+    public function testForeignKeyActionRejectsNonAction(): void
+    {
+        $blueprint = new Blueprint();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('A foreign key action must be one of CASCADE, SET NULL, RESTRICT, NO ACTION, or SET DEFAULT');
+        $blueprint->foreignKey(['user_id'], 'users', ['id'], onDelete: 'cascade; DROP TABLE users');
+    }
+
+    /**
+     * FK action strings normalize case-insensitively to the canonical enum.
+     */
+    public function testForeignKeyActionNormalizesCase(): void
+    {
+        $blueprint = (new Blueprint())
+            ->foreignKey(['user_id'], 'users', ['id'], onDelete: 'set null', onUpdate: 'No_Action');
+
+        $foreignKeys = $blueprint->getForeignKeys();
+        self::assertSame(ForeignKeyAction::SetNull, $foreignKeys[0]['onDelete']);
+        self::assertSame(ForeignKeyAction::NoAction, $foreignKeys[0]['onUpdate']);
     }
 
     /**

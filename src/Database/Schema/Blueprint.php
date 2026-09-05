@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Schema;
 
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 
 /**
  * A fluent column definition for a `CREATE TABLE` / `ALTER TABLE`.
  *
- * Mirrors the fields of the ORM's `#[Column]` attribute (§14 of the plan) so
- * a model's metadata can drive DDL directly. The schema layer is DB-only:
+ * Uses the same field vocabulary the ORM's `#[Column]` attribute will use
+ * (type, length, nullable, unique, index, foreign, …) so a model's metadata
+ * can drive DDL directly. The schema layer is DB-only:
  * it lives under `Database\` and is consumed by
  * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::create()}
  * and {@see alter()}, independent of the ORM.
@@ -26,8 +28,8 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
  *     length: int|null,
  *     default: mixed,
  *     foreign: string|null,
- *     onDelete: string|null,
- *     onUpdate: string|null,
+ *     onDelete: ForeignKeyAction|null,
+ *     onUpdate: ForeignKeyAction|null,
  * }
  */
 final class Blueprint
@@ -94,8 +96,11 @@ final class Blueprint
      *        {@see ColumnType::String}).
      * @param mixed $default The column default.
      * @param string|null $foreign A foreign key reference, `table.column`.
-     * @param string|null $onDelete The foreign key ON DELETE action.
-     * @param string|null $onUpdate The foreign key ON UPDATE action.
+     * @param ForeignKeyAction|string|null $onDelete The foreign key ON DELETE
+     *        action — validated via {@see ForeignKeyAction::fromChecked()} and
+     *        stored as the enum, so no raw string reaches the compiled DDL.
+     * @param ForeignKeyAction|string|null $onUpdate The foreign key ON UPDATE
+     *        action — validated the same way.
      * @return $this
      */
     public function column(
@@ -109,8 +114,8 @@ final class Blueprint
         ?int $length = null,
         mixed $default = null,
         ?string $foreign = null,
-        ?string $onDelete = null,
-        ?string $onUpdate = null,
+        ForeignKeyAction|string|null $onDelete = null,
+        ForeignKeyAction|string|null $onUpdate = null,
     ): static {
         $this->columns[] = [
             'type' => $type,
@@ -123,8 +128,8 @@ final class Blueprint
             'length' => $length,
             'default' => $default,
             'foreign' => $foreign,
-            'onDelete' => $onDelete,
-            'onUpdate' => $onUpdate,
+            'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
+            'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
         ];
         return $this;
     }
@@ -173,8 +178,8 @@ final class Blueprint
      * @param ColumnType $type The column type (default {@see ColumnType::BigInt}).
      * @param int|null $length The column length (required when the type is
      *        {@see ColumnType::String}).
-     * @param string|null $onDelete The ON DELETE action.
-     * @param string|null $onUpdate The ON UPDATE action.
+     * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
+     * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
      * @return $this
      */
     public function foreignId(
@@ -182,8 +187,8 @@ final class Blueprint
         string $references,
         ColumnType $type = ColumnType::BigInt,
         ?int $length = null,
-        ?string $onDelete = null,
-        ?string $onUpdate = null,
+        ForeignKeyAction|string|null $onDelete = null,
+        ForeignKeyAction|string|null $onUpdate = null,
     ): static {
         return $this->column($type, $name, length: $length, foreign: $references, onDelete: $onDelete, onUpdate: $onUpdate);
     }
@@ -192,7 +197,7 @@ final class Blueprint
      * Foreign-key constraints — single-column via `foreignId()` are inline;
      * this holds table-level (composite) constraints.
      *
-     * @var list<array{columns: list<string>, references: list<string>, onDelete: string|null, onUpdate: string|null}>
+     * @var list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null}>
      */
     private array $foreignKeys = [];
 
@@ -206,8 +211,8 @@ final class Blueprint
      * @param list<string> $columns The local columns.
      * @param string $referencesTable The referenced table.
      * @param list<string> $referencesColumns The referenced columns.
-     * @param string|null $onDelete The ON DELETE action.
-     * @param string|null $onUpdate The ON UPDATE action.
+     * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
+     * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
      * @return $this
      * @throws \InvalidArgumentException When the column/reference arity
      *         mismatches or either list is empty.
@@ -216,8 +221,8 @@ final class Blueprint
         array $columns,
         string $referencesTable,
         array $referencesColumns,
-        ?string $onDelete = null,
-        ?string $onUpdate = null,
+        ForeignKeyAction|string|null $onDelete = null,
+        ForeignKeyAction|string|null $onUpdate = null,
     ): static {
         if ($columns === [] || $referencesColumns === []) {
             throw new \InvalidArgumentException('A foreign key requires at least one column.');
@@ -232,8 +237,8 @@ final class Blueprint
         $this->foreignKeys[] = [
             'columns' => $columns,
             'references' => [$referencesTable, ...$referencesColumns],
-            'onDelete' => $onDelete,
-            'onUpdate' => $onUpdate,
+            'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
+            'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
         ];
         return $this;
     }
@@ -246,7 +251,7 @@ final class Blueprint
      * declarations (single or composite) are appended after. Each entry's
      * `references` is `[table, ...columns]`.
      *
-     * @return list<array{columns: list<string>, references: list<string>, onDelete: string|null, onUpdate: string|null}>
+     * @return list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null}>
      */
     public function getForeignKeys(): array
     {

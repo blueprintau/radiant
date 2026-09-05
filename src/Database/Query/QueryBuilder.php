@@ -38,7 +38,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator|string, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator|string, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -76,7 +76,7 @@ class QueryBuilder
     /**
      * The joins to apply.
      *
-     * @var list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}>}>
+     * @var list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}>}>
      */
     protected array $joins = [];
 
@@ -97,14 +97,17 @@ class QueryBuilder
     /**
      * The having clauses.
      *
-     * @var list<array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed}>
+     * @var list<array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed}>
      */
     protected array $havings = [];
 
     /**
      * The order-by clauses.
      *
-     * @var list<array{column: string|Expression, direction: string}>
+     * A raw `orderByRaw()` entry has `direction: null` — its expression is
+     * spliced verbatim with no direction appended.
+     *
+     * @var list<array{column: string|Expression, direction: SortDirection|null}>
      */
     protected array $orders = [];
 
@@ -573,11 +576,11 @@ class QueryBuilder
      * @return $this
      * @throws \InvalidArgumentException When the direction is not `ASC` or `DESC`.
      */
-    public function orderBy(string $column, SortDirection|string $direction = 'ASC'): static
+    public function orderBy(string $column, SortDirection|string $direction = SortDirection::Asc): static
     {
         $normalized = $direction instanceof SortDirection
-            ? $direction->value
-            : SortDirection::fromChecked($direction)->value;
+            ? $direction
+            : SortDirection::fromChecked($direction);
         $this->orders[] = ['column' => $column, 'direction' => $normalized];
         return $this;
     }
@@ -590,7 +593,7 @@ class QueryBuilder
      */
     public function orderByRaw(string $sql): static
     {
-        $this->orders[] = ['column' => new Expression($sql), 'direction' => ''];
+        $this->orders[] = ['column' => new Expression($sql), 'direction' => null];
         return $this;
     }
 
@@ -938,7 +941,19 @@ class QueryBuilder
         return $this;
     }
 
-    // ---- Accessors used by the Grammar ----
+    // ---- Accessors: the query state contract ----
+
+    /*
+     * These getters ARE the public contract for every consumer of a built
+     * query: the SQL {@see Grammar} compiles them to text, and custom
+     * `ConnectionInterface` implementations (e.g. CSV) execute them directly
+     * in PHP. Every returned shape is fully typed — discriminated unions
+     * pinned by enum literals, never bare strings for anything an author
+     * must branch on — so a custom connection can exhaustively match the
+     * state without reading this class's source. Shapes are defined here and
+     * imported elsewhere via `@phpstan-import-type`; they must not drift
+     * between consumers.
+     */
 
     /**
      * The columns to select.
@@ -983,7 +998,7 @@ class QueryBuilder
     /**
      * The joins to apply.
      *
-     * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator|string, second: string, boolean: WhereBoolean}>}>
+     * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}>}>
      */
     public function getJoins(): array
     {
@@ -992,6 +1007,10 @@ class QueryBuilder
 
     /**
      * The where clauses.
+     *
+     * A discriminated union keyed by {@see WhereType} — exhaustively match on
+     * `type` to handle every shape. Nested queries carry their own builder;
+     * recurse via `->getWheres()`.
      *
      * @return list<WhereClause>
      */
@@ -1013,7 +1032,7 @@ class QueryBuilder
     /**
      * The having clauses.
      *
-     * @return list<array{type: WhereType::Basic, column: string, operator: WhereOperator|string, value: mixed}>
+     * @return list<array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed}>
      */
     public function getHavings(): array
     {
@@ -1023,7 +1042,12 @@ class QueryBuilder
     /**
      * The order-by clauses.
      *
-     * @return list<array{column: string|Expression, direction: string}>
+     * Part of the contract consumed by both {@see \BlueprintAU\Radiant\Database\Grammars\Grammar}
+     * (SQL compilation) and custom `ConnectionInterface` implementations
+     * (non-SQL execution). `direction` is the {@see SortDirection} enum —
+     * never a bare string — or `null` for a raw `orderByRaw()` expression.
+     *
+     * @return list<array{column: string|Expression, direction: SortDirection|null}>
      */
     public function getOrders(): array
     {

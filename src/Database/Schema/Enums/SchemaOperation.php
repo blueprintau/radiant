@@ -7,8 +7,7 @@ namespace BlueprintAU\Radiant\Database\Schema\Enums;
 /**
  * The kind of `ALTER TABLE` operation to compile.
  *
- * Mirrors the plan's `SchemaOperation` reference (§4): the schema layer is
- * DB-only, consumed by
+ * The schema layer is DB-only, consumed by
  * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::alter()}.
  */
 enum SchemaOperation: string

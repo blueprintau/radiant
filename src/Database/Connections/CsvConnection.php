@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Database\Connections;
 use BlueprintAU\Collections\Collection;
 use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
@@ -312,13 +313,12 @@ final class CsvConnection implements ConnectionInterface
      * Evaluate an IS NULL / IS NOT NULL clause.
      *
      * @param mixed $value The row value.
-     * @param WhereOperator|string $operator The null operator.
+     * @param WhereOperator $operator The null operator.
      * @return bool True when the value is (or is not) null.
      */
-    private function matchesNull(mixed $value, WhereOperator|string $operator): bool
+    private function matchesNull(mixed $value, WhereOperator $operator): bool
     {
         $isNull = $value === null;
-        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
         return $operator === WhereOperator::NotNull ? !$isNull : $isNull;
     }
 
@@ -326,14 +326,13 @@ final class CsvConnection implements ConnectionInterface
      * Evaluate a BETWEEN / NOT BETWEEN clause.
      *
      * @param mixed $value The row value.
-     * @param WhereOperator|string $operator The between operator.
+     * @param WhereOperator $operator The between operator.
      * @param array{0: mixed, 1: mixed} $range The two bounds.
      * @return bool True when the value is (or is not) between the bounds.
      */
-    private function matchesBetween(mixed $value, WhereOperator|string $operator, array $range): bool
+    private function matchesBetween(mixed $value, WhereOperator $operator, array $range): bool
     {
         $between = $value >= $range[0] && $value <= $range[1];
-        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
         return $operator === WhereOperator::NotBetween ? !$between : $between;
     }
 
@@ -341,15 +340,13 @@ final class CsvConnection implements ConnectionInterface
      * Evaluate a basic comparison (also handles IN / NOT IN, LIKE / NOT LIKE).
      *
      * @param mixed $value The row value.
-     * @param WhereOperator|string $operator The comparison operator.
+     * @param WhereOperator $operator The comparison operator.
      * @param mixed $operand The value to compare against.
      * @return bool True when the comparison holds.
      * @throws UnsupportedFeatureException When the operator is not supported.
      */
-    private function matchesBasic(mixed $value, WhereOperator|string $operator, mixed $operand): bool
+    private function matchesBasic(mixed $value, WhereOperator $operator, mixed $operand): bool
     {
-        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
-
         return match ($operator) {
             WhereOperator::Eq => $value == $operand,
             WhereOperator::NotEq => $value != $operand,
@@ -397,7 +394,7 @@ final class CsvConnection implements ConnectionInterface
             if ($column instanceof Expression) {
                 throw new UnsupportedFeatureException('This connection does not support raw order-by expressions.');
             }
-            $direction = $order['direction'] === 'DESC' ? -1 : 1;
+            $direction = $order['direction'] === SortDirection::Desc ? -1 : 1;
             usort(
                 $rows,
                 fn (array $a, array $b) => $direction * ($a[$column] <=> $b[$column]),

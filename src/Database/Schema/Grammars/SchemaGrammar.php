@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /**
@@ -95,7 +96,7 @@ abstract class SchemaGrammar
     /**
      * Compile a table-level foreign-key constraint.
      *
-     * @param array{columns: list<string>, references: list<string>, onDelete: string|null, onUpdate: string|null} $foreignKey
+     * @param array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null} $foreignKey
      *        The constraint — the first references element is the table, the
      *        rest are the referenced columns.
      * @return string The compiled constraint.
@@ -111,10 +112,10 @@ abstract class SchemaGrammar
             . 'REFERENCES ' . $this->wrap($table) . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $foreignKey['references'])) . ')';
 
         if ($foreignKey['onDelete'] !== null) {
-            $sql .= ' ON DELETE ' . strtoupper($foreignKey['onDelete']);
+            $sql .= ' ON DELETE ' . $foreignKey['onDelete']->value;
         }
         if ($foreignKey['onUpdate'] !== null) {
-            $sql .= ' ON UPDATE ' . strtoupper($foreignKey['onUpdate']);
+            $sql .= ' ON UPDATE ' . $foreignKey['onUpdate']->value;
         }
 
         return $sql;

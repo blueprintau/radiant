@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Query;
 
 use BlueprintAU\Radiant\Database\Grammars\MySqlGrammar;
+use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Tests\Support\NullConnection;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -66,8 +67,8 @@ final class HardeningRegressionTest extends TestCase
         $b->orderBy('name', 'desc');
         $b->orderBy('id', 'AsC');
         $orders = $b->getOrders();
-        $this->assertSame('DESC', $orders[0]['direction']);
-        $this->assertSame('ASC', $orders[1]['direction']);
+        $this->assertSame(SortDirection::Desc, $orders[0]['direction']);
+        $this->assertSame(SortDirection::Asc, $orders[1]['direction']);
     }
 
     /**
