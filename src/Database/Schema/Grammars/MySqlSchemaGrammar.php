@@ -2,7 +2,11 @@
 
 declare(strict_types=1);
 
-namespace BlueprintAU\Radiant\Database\Schema;
+namespace BlueprintAU\Radiant\Database\Schema\Grammars;
+
+use BlueprintAU\Radiant\Database\Schema\Blueprint;
+use BlueprintAU\Radiant\Database\Schema\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\SchemaOperation;
 
 /**
  * The MySQL dialect of the schema grammar.

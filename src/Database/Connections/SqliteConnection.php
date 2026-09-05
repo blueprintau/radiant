@@ -6,8 +6,8 @@ namespace BlueprintAU\Radiant\Database\Connections;
 
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\SqliteGrammar;
-use BlueprintAU\Radiant\Database\Schema\SchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\SqliteSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
 
 /**
  * A database connection backed by SQLite.

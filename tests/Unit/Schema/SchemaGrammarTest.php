@@ -9,10 +9,10 @@ use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\ColumnType;
-use BlueprintAU\Radiant\Database\Schema\MySqlSchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\PostgresSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\SchemaOperation;
-use BlueprintAU\Radiant\Database\Schema\SqliteSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
 use PHPUnit\Framework\TestCase;
 
 /**

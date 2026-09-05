@@ -6,8 +6,8 @@ namespace BlueprintAU\Radiant\Database\Connections;
 
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\PostgresGrammar;
-use BlueprintAU\Radiant\Database\Schema\PostgresSchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
 use BlueprintAU\Radiant\Database\ValueCodecs\PostgresValueCodec;
 use BlueprintAU\Radiant\Database\ValueCodecs\ValueCodecInterface;
 

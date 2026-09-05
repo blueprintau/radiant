@@ -8,7 +8,7 @@ namespace BlueprintAU\Radiant\Database\Concerns;
  * Quotes scalar values as SQL literals.
  *
  * Shared by the query {@see \BlueprintAU\Radiant\Database\Grammars\Grammar}
- * and the schema {@see \BlueprintAU\Radiant\Database\Schema\SchemaGrammar} —
+ * and the schema {@see \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar} —
  * two unrelated hierarchies that both need to render a scalar as a SQL
  * literal (a default value in DDL, an inline value in a query). A trait
  * (not a base class) because it must reach across both trees.

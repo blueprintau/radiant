@@ -6,8 +6,8 @@ namespace BlueprintAU\Radiant\Database\Connections;
 
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\MySqlGrammar;
-use BlueprintAU\Radiant\Database\Schema\MySqlSchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
 
 /**
  * A database connection backed by MySQL.

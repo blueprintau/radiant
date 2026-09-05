@@ -8,8 +8,9 @@ namespace BlueprintAU\Radiant\Database\Schema;
  * The logical column types understood by the schema layer.
  *
  * A `ColumnType` is the portable, dialect-agnostic description of a column;
- * each {@see SchemaGrammar} maps it to the dialect's native type via
- * {@see SchemaGrammar::type()}. Using an enum (rather than a bare string)
+ * each {@see \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar}
+ * maps it to the dialect's native type via
+ * {@see \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar::type()}. Using an enum (rather than a bare string)
  * makes an invalid type a compile-time error instead of a silently-wrong
  * column.
  */
