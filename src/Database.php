@@ -70,18 +70,10 @@ final class Database
     /**
      * The active connection, narrowed to a SQL connection.
      *
-     * @param string|null $name The connection name; defaults to the
-     *        current connection.
-     * @return SqlConnection The active connection.
-     * @throws UnsupportedFeatureException When the active connection is not
-     *         a {@see SqlConnection}.
-     */
-    /**
-     * The active connection, narrowed to a SQL connection.
-     *
      * Use this to reach SQL-only connection methods — such as transactions,
      * `insertGetId()` or `getPdo()` — through the facade, mirroring how
-     * {@see connection()} hands out the untyped connection.
+     * {@see connection()} hands out the untyped connection. Delegates to
+     * {@see DatabaseManager::sqlConnection()}.
      *
      * @param string|null $name The connection name; defaults to the
      *        current connection.
@@ -91,12 +83,7 @@ final class Database
      */
     public static function sqlConnection(?string $name = null): SqlConnection
     {
-        $connection = self::manager()->connection($name);
-        if (!$connection instanceof SqlConnection) {
-            throw new UnsupportedFeatureException('The active connection is not a SQL connection.');
-        }
-
-        return $connection;
+        return self::manager()->sqlConnection($name);
     }
 
     /**

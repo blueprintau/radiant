@@ -70,7 +70,7 @@ final class DatabaseFacadeTest extends TestCase
     public function testSqlConnectionOnNonSqlConnectionThrows(): void
     {
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('The active connection is not a SQL connection.');
+        $this->expectExceptionMessage('The connection is not a SQL connection.');
         Database::usingConnection('csv', fn () => Database::sqlConnection());
     }
 
@@ -128,7 +128,7 @@ final class DatabaseFacadeTest extends TestCase
     public function testSelectOnNonSqlConnectionThrows(): void
     {
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('The active connection is not a SQL connection.');
+        $this->expectExceptionMessage('The connection is not a SQL connection.');
         Database::usingConnection('csv', fn () => Database::select('select * from users'));
     }
 }

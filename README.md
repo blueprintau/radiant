@@ -43,19 +43,49 @@ $manager = new DatabaseManager([
     'username' => 'root',
     'password' => '',
   ],
-], 'mysql');
+], default: 'mysql');
 
 $db = $manager->connection();
 
 $users = $db->table('users')
     ->where('active', '=', 1)
     ->orderBy('name')
-    ->get();
+    ->get(); // Collection<int, \stdClass>
+```
 
-// Stream large result sets without buffering them all in memory.
-foreach ($db->sqlConnection()->cursorSql('SELECT * FROM logs WHERE level = ?', ['warn']) as $row) {
-    // ...
+Raw SQL — including streaming large result sets without buffering them all in
+memory — is SQL-only, so narrow to a `SqlConnection` first (see
+[SQL-only features](#sql-only-features)):
+
+```php
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+
+$conn = $manager->connection('mysql');
+
+if ($conn instanceof SqlConnection) {
+    foreach ($conn->cursorSql('SELECT * FROM logs WHERE level = ?', ['warn']) as $row) {
+        // ...
+    }
 }
+```
+
+### Static facade
+
+If you prefer not to thread a `DatabaseManager` through your code, inject it
+once at bootstrap and use the `Database` facade:
+
+```php
+use BlueprintAU\Radiant\Database;
+use BlueprintAU\Radiant\Database\DatabaseManager;
+
+Database::setManager($manager); // typically at application bootstrap
+
+$rows    = Database::table('users')->where('active', '=', 1)->get();
+$single  = Database::select('SELECT * FROM users WHERE id = ?', [1])->first();
+$changed = Database::affectingStatement('UPDATE users SET active = ? WHERE id = ?', [0, 1]);
+
+// SQL-only features through the facade fail fast on a non-SQL backend:
+$conn = Database::sqlConnection(); // throws UnsupportedFeatureException otherwise
 ```
 
 ### ORM *(planned)*
@@ -151,6 +181,10 @@ single-column indexes come from a column's `index:` flag.
 ```php
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\ColumnType;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+
+/** @var SqlConnection $conn — narrow first; schema is SQL-only */
+$conn = $manager->connection();
 
 $blueprint = (new Blueprint())
     ->id()
@@ -159,8 +193,117 @@ $blueprint = (new Blueprint())
     ->timestamp('created_at')
     ->index('users_country_created', ['country', 'created_at']); // composite
 
-$db->sqlConnection()->create('users', $blueprint);
+$conn->create('users', $blueprint);
 ```
+
+`alter()` and `drop()` are available on `SqlConnection` for schema changes.
+
+## SQL-only features
+
+Raw SQL, transactions, and schema changes live on `SqlConnection`, not on the
+generic `ConnectionInterface`. On a SQL backend, the generic methods are all
+you need for CRUD; when you need the extras, narrow the connection:
+
+```php
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+
+$conn = $manager->connection();
+
+if (!$conn instanceof SqlConnection) {
+    // The portable core (select/insert/update/delete) still works here —
+    // only joins, raw SQL, transactions, and schema are unavailable.
+}
+```
+
+Narrowing by hand is verbose; the `Database::sqlConnection()` facade method
+throws `UnsupportedFeatureException` for you on a non-SQL backend.
+
+## Writes, aggregates & transactions
+
+The same builder runs writes — on any backend, SQL or not:
+
+```php
+$count = $db->table('users')->insert([
+    ['name' => 'Alicia', 'active' => 1],
+    ['name' => 'Ben',    'active' => 1],
+]);
+
+$id = $db->table('users')->insertGetId(['name' => 'Alicia']);
+
+$updated = $db->table('users')
+    ->where('last_login', '<', $cutoff)
+    ->update(['active' => 0]);
+
+$deleted = $db->table('users')->where('active', '=', 0)->delete();
+```
+
+Aggregates and reads:
+
+```php
+$total  = $db->table('orders')->count();
+$cheapest = $db->table('orders')->min('price');
+$emails = $db->table('users')->pluck('email'); // Collection
+$one    = $db->table('users')->where('id', '=', 1)->first();
+```
+
+Transactions are SQL-only and use real savepoints when nested — a failed
+rollback never masks the original exception:
+
+```php
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+
+/** @var SqlConnection $conn */
+$conn->transaction(function () use ($conn): void {
+    $conn->table('accounts')->where('id', '=', 1)->update(['balance' => 900]);
+    $conn->table('accounts')->where('id', '=', 2)->update(['balance' => 1100]);
+}); // throws, and rolls everything back, on any failure
+
+$conn->beginTransaction();
+// ...
+$conn->commit();   // or $conn->rollBack();
+echo $conn->transactionLevel(); // nesting depth
+```
+
+## Drivers
+
+The driver key selects the connector; each connector validates its own config
+at construction and fails fast with a message naming the problem.
+
+| Driver | Key | Required config |
+|---|---|---|
+| MySQL | `mysql` | `host`, `port`, `database`, `username`, `password`; optional `charset` (allowlisted) and PDO `options` |
+| SQLite | `sqlite` | `database` (path string); optional PDO `options` |
+| Postgres | `pgsql` | `host`, `database`; optional `port` (default 5432), `username`, `password`, PDO `options` |
+| CSV | `csv` | `path`; optional `readonly` boolean |
+
+```php
+'sqlite' => ['driver' => 'sqlite', 'database' => __DIR__.'/app.sqlite'],
+'pgsql'  => ['driver' => 'pgsql', 'host' => '127.0.0.1', 'database' => 'app'],
+```
+
+Custom backends register via `extendConnector('mydriver', MyConnector::class)`
+or `$manager->addConnection(...)`. Multiple named connections can be declared;
+`$manager->connection('name')` selects one, and
+`$manager->usingConnection('name', fn () => ...)` scopes a callback to one.
+
+### CSV backend
+
+The CSV connection proves the portable core works on a non-SQL backend —
+select/insert/update/delete run entirely in PHP, while SQL-only features throw
+`UnsupportedFeatureException`. It takes an exclusive file lock across every
+read-modify-write, writes atomically (temp file + rename), and neutralizes
+formula-injection values on write.
+
+```php
+'export' => [
+    'driver'   => 'csv',
+    'path'     => __DIR__.'/export.csv',
+    'readonly' => false,
+],
+```
+
+It reads the whole file on every query and rewrites it on every write, so it
+suits small, simple datasets — not production workloads.
 
 ## Philosophy
 

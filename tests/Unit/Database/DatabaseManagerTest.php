@@ -62,6 +62,25 @@ final class DatabaseManagerTest extends TestCase
     }
 
     /**
+     * sqlConnection() narrows to a SQL connection by name.
+     */
+    public function testSqlConnection(): void
+    {
+        self::assertInstanceOf(SqliteConnection::class, $this->manager->sqlConnection());
+        self::assertInstanceOf(SqliteConnection::class, $this->manager->sqlConnection('sqlite'));
+    }
+
+    /**
+     * sqlConnection() on a non-SQL connection throws.
+     */
+    public function testSqlConnectionOnNonSqlConnectionThrows(): void
+    {
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('The connection is not a SQL connection.');
+        $this->manager->sqlConnection('csv');
+    }
+
+    /**
      * hasConnection() reports known names.
      */
     public function testHasConnection(): void

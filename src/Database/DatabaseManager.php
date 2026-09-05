@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Database;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connectors\ConnectorInterface;
+use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 
 /**
  * Factory + registry for database connections.
@@ -152,6 +153,31 @@ final class DatabaseManager
             unset($this->resolved[$name]);
         }
         return $this->resolved[$name] ??= $this->makeConnection($this->connections[$name]);
+    }
+
+    /**
+     * Get a connection by name, narrowed to a SQL connection.
+     *
+     * A convenience over {@see connection()} for call sites that need the
+     * SQL-only surface — raw SQL, transactions, schema. The narrowing is
+     * fail-fast: a non-SQL backend is a feature-contract violation, not a
+     * runtime condition to work around, so it throws rather than returning
+     * a connection that would explode later on the first SQL-only call.
+     *
+     * @param string|null $name The connection name; defaults to the
+     *        current connection.
+     * @return SqlConnection The resolved connection.
+     * @throws UnsupportedFeatureException When the connection is not a
+     *         {@see SqlConnection}.
+     */
+    public function sqlConnection(?string $name = null): SqlConnection
+    {
+        $connection = $this->connection($name);
+        if (!$connection instanceof SqlConnection) {
+            throw new UnsupportedFeatureException('The connection is not a SQL connection.');
+        }
+
+        return $connection;
     }
 
     /**
