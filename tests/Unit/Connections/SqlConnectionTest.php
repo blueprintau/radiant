@@ -253,4 +253,113 @@ final class SqlConnectionTest extends TestCase
         $values = $this->connection->table('users')->orderBy('age', 'DESC')->pluck('age');
         self::assertSame([30, 25], array_map('intval', $values->all()));
     }
+
+    // ---- Streaming cursors ----
+
+    /**
+     * cursor() streams every matching row, in query order.
+     */
+    public function testCursorStreamsAllRows(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+            ['name' => 'Carol', 'email' => 'c@example.com', 'age' => 40],
+        ]);
+
+        $names = [];
+        foreach ($this->connection->table('users')->orderBy('age')->cursor() as $row) {
+            self::assertInstanceOf(\stdClass::class, $row);
+            $names[] = $row->name;
+        }
+
+        self::assertSame(['Bob', 'Alice', 'Carol'], $names);
+    }
+
+    /**
+     * cursor() honors wheres and limit like get() does.
+     */
+    public function testCursorAppliesWheresAndLimit(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $rows = iterator_to_array(
+            $this->connection->table('users')->where('age', WhereOperator::Gt, 26)->limit(1)->cursor(),
+            false,
+        );
+
+        self::assertCount(1, $rows);
+        self::assertSame('Alice', $rows[0]->name);
+    }
+
+    /**
+     * cursor() and get() produce the same rows for the same query.
+     */
+    public function testCursorMatchesGet(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $query = fn() => $this->connection->table('users')->orderBy('name');
+        $fromGet = array_map(fn($r) => $r->name, $query()->get()->all());
+        $fromCursor = [];
+        foreach ($query()->cursor() as $row) {
+            $fromCursor[] = $row->name;
+        }
+
+        self::assertSame($fromGet, $fromCursor);
+    }
+
+    /**
+     * cursorSql() yields rows one at a time and releases the statement on
+     * full consumption — a follow-up query on the same connection works.
+     */
+    public function testCursorSqlFollowUpQueryWorks(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $names = [];
+        foreach ($this->connection->cursorSql('SELECT * FROM users ORDER BY name') as $row) {
+            $names[] = $row->name;
+        }
+
+        self::assertSame(['Alice', 'Bob'], $names);
+
+        // The cursor is drained (closeCursor ran) — the connection must be
+        // usable for the next query.
+        self::assertSame(2, $this->connection->table('users')->count());
+    }
+
+    /**
+     * Abandoning a cursor early (break) must not poison the connection —
+     * the finally block releases the statement.
+     */
+    public function testAbandonedCursorReleasesStatement(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        foreach ($this->connection->cursorSql('SELECT * FROM users') as $row) {
+            break; // abandon after the first row
+        }
+
+        // Force destruction of the abandoned generator, then use the
+        // connection again — this would fail if the statement were left
+        // holding an undrained result set (unbuffered mode).
+        gc_collect_cycles();
+
+        $row = $this->connection->table('users')->where('name', '=', 'Bob')->first();
+        self::assertNotNull($row);
+        self::assertSame(25, $row->age);
+    }
 }

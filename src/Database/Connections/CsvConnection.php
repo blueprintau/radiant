@@ -122,6 +122,26 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
+     * Run the query and yield each matching row as it arrives.
+     *
+     * The dataset already lives fully in memory (the file is read whole for
+     * every query), so there is nothing further to stream — this yields
+     * exactly the rows {@see select()} would return, one at a time. It keeps
+     * the portable contract honest: the same builder code runs against any
+     * backend, with per-backend materialization.
+     *
+     * @param QueryBuilder $query The query to run.
+     * @return \Generator<int,\stdClass> The matching rows, one at a time.
+     * @throws UnsupportedFeatureException When the query uses a feature CSV
+     *         can't support (joins, having, unions, locks).
+     */
+    #[Override]
+    public function cursor(QueryBuilder $query): \Generator
+    {
+        yield from $this->select($query);
+    }
+
+    /**
      * Insert one or more rows into the file.
      *
      * @param QueryBuilder $query The query for the table to insert into.

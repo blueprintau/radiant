@@ -40,6 +40,25 @@ interface ConnectionInterface
     public function select(QueryBuilder $query): Collection;
 
     /**
+     * Run the query and yield each matching row as it arrives.
+     *
+     * The streaming counterpart of {@see select()}: each backend materializes
+     * rows however its transport allows — a SQL backend fetches one row at a
+     * time from the statement, a file-backed backend (whose dataset is fully
+     * in memory anyway) simply yields the rows {@see select()} would return.
+     * Either way the caller consumes one row at a time and never holds the
+     * full result set twice.
+     *
+     * Consume the generator fully (or let it be garbage collected) before
+     * running another query on the connection — an unfinished cursor may
+     * hold the statement open.
+     *
+     * @param QueryBuilder $query The query to run, built via {@see table()}.
+     * @return \Generator<int,\stdClass> The matching rows, one at a time.
+     */
+    public function cursor(QueryBuilder $query): \Generator;
+
+    /**
      * Insert one or more rows into the table.
      *
      * Pass a single row or a list of rows. Returns how many rows were

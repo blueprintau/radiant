@@ -40,6 +40,17 @@ class NullConnection implements ConnectionInterface
     }
 
     /**
+     * Run the query and yield each matching row.
+     *
+     * @param QueryBuilder $query The query to run.
+     * @return \Generator<int, \stdClass> The rows.
+     */
+    public function cursor(QueryBuilder $query): \Generator
+    {
+        throw new \LogicException('Not used in compile-only tests.');
+    }
+
+    /**
      * Insert one or more rows.
      *
      * @param QueryBuilder $query The query.

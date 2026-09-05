@@ -677,6 +677,26 @@ class QueryBuilder
     }
 
     /**
+     * Run the query and yield each matching row as it arrives.
+     *
+     * The streaming counterpart of {@see get()}: the connection hands over
+     * rows one at a time, so the caller never holds the full result set as
+     * PHP objects — use it when the query may match more rows than fit in
+     * memory comfortably. Each backend materializes rows however its
+     * transport allows (see {@see ConnectionInterface::cursor()}); the
+     * builder itself stays backend-agnostic.
+     *
+     * Consume the generator fully (or let it be garbage collected) before
+     * running another query on the connection.
+     *
+     * @return \Generator<int, \stdClass> The matching rows, one at a time.
+     */
+    public function cursor(): \Generator
+    {
+        return $this->connection->cursor($this);
+    }
+
+    /**
      * Run the query and return the first matching row.
      *
      * @return \stdClass|null The first row, or null when none match.

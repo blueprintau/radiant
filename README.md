@@ -53,9 +53,20 @@ $users = $db->table('users')
     ->get(); // Collection<int, \stdClass>
 ```
 
-Raw SQL — including streaming large result sets without buffering them all in
-memory — is SQL-only, so narrow to a `SqlConnection` first (see
-[SQL-only features](#sql-only-features)):
+Streaming large result sets without buffering them all in memory works on any
+backend via `cursor()` — the memory-light counterpart of `get()`. Each backend
+materializes rows however its transport allows (a SQL connection fetches row by
+row from the statement; a CSV connection, whose file is fully in memory anyway,
+yields the rows `get()` would return):
+
+```php
+foreach ($db->table('logs')->where('level', '=', 'warn')->cursor() as $row) {
+    // Rows arrive one at a time — memory stays bounded by a single row.
+}
+```
+
+Raw SQL streams the same way via `cursorSql()` — that one is SQL-only, so
+narrow to a `SqlConnection` first (see [SQL-only features](#sql-only-features)):
 
 ```php
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
@@ -66,6 +77,17 @@ if ($conn instanceof SqlConnection) {
     foreach ($conn->cursorSql('SELECT * FROM logs WHERE level = ?', ['warn']) as $row) {
         // ...
     }
+}
+```
+
+Prefer batches over single rows? `chunkSql()` feeds fixed-size chunks to a
+callback (return strict `false` from the callback to stop early):
+
+```php
+if ($conn instanceof SqlConnection) {
+    $conn->chunkSql('SELECT * FROM logs', [], 1000, function (array $chunk): void {
+        // Exactly 1000 rows (the last chunk holds the remainder).
+    });
 }
 ```
 

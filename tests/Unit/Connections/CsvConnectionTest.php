@@ -129,6 +129,29 @@ final class CsvConnectionTest extends TestCase
         self::assertSame('60', (string) $sum);
     }
 
+    // ---- cursor ----
+
+    /**
+     * cursor() streams every matching row — the same rows get() returns.
+     */
+    public function testCursorMatchesGet(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+            ['id' => 3, 'name' => 'Carol', 'age' => 40],
+        ]);
+
+        $fromGet = array_map(fn ($r) => $r->name, $csv->table('users')->orderBy('age')->get()->all());
+        $fromCursor = [];
+        foreach ($csv->table('users')->orderBy('age')->cursor() as $row) {
+            $fromCursor[] = $row->name;
+        }
+
+        self::assertSame($fromGet, $fromCursor);
+        self::assertSame(['Bob', 'Alice', 'Carol'], $fromCursor);
+    }
+
     // ---- insert / update / delete ----
 
     /**

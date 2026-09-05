@@ -187,6 +187,28 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
+     * Run a compiled builder query and yield each matching row as it
+     * arrives — the streaming counterpart of {@see select()}.
+     *
+     * Compiles the builder exactly as {@see select()} does, but fetches row
+     * by row so PHP-side memory stays bounded by one row, not the result
+     * size. Use it when a fluent query may match more rows than fit in
+     * memory comfortably. Consuming rules are the same as
+     * {@see cursorSql()} — finish the generator (or let it be collected)
+     * before the next query on this connection.
+     *
+     * @param QueryBuilder $query The query to stream.
+     * @return \Generator<int, \stdClass> The matching rows, one at a time.
+     * @throws QueryException When the statement fails to prepare or execute.
+     */
+    #[Override]
+    final public function cursor(QueryBuilder $query): \Generator
+    {
+        $sql = $this->grammar->compileSelect($query);
+        return $this->cursorSql($sql, $query->getBindings());
+    }
+
+    /**
      * Flatten a single row or a list of rows into one binding list (row-major).
      *
      * @param array<string,mixed>|list<array<string,mixed>> $values A single
@@ -226,12 +248,18 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a raw SQL query and yield each matching row as it arrives.
      *
-     * Unlike {@see selectSql()}, which buffers the whole result set in
-     * memory, this streams: memory stays O(1) in the result size regardless
-     * of row count. Consume the generator fully (or let it be garbage
-     * collected) before running another query on this connection — an
-     * unfinished cursor holds the statement, and MySQL's unbuffered mode
-     * forbids a second query until the first result set is drained.
+     * Unlike {@see selectSql()}, which materializes the whole result set as
+     * PHP objects, this fetches row by row: PHP-side memory stays O(1) in
+     * the result size regardless of row count. (The driver's client-side
+     * buffer is a separate matter — see the note on buffered mode below.)
+     *
+     * Consume the generator fully (or let it be garbage collected) before
+     * running another query on this connection — an unfinished cursor holds
+     * the statement. All bundled connectors default to *buffered* mode, so
+     * the result set is already fully transferred at execute time and a
+     * second query works fine; the restriction only bites when a user opts
+     * into MySQL's unbuffered mode via `options` — there, a second query is
+     * forbidden until the first result set is drained.
      *
      * @param string $sql The SQL to run.
      * @param array<string|int, mixed> $bindings The values to bind.
