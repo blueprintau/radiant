@@ -71,7 +71,29 @@ final class Collection extends BaseCollection
             return $modelKey === $key;
         }
 
-        return $modelKey == $key;
+        // Strict after int/numeric-string normalization. PK values
+        // round-trip dialect bytes through the codec, so `42` must match
+        // `'42'` — but plain `==` over-matched: `find(0)` matched the key
+        // `'0e1'` (scientific notation, `== 0`) and `true` matched `'1'`.
+        // Both sides normalize numeric strings to int before a strict
+        // compare; non-numeric scalars compare strictly as-is.
+        return self::normalizeKey($modelKey) === self::normalizeKey($key);
+    }
+
+    /**
+     * Normalize a scalar PK value for strict comparison — numeric strings
+     * collapse to int (canonical), everything else passes through.
+     *
+     * @param mixed $value The scalar key value.
+     * @return mixed The normalized value.
+     */
+    private static function normalizeKey(mixed $value): mixed
+    {
+        if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) {
+            return (int) $value;
+        }
+
+        return $value;
     }
 
     /**
@@ -115,9 +137,19 @@ final class Collection extends BaseCollection
     /**
      * Re-query every model by its key and replace the items.
      *
-     * The re-query honors the model's default scope — a soft-deleted model
-     * resolves to no fresh row and its item is kept as-is (removing it
-     * would silently shrink a collection the caller is iterating).
+     * ONE query, not N: the keys go into a single `whereKey(...)` on the
+     * first model's builder, and the re-hydrated rows are re-attached to
+     * the collection's original positions by serialized key — a row that
+     * was deleted externally leaves its ORIGINAL model in place (removing
+     * it would silently shrink a collection the caller is iterating),
+     * preserving the documented staleness contract while eliminating the
+     * per-model round trip (an N+1 storm beyond a few dozen items).
+     *
+     * Registered eager loads are not re-applied — the fresh rows are
+     * plain hydrations; call `load()` again if relations are needed.
+     *
+     * Composite keys re-query via the same builder path (`whereKey`
+     * accepts the full key map) and re-attach by serialized tuple.
      *
      * @return static The collection.
      */
@@ -127,17 +159,45 @@ final class Collection extends BaseCollection
             return $this;
         }
 
+        $query = $this->first()->newQuery()->withTrashed();
+
+        /** @var list<KeyValue> $keys */
+        $keys = [];
+
+        foreach ($this->items as $model) {
+            $keys[] = $model->getKeyForRefresh();
+        }
+
+        $query->whereKey($keys);
+
+        $freshBySerializedKey = [];
+
+        foreach ($query->get() as $fresh) {
+            $freshBySerializedKey[self::serializeKeyValue($fresh->getKeyForRefresh())] = $fresh;
+        }
+
         $models = [];
 
         foreach ($this->items as $model) {
-            /** @var Model|null $fresh */
-            $fresh = $model::find($model->getKeyForRefresh());
-            $models[] = $fresh ?? $model;
+            $serialized = self::serializeKeyValue($model->getKeyForRefresh());
+            $models[] = $freshBySerializedKey[$serialized] ?? $model;
         }
 
         /** @var list<TValue> $models */
         $this->items = $models;
 
         return $this;
+    }
+
+    /**
+     * Serialize a key value to a stable string — scalars stringify;
+     * composite maps JSON-encode (order-stable per the shape contract).
+     *
+     * @param KeyValue $key The key value.
+     * @return string The serialized key.
+     */
+    private static function serializeKeyValue(mixed $key): string
+    {
+        return is_array($key) ? (string) json_encode($key) : (string) $key;
     }
 }

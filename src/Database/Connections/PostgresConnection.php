@@ -12,6 +12,7 @@ use BlueprintAU\Radiant\Database\Schema\Inspectors\PostgresSchemaInspector;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 use BlueprintAU\Radiant\Database\ValueCodecs\PostgresValueCodec;
 use BlueprintAU\Radiant\Database\ValueCodecs\ValueCodecInterface;
+use Override;
 
 /**
  * A database connection backed by Postgres.
@@ -107,5 +108,21 @@ final class PostgresConnection extends SqlConnection
     protected function rollbackToSavepoint(string $name): void
     {
         $this->pdo->exec("ROLLBACK TO SAVEPOINT {$name}");
+    }
+
+    /**
+     * Run schema work under a Postgres session advisory lock.
+     *
+     * @template TReturn
+     *
+     * @param callable(): TReturn $callback The schema work.
+     * @return TReturn The callback's return value.
+     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     */
+    #[Override]
+    public function withSchemaLock(callable $callback): mixed
+    {
+        return (new \BlueprintAU\Radiant\Database\Schema\Lockers\PostgresSchemaLocker($this))
+            ->withLock($callback);
     }
 }

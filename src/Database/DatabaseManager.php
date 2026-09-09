@@ -150,9 +150,34 @@ final class DatabaseManager
         if (isset($this->resolved[$name])
             && $this->resolved[$name] instanceof SqlConnection
             && $this->resolved[$name]->isStale()) {
+            $this->discardConnection($this->resolved[$name]);
             unset($this->resolved[$name]);
         }
         return $this->resolved[$name] ??= $this->makeConnection($this->connections[$name]);
+    }
+
+    /**
+     * Best-effort cleanup before a connection is evicted.
+     *
+     * An evicted connection may still hold an open transaction (uncommitted
+     * work + row locks). The connection's own destructor rolls back on GC,
+     * but host-held references can outlive the cache slot — so eviction
+     * triggers the rollback NOW, non-throwing. The connection is dead
+     * anyway (that is why it is being evicted): a failed rollback means the
+     * server already aborted the transaction, which is the same end state.
+     *
+     * @param SqlConnection $connection The connection being evicted.
+     * @return void
+     */
+    private function discardConnection(SqlConnection $connection): void
+    {
+        while ($connection->transactionLevel() > 0) {
+            try {
+                $connection->rollBack();
+            } catch (\Throwable) {
+                break; // dead connection — the server-side transaction is gone too
+            }
+        }
     }
 
     /**

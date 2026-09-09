@@ -69,6 +69,12 @@ final class MySqlConnector extends SqlConnector
     protected static array $FORCED_OPTIONS = [
         \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
         \PDO\Mysql::ATTR_FOUND_ROWS => true,
+        // Native prepared statements are forced on MySQL: client-side
+        // emulation interpolates bound values into the SQL TEXT, which both
+        // widens the surface of any host raw-path mistake into classic SQLi
+        // (stacked-query edges) and makes failed-query text carry real PII.
+        // A config line cannot opt back out.
+        \PDO::ATTR_EMULATE_PREPARES => false,
     ];
 
     /**
@@ -168,5 +174,12 @@ final class MySqlConnector extends SqlConnector
                 . '.'
             );
         }
+
+        // host and database are interpolated into the DSN — metacharacters
+        // there re-bind the DSN's key-value parsing (a `;` can inject
+        // unix_socket or sslmode). The type/emptiness checks above give the
+        // driver-specific message; this adds the metacharacter bound.
+        $this->validDsnField($host, 'host');
+        $this->validDsnField($database, 'database');
     }
 }

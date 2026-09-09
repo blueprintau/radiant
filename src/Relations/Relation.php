@@ -49,6 +49,16 @@ abstract class Relation
     use FiltersQuery;
 
     /**
+     * The parent-key chunk size for eager loading.
+     *
+     * Bounded so one oversized load cannot exceed driver caps (SQLite's
+     * 999 placeholders, MySQL's max_allowed_packet) — an eager load
+     * degrades to N queries, not a hard failure. Composite keys multiply
+     * the placeholder count by arity, so the bound stays conservative.
+     */
+    protected const EAGER_KEY_CHUNK = 500;
+
+    /**
      * The constrained builder on the related model.
      *
      * @var ModelQueryBuilder<TRelated>
@@ -128,11 +138,38 @@ abstract class Relation
      * override the whole method (they must join the intermediate table and
      * record which parent each row belongs to).
      *
+     * The key list is CHUNKED: SQL text and placeholder count grow
+     * linearly with parent count, and drivers enforce hard caps (SQLite's
+     * 999-parameter limit, MySQL's max_allowed_packet). An oversized load
+     * used to raise a hard QueryException; it now degrades to one query
+     * per chunk, with results merged in encounter order.
+     *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
      *        scalars, or column => value maps for a composite key.
      * @return Collection<TRelated> The related models.
      */
     public function eagerLoad(array $parentKeys): Collection
+    {
+        if ($parentKeys === []) {
+            return Collection::make([]);
+        }
+
+        $models = [];
+
+        foreach (array_chunk($parentKeys, self::EAGER_KEY_CHUNK) as $chunk) {
+            array_push($models, ...$this->eagerLoadChunk($chunk)->all());
+        }
+
+        return Collection::make($models);
+    }
+
+    /**
+     * Run one eager-load query for a CHUNK of parent keys.
+     *
+     * @param list<KeyValue> $parentKeys The chunk's key values.
+     * @return Collection<TRelated> The related models for this chunk.
+     */
+    protected function eagerLoadChunk(array $parentKeys): Collection
     {
         $query = $this->related::newQuery();
 

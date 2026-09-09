@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
+use Override;
 
 /**
  * A database connection backed by SQLite.
@@ -90,5 +91,22 @@ final class SqliteConnection extends SqlConnection
     protected function rollbackToSavepoint(string $name): void
     {
         $this->pdo->exec("ROLLBACK TO SAVEPOINT {$name}");
+    }
+
+    /**
+     * Run schema work inside a `BEGIN IMMEDIATE` transaction — SQLite's
+     * native cross-process serialization.
+     *
+     * @template TReturn
+     *
+     * @param callable(): TReturn $callback The schema work.
+     * @return TReturn The callback's return value.
+     * @throws \Throwable Whatever the callback throws, after rolling back.
+     */
+    #[Override]
+    public function withSchemaLock(callable $callback): mixed
+    {
+        return (new \BlueprintAU\Radiant\Database\Schema\Lockers\SqliteSchemaLocker($this))
+            ->withLock($callback);
     }
 }

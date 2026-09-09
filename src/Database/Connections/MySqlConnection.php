@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
+use Override;
 
 /**
  * A database connection backed by MySQL.
@@ -99,5 +100,21 @@ final class MySqlConnection extends SqlConnection
     protected function rollbackToSavepoint(string $name): void
     {
         $this->pdo->exec("ROLLBACK TO SAVEPOINT {$name}");
+    }
+
+    /**
+     * Run schema work under MySQL's `GET_LOCK` advisory lock.
+     *
+     * @template TReturn
+     *
+     * @param callable(): TReturn $callback The schema work.
+     * @return TReturn The callback's return value.
+     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     */
+    #[Override]
+    public function withSchemaLock(callable $callback): mixed
+    {
+        return (new \BlueprintAU\Radiant\Database\Schema\Lockers\MySqlSchemaLocker($this))
+            ->withLock($callback);
     }
 }

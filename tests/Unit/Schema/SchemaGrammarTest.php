@@ -454,7 +454,8 @@ final class SchemaGrammarTest extends TestCase
         $connection->drop('users');
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
-        $this->expectExceptionMessage('SQLSTATE error executing query');
+        // The message is log-safe by contract — it never embeds the SQL.
+        $this->expectExceptionMessage('SQL error executing query');
         $connection->table('users')->get();
     }
 }

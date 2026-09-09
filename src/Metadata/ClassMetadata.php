@@ -32,6 +32,18 @@ final class ClassMetadata
     private array|null $tablePartitions = null;
 
     /**
+     * The DB column name → mapping hash map (computed lazily).
+     *
+     * The hot paths — `attribute()`, `castForWrite()`, key reads during
+     * eager matching — used to walk the property-keyed list per call
+     * (O(columns) each, O(columns × rows) per load). This map makes every
+     * lookup O(1).
+     *
+     * @var array<string, PropertyMapping>|null
+     */
+    private array|null $columnsByDbName = null;
+
+    /**
      * Create class metadata.
      *
      * @param string|null $tableName The resolved table name, or null for a
@@ -65,6 +77,52 @@ final class ClassMetadata
         public readonly ?string $softDeleteColumn = null,
         public readonly string|null $parentModel = null,
     ) {
+    }
+
+    /**
+     * The mapping for a DB column name — O(1) via the hash map.
+     *
+     * @param string $columnName The DB column name.
+     * @return PropertyMapping The mapping.
+     * @throws \InvalidArgumentException When the column is unknown.
+     */
+    public function mappingFor(string $columnName): PropertyMapping
+    {
+        $map = $this->columnsByDbName ??= $this->buildColumnsByDbName();
+
+        return $map[$columnName]
+            ?? throw new \InvalidArgumentException(
+                'Unknown column [' . $columnName . '] on model [' . ($this->tableName ?? 'no table') . '].'
+            );
+    }
+
+    /**
+     * Whether a DB column name exists on this class — O(1).
+     *
+     * @param string $columnName The DB column name.
+     * @return bool True when the column is declared.
+     */
+    public function hasColumn(string $columnName): bool
+    {
+        $map = $this->columnsByDbName ??= $this->buildColumnsByDbName();
+
+        return isset($map[$columnName]) || array_key_exists($columnName, $map);
+    }
+
+    /**
+     * Build the DB column name → mapping map.
+     *
+     * @return array<string, PropertyMapping> column => mapping
+     */
+    private function buildColumnsByDbName(): array
+    {
+        $map = [];
+
+        foreach ($this->properties as $mapping) {
+            $map[$mapping->columnName] = $mapping;
+        }
+
+        return $map;
     }
 
     /**

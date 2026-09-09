@@ -91,6 +91,48 @@ class ModelQueryBuilder extends QueryBuilder
     protected array $mtiChain = [];
 
     /**
+     * The index of the `onlyTrashed()` whereNotNull clause (null when not
+     * applied). Tracked separately from the scope index so the state
+     * machine round-trips: `onlyTrashed() → withTrashed()` must be able to
+     * remove the NOT-NULL clause — with only the scope index tracked, the
+     * toggle silently left the builder still returning only-trashed rows.
+     *
+     * @var int|null
+     */
+    protected ?int $onlyTrashedWhereIndex = null;
+
+    /**
+     * Memoized relation resolutions, keyed by "class::method".
+     *
+     * Relation DECLARATIONS are static per class, but resolution used to
+     * re-run the reflection (ReflectionMethod + prototype + invoke) on
+     * every eager load — visible on long-running workers that loop the
+     * same `with('posts')` query. The cache holds resolved relation
+     * objects; they are immutable value objects over (parent, related,
+     * keys), and `loadRelation` re-parents nothing — the relation's own
+     * query is re-derived per call through `eagerLoad()` on a fresh
+     * builder, so sharing the declaration cache is safe. Static, bounded
+     * by class count, holds no per-request data.
+     *
+     * @var array<string, Relations\Relation<Model>>
+     */
+    protected static array $relationCache = [];
+
+    /**
+     * Declared-column hash set for {@see validateColumn()} (lazy).
+     *
+     * @var array<string, true>|null
+     */
+    protected ?array $columnSet = null;
+
+    /**
+     * Forced-PK hash set for {@see validateColumn()} (lazy).
+     *
+     * @var array<string, true>|null
+     */
+    protected ?array $forcedKeySet = null;
+
+    /**
      * Create a builder bound to a model class on a connection.
      *
      * The ORM's core is portable, so the builder binds to the generic
@@ -233,6 +275,12 @@ class ModelQueryBuilder extends QueryBuilder
      */
     protected static function resolveRelation(string $class, string $name, string $path): Relations\Relation
     {
+        $cacheKey = $class . '::' . $name;
+
+        if (isset(static::$relationCache[$cacheKey])) {
+            return static::$relationCache[$cacheKey];
+        }
+
         if (!method_exists($class, $name)) {
             throw new \InvalidArgumentException(
                 "Unknown relation [{$path}] — model [{$class}] has no method [{$name}()]."
@@ -262,7 +310,7 @@ class ModelQueryBuilder extends QueryBuilder
             );
         }
 
-        return $result;
+        return static::$relationCache[$cacheKey] = $result;
     }
 
     /**
@@ -513,12 +561,20 @@ class ModelQueryBuilder extends QueryBuilder
     // ---- Soft-delete scope ----
 
     /**
-     * Include soft-deleted rows — removes the auto-applied scope.
+     * Include soft-deleted rows — removes the auto-applied scope (and any
+     * `onlyTrashed()` NOT-NULL clause).
      *
      * @return static The builder.
      */
     public function withTrashed(): static
     {
+        if ($this->onlyTrashedWhereIndex !== null) {
+            $wheres = $this->getWheres();
+            unset($wheres[$this->onlyTrashedWhereIndex]);
+            $this->wheres = array_values($wheres);
+            $this->onlyTrashedWhereIndex = null;
+        }
+
         if ($this->softDeleteWhereIndex !== null) {
             $wheres = $this->getWheres();
             unset($wheres[$this->softDeleteWhereIndex]);
@@ -530,15 +586,22 @@ class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Only soft-deleted rows — replaces the scope with a `whereNotNull`.
+     * Only soft-deleted rows — replaces the scope with a tracked
+     * `whereNotNull` so the toggle round-trips.
+     *
+     * The clause index is remembered; a later `withTrashed()` removes it.
+     * Without the tracking, `Model::onlyTrashed()->withTrashed()` silently
+     * kept the NOT-NULL clause and still returned only-trashed rows. The
+     * column is qualified exactly like the constructor's scope — on MTI
+     * models the joined query needs `table.column`, else the SQL fails
+     * with an ambiguous-column error.
      *
      * @return static The builder.
      */
     public function onlyTrashed(): static
     {
-        $this->withTrashed();
-
-        $column = MetadataFactory::for($this->modelClass)->softDeleteColumn;
+        $metadata = MetadataFactory::for($this->modelClass);
+        $column = $metadata->softDeleteColumn;
 
         if ($column === null) {
             throw new \LogicException(
@@ -546,7 +609,18 @@ class ModelQueryBuilder extends QueryBuilder
             );
         }
 
-        return $this->whereNotNull($column);
+        // First clear any existing soft-delete state (scope and/or a
+        // previous onlyTrashed clause) so the toggle is idempotent.
+        $this->withTrashed();
+
+        if (isset($this->partitions[$column])) {
+            $column = $this->partitions[$column] . '.' . $column;
+        }
+
+        $this->whereNotNull($column);
+        $this->onlyTrashedWhereIndex = count($this->getWheres()) - 1;
+
+        return $this;
     }
 
     // ---- Execution (hydration) ----
@@ -646,19 +720,46 @@ class ModelQueryBuilder extends QueryBuilder
     /**
      * Constrain the query to a primary-key value.
      *
-     * A composite PK accepts an associative array of column => value.
+     * The runtime boundary accepts WIDER shapes than the historical KeyValue
+     * alias, because the PHPDoc type cannot be enforced natively:
      *
-     * @param KeyValue $id The key value, or a column => value map.
+     * - a scalar (int|string|null) — the single-PK form;
+     * - a column => value MAP — the composite-key form;
+     * - a LIST of scalars or key maps — the batching form (match ANY),
+     *   used by {@see \BlueprintAU\Radiant\Collection::fresh()}.
+     *
+     * @param KeyValue|list<KeyValue> $id The key value, a column => value
+     *        map, or a list of either.
      * @return static The builder.
-     * @throws \InvalidArgumentException When the key is not an int, string,
-     *         null, or a column => value array (the PHPDoc type cannot be
-     *         enforced natively — this is the runtime boundary), when a
-     *         single PK is expected but a non-array key cannot be resolved,
-     *         or vice versa.
+     * @throws \InvalidArgumentException When the key shape does not match
+     *         the model's PK, or a column/value fails validation.
      */
     public function whereKey(mixed $id): static
     {
         $primaryKeys = MetadataFactory::for($this->modelClass)->primaryKeys;
+
+        // A LIST of key values (scalars or key maps) constrains to ANY of
+        // them — the batching path used by Collection::fresh(). An
+        // associative map (string keys) is a composite key; a list (int
+        // keys) is a key set. An empty list matches nothing (1 = 0).
+        //
+        // Each key becomes its own nested AND-group ORed at the edges
+        // (mirroring the eager-load OR-of-groups shape): `pk = 1 OR
+        // (a = ? AND b = ?) OR pk = 3`. Flattening would let one key's
+        // parts AND against the NEXT key.
+        if (is_array($id) && array_is_list($id)) {
+            if ($id === []) {
+                return $this->whereRaw('1 = 0');
+            }
+
+            foreach ($id as $key) {
+                $this->orWhereNested(function (WhereBuilder $nested) use ($key): void {
+                    $this->applyWhereKeyOn($nested, $key);
+                });
+            }
+
+            return $this;
+        }
 
         // Composite PK → accept an associative array of column => value.
         // Every column MUST be a declared PK column (a typo'd column would
@@ -672,20 +773,8 @@ class ModelQueryBuilder extends QueryBuilder
         // the wrong rows); grouped, the parts AND within the parens and the
         // caller's OR stays at the constraint's edges.
         if (is_array($id)) {
-            $this->whereNested(function (WhereBuilder $nested) use ($id, $primaryKeys): void {
-                foreach ($id as $column => $value) {
-                    $validated = $this->assertCompositeKeyValue($column, $value);
-
-                    $this->assertCompositeKeyColumn($validated['column'], $primaryKeys);
-
-                    $qualified = $validated['column'];
-
-                    if ($this->partitions !== []) {
-                        $qualified = ($this->partitions[$qualified] ?? $this->table) . '.' . $qualified;
-                    }
-
-                    $nested->where($qualified, WhereOperator::Eq, $validated['value']);
-                }
+            $this->whereNested(function (WhereBuilder $nested) use ($id): void {
+                $this->applyWhereKeyOn($nested, $id);
             });
 
             return $this;
@@ -713,6 +802,62 @@ class ModelQueryBuilder extends QueryBuilder
         }
 
         return $this->where($pkName, WhereOperator::Eq, $single);
+    }
+
+    /**
+     * Apply ONE key value onto a where-group — the shared body of
+     * {@see whereKey()}'s single and list branches.
+     *
+     * A scalar key applies the model's single PK column; a column => value
+     * map applies the full composite tuple (each column validated against
+     * the declared PKs and MTI-qualified). Values are validated the same
+     * as the direct branches — the group context changes only where the
+     * clauses land.
+     *
+     * @param WhereBuilder $nested The group to constrain.
+     * @param mixed $key The scalar key value or column => value map.
+     * @return void
+     * @throws \InvalidArgumentException When the key shape does not match
+     *         the model's PK (a scalar for a composite model, a map for a
+     *         single-PK model), or a column/value fails validation.
+     */
+    private function applyWhereKeyOn(WhereBuilder $nested, mixed $key): void
+    {
+        $primaryKeys = MetadataFactory::for($this->modelClass)->primaryKeys;
+
+        if (is_array($key) && $key !== []) {
+            foreach ($key as $column => $value) {
+                $validated = $this->assertCompositeKeyValue($column, $value);
+
+                $this->assertCompositeKeyColumn($validated['column'], $primaryKeys);
+
+                $qualified = $validated['column'];
+
+                if ($this->partitions !== []) {
+                    $qualified = ($this->partitions[$qualified] ?? $this->table) . '.' . $qualified;
+                }
+
+                $nested->where($qualified, WhereOperator::Eq, $validated['value']);
+            }
+
+            return;
+        }
+
+        $single = $this->assertSingleKeyValue($key);
+
+        if (count($primaryKeys) !== 1 || $primaryKeys[0]->name === null) {
+            throw new \InvalidArgumentException(
+                "Model [{$this->modelClass}] has a composite PK; pass an array of column => value."
+            );
+        }
+
+        $pkName = $primaryKeys[0]->name;
+
+        if ($this->partitions !== []) {
+            $pkName = ($this->partitions[$pkName] ?? $this->table) . '.' . $pkName;
+        }
+
+        $nested->where($pkName, WhereOperator::Eq, $single);
     }
 
     /**
@@ -943,7 +1088,14 @@ class ModelQueryBuilder extends QueryBuilder
      */
     protected function validateColumn(string $column): void
     {
-        if (in_array($column, $this->modelColumns, true) || in_array($column, $this->forcedKeys, true)) {
+        // Hash-set lookups, not linear scans: every where/orderBy/groupBy/
+        // having/select validates, so O(clauses × columns) list scans on
+        // clause-heavy queries against wide models collapse to O(1) each.
+        // The sets are immutable per builder — built lazily once.
+        $columns = $this->columnSet ??= array_fill_keys($this->modelColumns, true);
+        $forced = $this->forcedKeySet ??= array_fill_keys($this->forcedKeys, true);
+
+        if (isset($columns[$column]) || isset($forced[$column])) {
             return;
         }
 
@@ -952,7 +1104,7 @@ class ModelQueryBuilder extends QueryBuilder
         // the AS rendering).
         $source = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
 
-        if ($source !== $column && in_array($source, $this->modelColumns, true)) {
+        if ($source !== $column && isset($columns[$source])) {
             return; // `column as alias` over a declared column.
         }
 

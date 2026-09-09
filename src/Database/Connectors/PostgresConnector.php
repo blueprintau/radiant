@@ -18,12 +18,38 @@ use Override;
 final class PostgresConnector extends SqlConnector
 {
     /**
+     * `sslmode` values Postgres accepts. The config field is allowlisted so
+     * the DSN-integrated setting cannot be hijacked by a metacharacter
+     * trick or set to a non-TLS mode by accident.
+     *
+     * @var list<string>
+     */
+    private const ALLOWED_SSLMODES = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
+
+    /**
+     * Validate a configured sslmode against the allowlist.
+     *
+     * @param mixed $sslmode The raw sslmode config value.
+     * @return string The validated sslmode.
+     * @throws \InvalidArgumentException When the sslmode is not one Postgres accepts.
+     */
+    private function validSslmode(mixed $sslmode): string
+    {
+        if (!is_string($sslmode) || !in_array(strtolower($sslmode), self::ALLOWED_SSLMODES, true)) {
+            throw new \InvalidArgumentException(
+                'Postgres "sslmode" must be one of: ' . implode(', ', self::ALLOWED_SSLMODES)
+                . '; got ' . (is_string($sslmode) ? "[{$sslmode}]" : get_debug_type($sslmode)) . '.'
+            );
+        }
+        return strtolower($sslmode);
+    }
+    /**
      * Create a Postgres connection from the given config.
      *
-     * @param array{host?: mixed, port?: mixed, database?: mixed, username?: string|null,
-     *        password?: string|null, options?: PdoOptions,
+     * @param array{host?: mixed, port?: mixed, database?: mixed, sslmode?: mixed,
+     *        username?: string|null, password?: string|null, options?: PdoOptions,
      *        ...<mixed>} $config The connection config (host, port, database,
-     *        username, password, …).
+     *        sslmode, username, password, …).
      * @return PostgresConnection A ready-to-use Postgres connection.
      * @throws \InvalidArgumentException If $host or $database is missing.
      */
@@ -48,6 +74,13 @@ final class PostgresConnector extends SqlConnector
             $port,
             $database,
         );
+
+        // sslmode goes through its own validated config slot — it is a
+        // DSN-integrated key, so it must come from config, allowlisted, not
+        // injected through a metacharacter in host/database.
+        if (array_key_exists('sslmode', $config)) {
+            $dsn .= ';sslmode=' . $this->validSslmode($config['sslmode']);
+        }
 
         $options = $config['options'] ?? [];
         $pdo = $this->createPdo($dsn, $config['username'] ?? null, $config['password'] ?? null, $options);
@@ -93,6 +126,16 @@ final class PostgresConnector extends SqlConnector
                 . ($database === null ? 'nothing' : get_debug_type($database))
                 . '.'
             );
+        }
+
+        // host and database are interpolated into the DSN — metacharacters
+        // there re-bind the DSN's key-value parsing (a `;` can inject
+        // sslmode=disable or a unix socket). sslmode itself is validated
+        // separately when present.
+        $this->validDsnField($host, 'host');
+        $this->validDsnField($database, 'database');
+        if (array_key_exists('sslmode', $config)) {
+            $this->validSslmode($config['sslmode']);
         }
     }
 }

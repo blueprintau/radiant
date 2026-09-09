@@ -26,10 +26,24 @@ use Override;
  * The file is read in full on every select and rewritten on every write, so
  * this is for small, simple datasets — it exists to prove the backend
  * contract is portable, not for production workloads.
+ *
+ * ## Concurrency guarantee boundary
+ *
+ * The advisory lock guarantees consistency **only between CsvConnection
+ * instances of this library** cooperating through flock. Non-participating
+ * writers (another process using file_put_contents, an editor save, any
+ * code that does not take the lock) can tear or truncate the file a reader
+ * is processing — the `readonly` flag gates *this* connection's writes, not
+ * the file's. The blocking file I/O (fopen/flock/fputcsv/rename) is also
+ * not coroutine-aware: under Swoole/Fiber runtimes it stalls the worker for
+ * the I/O duration.
  */
 final class CsvConnection implements ConnectionInterface
 {
     use NormalizesInsertRows;
+
+    /** Lock mode for {@see openLocked()}: shared (reads). */
+    private const LOCK_SHARED = false;
 
     /**
      * @param string $filePath The CSV file to read from and write to.
@@ -278,6 +292,13 @@ final class CsvConnection implements ConnectionInterface
      */
     private function matchesWheres(array $wheres, array $row): bool
     {
+        // An empty constraint list matches everything (SQL semantics: an
+        // UPDATE/DELETE with no WHERE affects every row). The builder
+        // rejects empty *nested* groups at declaration time, so this guard
+        // only ever fires for the top-level no-clause case.
+        if ($wheres === []) {
+            return true;
+        }
         $result = $this->matchesWhere($wheres[0], $row);
         for ($i = 1, $count = count($wheres); $i < $count; $i++) {
             $matches = $this->matchesWhere($wheres[$i], $row);
@@ -348,16 +369,16 @@ final class CsvConnection implements ConnectionInterface
     private function matchesBasic(mixed $value, WhereOperator $operator, mixed $operand): bool
     {
         return match ($operator) {
-            WhereOperator::Eq => $value == $operand,
-            WhereOperator::NotEq => $value != $operand,
+            WhereOperator::Eq => $this->valuesEqual($value, $operand),
+            WhereOperator::NotEq => !$this->valuesEqual($value, $operand),
             WhereOperator::Lt => $value < $operand,
             WhereOperator::LtEq => $value <= $operand,
             WhereOperator::Gt => $value > $operand,
             WhereOperator::GtEq => $value >= $operand,
             WhereOperator::Like => is_string($value) && $this->like($value, (string) $operand),
             WhereOperator::NotLike => !(is_string($value) && $this->like($value, (string) $operand)),
-            WhereOperator::In => in_array($value, (array) $operand, true),
-            WhereOperator::NotIn => !in_array($value, (array) $operand, true),
+            WhereOperator::In => $this->valuesIn($value, (array) $operand),
+            WhereOperator::NotIn => !$this->valuesIn($value, (array) $operand),
             default => throw new UnsupportedFeatureException(
                 'This connection does not support the ' . $operator->value . ' operator.',
             ),
@@ -365,7 +386,52 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
+     * The canonical CSV comparator.
+     *
+     * CSV cells are strings, but callers bind typed values (`where('id', 5)`,
+     * `where('id', 'IN', [5])`). PHP's loose `==` on numeric strings already
+     * compares numerically ('5' == 5), which matches SQL column-affinity
+     * semantics for the CSV's all-text storage. Using ONE comparator for
+     * equality and set membership keeps `=` and `IN` consistent with each
+     * other and with the SQL backend for the same query.
+     *
+     * @param mixed $value The row value.
+     * @param mixed $operand The bound operand.
+     * @return bool True when the values are equal under SQL-ish semantics.
+     */
+    private function valuesEqual(mixed $value, mixed $operand): bool
+    {
+        return $value == $operand;
+    }
+
+    /**
+     * Set membership through the same canonical comparator as equality —
+     * `IN` must never be stricter than `=` on the same backend.
+     *
+     * @param mixed $value The row value.
+     * @param array<mixed> $operands The bound list.
+     * @return bool True when the value matches any operand.
+     */
+    private function valuesIn(mixed $value, array $operands): bool
+    {
+        foreach ($operands as $operand) {
+            if ($this->valuesEqual($value, $operand)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * SQL LIKE semantics for the few basic operators that need it.
+     *
+     * The pattern is translated BEFORE quoting: each `%` becomes `.*` and
+     * each `_` becomes `.`, and every other character is preg_quoted — so
+     * a pattern like `a%b` compiles to `a.*b` (matching `ab`, `axb`), not
+     * the corrupted `a\\..*b` that quoting-first produced. The `s` flag
+     * makes `.` match newlines, so `%` spans multi-line cells like SQL's
+     * `%`. Matching is case-insensitive (a documented divergence from the
+     * case-sensitive LIKE of Postgres/SQLite).
      *
      * @param string $value The subject.
      * @param string $pattern The SQL pattern (% and _ wildcards).
@@ -373,9 +439,15 @@ final class CsvConnection implements ConnectionInterface
      */
     private function like(string $value, string $pattern): bool
     {
-        $regex = preg_quote($pattern, '~');
-        $regex = str_replace(['%', '_'], ['.*', '.'], $regex);
-        return preg_match("~^{$regex}$~i", $value) === 1;
+        $regex = '';
+        foreach (mb_str_split($pattern) as $char) {
+            $regex .= match ($char) {
+                '%' => '.*',
+                '_' => '.',
+                default => preg_quote($char, '~'),
+            };
+        }
+        return preg_match("~^{$regex}$~is", $value) === 1;
     }
 
     /**
@@ -397,10 +469,30 @@ final class CsvConnection implements ConnectionInterface
             $direction = $order['direction'] === SortDirection::Desc ? -1 : 1;
             usort(
                 $rows,
-                fn (array $a, array $b) => $direction * ($a[$column] <=> $b[$column]),
+                fn (array $a, array $b) => $direction * $this->compareCells($a[$column] ?? null, $b[$column] ?? null),
             );
         }
         return $rows;
+    }
+
+    /**
+     * Compare two CSV cells for ordering.
+     *
+     * When BOTH cells are numeric, compare as numbers so `'10'` sorts after
+     * `'9'` (SQL numeric-column semantics); otherwise compare as strings.
+     * This normalizes the all-string storage against the mixed-width
+     * numeric columns real files contain.
+     *
+     * @param mixed $a The first cell.
+     * @param mixed $b The second cell.
+     * @return int Negative, zero, or positive per spaceship semantics.
+     */
+    private function compareCells(mixed $a, mixed $b): int
+    {
+        if (is_numeric($a) && is_numeric($b)) {
+            return (+$a) <=> (+$b);
+        }
+        return ($a ?? '') <=> ($b ?? '');
     }
 
     /**
@@ -549,15 +641,19 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Read the CSV file into an array of associative rows, under an
-     * exclusive lock that is released before returning.
+     * Read the CSV file into an array of associative rows, under a SHARED
+     * lock that is released before returning.
+     *
+     * A shared lock lets concurrent readers proceed in parallel while still
+     * excluding writers mid-rename — readers serialize only against writes,
+     * not against each other.
      *
      * @return list<array<string,mixed>> The rows.
      * @throws \RuntimeException When the file cannot be opened or read.
      */
     private function readRows(): array
     {
-        $handle = $this->openLocked();
+        $handle = $this->openLocked(self::LOCK_SHARED);
         try {
             return $this->readRowsLocked($handle);
         } finally {
@@ -607,25 +703,27 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Open the CSV file with an exclusive advisory lock.
+     * Open the CSV file under an advisory lock.
      *
+     * @param bool $exclusive True for LOCK_EX (writes — the read-modify-write
+     *        cycle), false for LOCK_SH (reads — concurrent readers proceed).
      * @return resource The locked file handle. Keep it; pass to
      *         {@see closeLocked()} (or {@see writeRows()}, which takes
      *         ownership of the handle).
      * @throws \RuntimeException When the file cannot be opened or locked.
      */
-    private function openLocked()
+    private function openLocked(bool $exclusive = true)
     {
         $handle = fopen($this->filePath, 'r+');
         if ($handle === false) {
             // Read-only file (or missing) — fall back to a plain read handle,
-            // which still serializes against other LOCK_SH readers.
+            // which still cooperates with the shared/exclusive lock scheme.
             $handle = fopen($this->filePath, 'r');
             if ($handle === false) {
                 throw new \RuntimeException("Could not open CSV file [{$this->filePath}].");
             }
         }
-        if (!flock($handle, LOCK_EX)) {
+        if (!flock($handle, $exclusive ? LOCK_EX : LOCK_SH)) {
             fclose($handle);
             throw new \RuntimeException("Could not lock CSV file [{$this->filePath}].");
         }
@@ -675,7 +773,16 @@ final class CsvConnection implements ConnectionInterface
             $handle = $this->openLocked();
         }
 
-        $tempPath = $this->filePath . '.radiant-tmp';
+        // A UNIQUE temp path per write: a shared fixed temp name lets a
+        // second writer's fopen('w') truncate the first writer's in-flight
+        // temp (silent lost updates across processes). Process id + random
+        // suffix; same directory so rename() stays same-filesystem atomic.
+        $tempPath = sprintf(
+            '%s.radiant-%s-%s.tmp',
+            $this->filePath,
+            (string) (getmypid() ?: 'unknown'),
+            bin2hex(random_bytes(6)),
+        );
         $temp = fopen($tempPath, 'w');
         if ($temp === false) {
             if ($ownsHandle) {
@@ -684,38 +791,56 @@ final class CsvConnection implements ConnectionInterface
             throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
         }
 
-        $columns = $this->canonicalColumns($rows);
-        $written = fputcsv($temp, $columns, escape: '') !== false;
-        foreach ($rows as $row) {
-            $aligned = [];
-            foreach ($columns as $column) {
-                $value = $row[$column] ?? null;
-                $aligned[] = is_string($value) ? $this->neutralizeFormula($value) : $value;
+        // try/finally guarantees the temp file cannot outlive this call —
+        // a TypeError from fputcsv (or any other unwinding failure) would
+        // otherwise orphan a partial, data-bearing temp file per failure.
+        try {
+            $columns = $this->canonicalColumns($rows);
+            // The header row is neutralized too — a hostile column name is
+            // just as able to execute as a spreadsheet formula as a cell.
+            $written = fputcsv($temp, array_map(
+                fn (string $column) => $this->neutralizeFormula($column),
+                $columns,
+            ), escape: '') !== false;
+            foreach ($rows as $row) {
+                $aligned = [];
+                foreach ($columns as $column) {
+                    $value = $row[$column] ?? null;
+                    $aligned[] = is_string($value) ? $this->neutralizeFormula($value) : $value;
+                }
+                if (fputcsv($temp, $aligned, escape: '') === false) {
+                    $written = false;
+                    break;
+                }
             }
-            if (fputcsv($temp, $aligned, escape: '') === false) {
-                $written = false;
-                break;
-            }
-        }
 
-        if (!fclose($temp) || !$written) {
-            @unlink($tempPath);
+            if (!fclose($temp) || !$written) {
+                throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
+            }
+
+            // rename() replaces the original — carry its permissions over so
+            // a 0600 file is not demoted to umask defaults on every write.
+            $originalPerms = @fileperms($this->filePath);
+            if ($originalPerms !== false) {
+                @chmod($tempPath, $originalPerms & 0o777);
+            }
+
+            if (!rename($tempPath, $this->filePath)) {
+                throw new \RuntimeException("Could not replace CSV file [{$this->filePath}].");
+            }
+        } finally {
+            // After a successful rename the temp no longer exists; after any
+            // failure it does — unlink it best-effort so no partial copy of
+            // the data is ever left behind.
+            if (is_resource($temp)) {
+                fclose($temp);
+            }
+            if (file_exists($tempPath)) {
+                @unlink($tempPath);
+            }
             if ($ownsHandle) {
                 $this->closeLocked($handle);
             }
-            throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
-        }
-
-        if (!rename($tempPath, $this->filePath)) {
-            @unlink($tempPath);
-            if ($ownsHandle) {
-                $this->closeLocked($handle);
-            }
-            throw new \RuntimeException("Could not replace CSV file [{$this->filePath}].");
-        }
-
-        if ($ownsHandle) {
-            $this->closeLocked($handle);
         }
     }
 
@@ -747,22 +872,23 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Neutralize a value that a spreadsheet would evaluate as a formula.
      *
-     * A leading `=`, `+`, `-`, `@`, tab, or CR is prefixed with a single
-     * quote — the standard CSV formula-injection defense. A leading `-` or
-     * `+` on a number is preserved (the quote would corrupt ordinary
-     * numeric data); the check only fires when the payload after the sign
-     * is not numeric.
+     * Leading whitespace is stripped for the prefix TEST only (the value is
+     * still written unmodified apart from the quote) — spreadsheets trim
+     * before evaluating, so ` =cmd()` or an NBSP/ZWSP/BOM-prefixed payload
+     * would otherwise bypass the check. The prefix set covers `=`, `@`,
+     * `|` (LibreOffice DDE), tab, CR, and non-numeric `+`/`-`.
      *
      * @param string $value The raw value.
      * @return string The neutralized value.
      */
     private function neutralizeFormula(string $value): string
     {
-        $first = $value === '' ? '' : $value[0];
-        if (in_array($first, ['=', '@', "\t", "\r"], true)) {
+        $trimmed = ltrim($value, " \t\r\n\0\v\f\xC2\xA0\xE2\x80\x8B\xEF\xBB\xBF");
+        $first = $trimmed === '' ? '' : $trimmed[0];
+        if (in_array($first, ['=', '@', '|', "\t", "\r"], true)) {
             return "'" . $value;
         }
-        if (in_array($first, ['+', '-'], true) && !is_numeric($value)) {
+        if (in_array($first, ['+', '-'], true) && !is_numeric($trimmed)) {
             return "'" . $value;
         }
         return $value;

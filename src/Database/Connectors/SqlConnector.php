@@ -101,6 +101,41 @@ abstract class SqlConnector implements ConnectorInterface
     }
 
     /**
+     * Validate a config value that is interpolated into the DSN.
+     *
+     * DSN metacharacters matter: a `host` or `database` value containing a
+     * `;` re-binds the DSN's key-value parsing (e.g. a database of
+     * `bar;unix_socket=/tmp/x` or `;sslmode=disable` silently redefines
+     * connection parameters — wrong database, dropped TLS, socket
+     * redirection). Control characters and whitespace are rejected for the
+     * same reason. This is defense-in-depth: config is normally
+     * host-developer-owned, but the library cannot know where config
+     * originates, so the values it interpolates are bounded at the boundary.
+     *
+     * @param mixed $value The raw config value (expected string).
+     * @param string $field The config field name, for the error message.
+     * @return string The validated value.
+     * @throws \InvalidArgumentException When the value is not a string or
+     *         contains DSN metacharacters, control characters, or whitespace.
+     */
+    protected function validDsnField(mixed $value, string $field): string
+    {
+        if (!is_string($value) || $value === '') {
+            throw new \InvalidArgumentException(
+                'The "' . $field . '" config field must be a non-empty string; got '
+                . ($value === null ? 'nothing' : get_debug_type($value)) . '.'
+            );
+        }
+        if (preg_match('/[;\s\x00-\x1f\x7f]/', $value) === 1) {
+            throw new \InvalidArgumentException(
+                'The "' . $field . '" config field must not contain semicolons, whitespace '
+                . 'or control characters (they are DSN metacharacters); got a value that does.'
+            );
+        }
+        return $value;
+    }
+
+    /**
      * Validate the user-supplied PDO options before they reach the driver.
      *
      * PDO is lenient about malformed options and may silently ignore them or

@@ -92,10 +92,15 @@ final class BelongsTo extends Relation
      * targets the related table's owner key ({@see BelongsTo::$localKey}).
      * A composite key widens to an OR of AND-groups (one per parent tuple).
      *
+     * Chunking is inherited from the base: this method is the per-chunk
+     * strategy ({@see Relation::eagerLoadChunk()} overrides), called once
+     * per bounded key list.
+     *
      * @param list<KeyValue> $parentKeys The parents' FK values.
      * @return Collection<TRelated> The related models.
      */
-    public function eagerLoad(array $parentKeys): Collection
+    #[\Override]
+    protected function eagerLoadChunk(array $parentKeys): Collection
     {
         if (!$this->isComposite()) {
             return $this->related::newQuery()

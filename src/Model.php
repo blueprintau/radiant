@@ -749,6 +749,16 @@ abstract class Model
      * The columns changed since the last sync, keyed by column name with
      * their encoded (bindable) values.
      *
+     * The comparison is STRICT against the encoded snapshot (`!==` on the
+     * encoded space, with an array_key_exists guard for newly-written
+     * columns). PHP's loose `!=` treats `0 == '0'`, `'' == null`, `true ==
+     * 1` and `'1e3' == '1000'` as equal — all REAL encoded-space
+     * representations a write can legitimately change (an int `0` written
+     * onto a column loaded as the string `'0'`, a `false` onto a `1`). A
+     * loose compare silently dropped those writes: `$dirty` stayed empty,
+     * `save()` wrote nothing, and the application's update never reached
+     * the database.
+     *
      * @return array<string, mixed> The dirty column values.
      */
     protected function getDirty(): array
@@ -756,7 +766,7 @@ abstract class Model
         $dirty = [];
 
         foreach ($this->getColumnValues() as $column => $value) {
-            if (!array_key_exists($column, $this->original) || $this->original[$column] != $value) {
+            if (!array_key_exists($column, $this->original) || $this->original[$column] !== $value) {
                 $dirty[$column] = $value;
             }
         }
@@ -873,6 +883,7 @@ abstract class Model
             && $propertyType !== null
             && $value::class !== $propertyType
             && is_a($propertyType, \DateTimeInterface::class, true)
+            && !$value instanceof $propertyType
         ) {
             // DateTimeImmutable::createFromInterface etc. exist on every
             // concrete datetime class, but not on the interface itself —
@@ -901,32 +912,24 @@ abstract class Model
      */
     public function attribute(string $columnName): mixed
     {
-        foreach (static::getProperties() as $mapping) {
-            if ($mapping->columnName !== $columnName) {
-                continue;
+        $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
+
+        if ($mapping->property === null) {
+            // Runtime override wins; else decode the loaded snapshot.
+            if (array_key_exists($columnName, $this->syntheticValues)) {
+                return $this->syntheticValues[$columnName];
             }
 
-            if ($mapping->property === null) {
-                // Runtime override wins; else decode the loaded snapshot.
-                if (array_key_exists($columnName, $this->syntheticValues)) {
-                    return $this->syntheticValues[$columnName];
-                }
+            $encoded = $this->original[$columnName] ?? null;
 
-                $encoded = $this->original[$columnName] ?? null;
-
-                return $encoded === null ? null : $mapping->column->decode($encoded);
-            }
-
-            if ($mapping->property->isInitialized($this) === false) {
-                return null;
-            }
-
-            return $mapping->property->getValue($this);
+            return $encoded === null ? null : $mapping->column->decode($encoded);
         }
 
-        throw new \InvalidArgumentException(
-            'Unknown column [' . $columnName . '] on model [' . static::class . '].'
-        );
+        if ($mapping->property->isInitialized($this) === false) {
+            return null;
+        }
+
+        return $mapping->property->getValue($this);
     }
 
     /**
@@ -946,26 +949,16 @@ abstract class Model
      */
     public function setAttribute(string $columnName, mixed $value): void
     {
-        foreach (static::getProperties() as $mapping) {
-            if ($mapping->columnName !== $columnName) {
-                continue;
-            }
+        $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
 
-            if ($mapping->property !== null) {
-                throw new \InvalidArgumentException(
-                    'Column [' . $columnName . '] on model [' . static::class . '] is backed by a typed '
-                    . 'property; write the property directly instead of setAttribute().'
-                );
-            }
-
-            $this->syntheticValues[$columnName] = $value;
-
-            return;
+        if ($mapping->property !== null) {
+            throw new \InvalidArgumentException(
+                'Column [' . $columnName . '] on model [' . static::class . '] is backed by a typed '
+                . 'property; write the property directly instead of setAttribute().'
+            );
         }
 
-        throw new \InvalidArgumentException(
-            'Unknown column [' . $columnName . '] on model [' . static::class . '].'
-        );
+        $this->syntheticValues[$columnName] = $value;
     }
 
     // ---- Metadata (delegating to the MetadataFactory cache) ----
@@ -1042,13 +1035,7 @@ abstract class Model
      */
     protected function castForWrite(string $columnName, mixed $value): mixed
     {
-        foreach (static::getProperties() as $mapping) {
-            if ($mapping->columnName === $columnName) {
-                return $mapping->column->encode($value);
-            }
-        }
-
-        return $value;
+        return MetadataFactory::for(static::class)->mappingFor($columnName)->column->encode($value);
     }
 
     // ---- Relations ----

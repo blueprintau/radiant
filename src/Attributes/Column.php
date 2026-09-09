@@ -197,17 +197,51 @@ class Column
         ) {
             // Any DateTimeInterface implementation: Carbon::parse returns
             // a Carbon, which IS a DateTimeInterface — the model layer
-            // re-bases when the property's concrete class differs.
-            return \Carbon\Carbon::parse($value);
+            // re-bases when the property's concrete class differs. Parse
+            // failures (corrupt cells, legacy zero-dates like
+            // '0000-00-00', garbage) fail LOUDLY with the column named —
+            // an un-actionable Carbon exception from deep inside hydration
+            // violates the fail-fast contract.
+            try {
+                return \Carbon\Carbon::parse($value);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException(
+                    'Column [' . ($this->name ?? $this->propertyType) . '] could not decode the value ['
+                    . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+                    . '] as a datetime: ' . $e->getMessage(),
+                    0,
+                    $e,
+                );
+            }
         }
 
         return match ($this->propertyType) {
             'int' => $this->type === ColumnType::Timestamp ? strtotime((string) $value) : (int) $value,
             'float' => (float) $value,
             'bool' => (bool) $value,
-            'array' => json_decode((string) $value, true),
+            'array' => $this->decodeJson($value),
             default => $value,
         };
+    }
+
+    /**
+     * Decode a JSON column cell — strict, with the failure named.
+     *
+     * `json_decode` without JSON_THROW_ON_ERROR turns a corrupt or
+     * truncated cell into `null` (a bare TypeError at hydration, no
+     * diagnostic) and — worse — turns the LITERAL string `'null'` into a
+     * silent null that nulls a nullable property. Both fail fast here with
+     * the column and raw value named.
+     *
+     * @param mixed $value The raw cell (expected string).
+     * @return mixed The decoded value.
+     * @throws \RuntimeException When the cell is not valid JSON.
+     */
+    private function decodeJson(mixed $value): mixed
+    {
+        $decoded = json_decode((string) $value, true, 512, JSON_THROW_ON_ERROR);
+
+        return $decoded;
     }
 
     /**

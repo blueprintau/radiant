@@ -23,6 +23,13 @@ Radiant reports via fail-fast exceptions (`QueryException`,
 `ConnectionException`, `UnsupportedFeatureException`); the host framework
 decides what to log. Wiring is explicit — no service locator, no DI lookup.
 
+A failed query throws `QueryException` whose `getMessage()` is **log-safe by
+contract**: it carries no SQL text and no bound values, so hosts can log it
+unfiltered without leaking request-derived PII or credentials. For
+debugging, the failing SQL stays on the public `$sql` property, the raw
+bindings are behind `getBindings()`, and `toContextString()` renders the
+full context for developer-facing output the host explicitly assembles.
+
 ## Installation
 
 ```bash
@@ -428,6 +435,26 @@ and column adds/drops. A changed column type, nullable flag, or default
 surfaces as a re-add (reported in the plan) — not an in-place modify — and
 index/FK changes are not diffed yet. Review the plan before applying.
 
+### Schema locking (concurrent deploys)
+
+`diff → apply` reads the live schema then executes DDL — including
+`DROP TABLE`. Two deployment instances doing this concurrently race on
+stale snapshots: duplicated CREATEs, half-applied ALTERs, a DROP landing on
+a renamed table. Wrap the whole loop in a schema lock — every SQL dialect
+ships a native adapter:
+
+```php
+$conn->withSchemaLock(function () use ($differ, $desired, $conn): void {
+    foreach ($differ->diff($desired) as $change) {
+        $conn->apply($change); // MySQL: GET_LOCK · Postgres: advisory lock · SQLite: BEGIN IMMEDIATE
+    }
+});
+```
+
+For custom locking (a locker service, file locks across machines), implement
+`SchemaLocker` and call `->withLock(fn () => ...)` around the loop. Without
+any lock, schema sync is safe only for single-instance deployments.
+
 ## SQL-only features
 
 Raw SQL, transactions, and schema changes live on `SqlConnection`, not on the
@@ -529,8 +556,11 @@ or `$manager->addConnection(...)`. Multiple named connections can be declared;
 The CSV connection proves the portable core works on a non-SQL backend —
 select/insert/update/delete run entirely in PHP, while SQL-only features throw
 `UnsupportedFeatureException`. It takes an exclusive file lock across every
-read-modify-write, writes atomically (temp file + rename), and neutralizes
-formula-injection values on write.
+read-modify-write, writes atomically (a UNIQUE temp file per write + rename,
+so concurrent writers cannot clobber each other and a mid-write failure never
+orphans a partial file), neutralizes formula-injection values (headers
+included, whitespace-prefixed payloads covered), and lets reads proceed
+concurrently under a shared lock.
 
 ```php
 'export' => [
@@ -542,6 +572,14 @@ formula-injection values on write.
 
 It reads the whole file on every query and rewrites it on every write, so it
 suits small, simple datasets — not production workloads.
+
+**Concurrency boundary.** The lock coordinates only `CsvConnection`
+instances of this library cooperating through `flock`. Non-participating
+writers (another process using `file_put_contents`, an editor save) bypass
+it and can tear a read in progress — the `readonly` flag gates *this*
+connection's writes, not the file's. The blocking file I/O is also not
+coroutine-aware: under Swoole/Fiber runtimes it stalls the worker for the
+I/O duration.
 
 ## Philosophy
 
@@ -568,21 +606,37 @@ suits small, simple datasets — not production workloads.
   Identifiers are quoted per dialect. The clause fragments that cannot be
   bound — order direction, column-to-column operators, the MySQL charset —
   are allowlisted (`SortDirection`, `ColumnOperator` enums and the charset
-  allowlist) rather than interpolated raw.
+  allowlist) rather than interpolated raw. DSN metacharacters in `host`/
+  `database` config are rejected at validation; MySQL forces native prepared
+  statements (client-side emulation cannot be re-enabled via options).
+- **Log-safe failures.** `QueryException::getMessage()` carries no SQL and
+  no bindings — hosts can log it unfiltered. SQL, bindings, and a full
+  context rendering are available opt-in (`$sql`, `getBindings()`,
+  `toContextString()`) when a host deliberately wants them.
 - **Fail-fast everywhere.** An empty `whereIn([])` throws instead of
-  compiling invalid `IN ()` SQL; a bad chunk size throws; a malformed
-  connection config throws at construction.
+  compiling invalid `IN ()` SQL; an empty nested where group throws at
+  declaration; aggregate arguments fail closed on non-column shapes; a
+  corrupt JSON or datetime cell throws with the column named instead of
+  corrupting hydration silently.
 - **Self-healing connections.** A connection whose query fails with a
   connection-loss error (server restart, network blip) is marked stale and
   transparently rebuilt on the next use — under long-running runtimes a
-  transient outage doesn't poison the worker.
-- **Honest transactions.** Transaction nesting uses real savepoints; the
-  depth counter cannot desync from a failed commit/rollback, and a failed
-  rollback never masks the original exception.
+  transient outage doesn't poison the worker. Eviction and garbage
+  collection roll back any transaction the caller abandoned.
+- **Honest transactions.** Transaction nesting uses uniquely-named real
+  savepoints (interleaved coroutine frames cannot roll back each other's
+  work); the depth counter cannot desync from a failed commit/rollback, and
+  a failed rollback never masks the original exception.
 - **CSV backend hardening.** Mutations take an exclusive file lock across
-  the whole read-modify-write, writes are atomic (temp file + rename), rows
-  stay column-aligned as the schema grows, and values that a spreadsheet
-  would evaluate as formulas are neutralized on write.
+  the whole read-modify-write with a UNIQUE temp file per write (concurrent
+  writers cannot lose each other's rows; a mid-write failure never orphans
+  a partial file), writes are atomic and preserve the original file's
+  permissions, rows stay column-aligned as the schema grows, reads share a
+  `LOCK_SH`, and formula-injection payloads — whitespace-prefixed and header
+  cells included — are neutralized on write.
+- **Bounded eager loading.** Parent keys are chunked (500 per query), so one
+  oversized `load()` degrades to more queries instead of exceeding driver
+  placeholder caps or `max_allowed_packet`.
 
 ## Requirements
 

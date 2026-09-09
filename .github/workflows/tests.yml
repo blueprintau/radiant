@@ -7,6 +7,13 @@ on:
     workflow_call:
     workflow_dispatch:
 
+# Least privilege: this workflow only reads code and runs tests — it never
+# needs to write. Explicitly scoping GITHUB_TOKEN closes the chain where a
+# compromised third-party action or dependency resolution reaches repo
+# write (and, for a library, ultimately consumer installs).
+permissions:
+    contents: read
+
 jobs:
     test:
         name: PHP ${{ matrix.php }} — ${{ matrix.dependencies }}
@@ -54,10 +61,12 @@ jobs:
             RADIANT_PGSQL_PASSWORD: postgres
             RADIANT_PGSQL_DATABASE: radiant
         steps:
-            - uses: actions/checkout@v7
+            # Actions are SHA-pinned (movable tags can be retargeted by the
+            # action repo's maintainers with no diff in this repo).
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
             - name: Setup PHP
-              uses: shivammathur/setup-php@v2
+              uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
               with:
                   php-version: ${{ matrix.php }}
                   tools: composer:v2
@@ -69,7 +78,7 @@ jobs:
 
             - name: Cache Composer packages
               id: composer-cache
-              uses: actions/cache@v6
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: vendor
                   # composer.lock is committed, so this hash is real and
@@ -80,8 +89,16 @@ jobs:
                       ${{ runner.os }}-php${{ matrix.php }}-deps${{ matrix.dependencies }}-
 
             - name: Install dependencies
+              # The `highest` leg installs the COMMITTED lock (nothing is
+              # re-resolved) so tests and `composer audit --locked` exercise
+              # the exact reviewed, reproducible tree. Only the lowest-bounds
+              # leg resolves — that is its purpose.
               run: |
-                  composer update --no-interaction --prefer-dist ${{ matrix.dependencies == 'lowest' && '--prefer-lowest' || '' }}
+                  if [ "${{ matrix.dependencies }}" = "lowest" ]; then
+                      composer update --no-interaction --prefer-dist --prefer-lowest
+                  else
+                      composer install --locked --no-interaction --prefer-dist
+                  fi
                   composer dump-autoload
 
             - name: Run tests

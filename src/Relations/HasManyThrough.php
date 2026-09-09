@@ -282,9 +282,35 @@ class HasManyThrough extends Relation
      */
     public function eagerLoad(array $parentKeys): Collection
     {
+        if ($parentKeys === []) {
+            return Collection::make([]);
+        }
+
+        // Chunked: SQL size grows O(parents × arity); driver caps (SQLite
+        // 999 placeholders, MySQL max_allowed_packet) turn an oversized
+        // single query into a hard failure. One query per chunk, merged.
+        $models = [];
+
+        foreach (array_chunk($parentKeys, self::EAGER_KEY_CHUNK) as $chunk) {
+            array_push($models, ...$this->eagerLoadChunk($chunk)->all());
+        }
+
+        return Collection::make($models);
+    }
+
+    /**
+     * Run one eager-load query for a CHUNK of parent keys — the join +
+     * synthetic-parent-key select for one bounded key list.
+     *
+     * @param list<KeyValue> $parentKeys The chunk's key values.
+     * @return Collection<TRelated> The related models for this chunk.
+     */
+    #[\Override]
+    protected function eagerLoadChunk(array $parentKeys): Collection
+    {
         $throughTable = $this->through::table();
         $relatedTable = $this->related::table();
-        $parentFk = 'radiant_through_parent';
+        $parentFk = self::throughParentAlias($this->related);
 
         $firstKeys = $this->isComposite() ? $this->getForeignKeys() : [$this->getForeignKey()];
         $secondKeys = $this->secondKeyList();
@@ -336,7 +362,7 @@ class HasManyThrough extends Relation
         // Columns are plain (qualified) specs with the standard `as`
         // alias — the Grammar wraps them like any other column list. The
         // parent-key select carries EVERY first-key column, aliased to
-        // `radiant_through_parent` per column when composite.
+        // the namespaced synthetic alias per column when composite.
         $selects = [];
 
         foreach ($firstKeys as $firstKey) {
@@ -372,6 +398,25 @@ class HasManyThrough extends Relation
         }
 
         return Collection::make($models);
+    }
+
+    /**
+     * The synthetic alias carrying the parent key through the join.
+     *
+     * Namespaced PER RELATED CLASS (`radiant_through_parent_{$table}`): a
+     * fixed alias collided with any real column of the same name — the
+     * driver's row bag would hold two values for that key, the real
+     * column would typically win, and children would be distributed to
+     * the wrong parent. The related table's own name is part of the
+     * alias, so a through-relation over two different related tables
+     * never aliases the same synthetic name either.
+     *
+     * @param class-string<Model> $related The related model class.
+     * @return string The synthetic alias.
+     */
+    private static function throughParentAlias(string $related): string
+    {
+        return 'radiant_through_parent_' . $related::table();
     }
 
     /**

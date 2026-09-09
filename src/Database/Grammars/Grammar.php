@@ -134,10 +134,20 @@ abstract class Grammar
      * Wrap the inner content of an aggregate expression.
      *
      * `distinct user_id` becomes `distinct "user_id"`; a plain column is
-     * wrapped; anything else (nested expressions, `*`) passes through.
+     * wrapped. The accepted inner shapes are STRICT — `*`, `distinct x`,
+     * or a single identifier path (optionally `.*`). Anything else
+     * (nested expressions like `coalesce(x, 0)`) FAILS CLOSED with
+     * {@see UnsupportedFeatureException} instead of passing through
+     * un-wrapped: the aggregate regex admits `func(<anything>)` shapes,
+     * and an unwrapped inner would splice arbitrary text into the SQL.
+     * Today every public caller validates upstream, so this is
+     * defense-in-depth for future callers — the fail-open passthrough was
+     * the audit's one grammar hardening gap.
      *
      * @param string $inner The aggregate's inner content.
      * @return string The wrapped inner content.
+     * @throws UnsupportedFeatureException When the inner content is not a
+     *         strict single-identifier shape.
      */
     protected function wrapAggregateInner(string $inner): string
     {
@@ -147,6 +157,17 @@ abstract class Grammar
         if ($inner === '*') {
             return '*';
         }
+
+        // Strict single-identifier path: `a`, `a.b`, `a.*` — no spaces,
+        // commas, parentheses, or other expression machinery. Anything
+        // more complex is not a supported aggregate argument.
+        if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*|\.\*)?$/', $inner) !== 1) {
+            throw new UnsupportedFeatureException(
+                'Aggregate arguments support only a single column (optionally schema-qualified '
+                . "or `distinct col`); got [{$inner}]. Use a raw Expression for complex arguments.",
+            );
+        }
+
         return $this->wrapSegments($inner);
     }
 

@@ -519,11 +519,17 @@ final class RelationsE2ETest extends TestCase
         }
 
         try {
-            $this->whereKeyUntyped([0 => 1]);
+            // A NON-list array (int key not starting at 0 in sequence) is a
+            // composite key map — an int column name is rejected there.
+            $this->whereKeyUntyped([5 => 1]);
             self::fail('Expected an InvalidArgumentException for a non-string column.');
         } catch (\InvalidArgumentException $e) {
             self::assertStringContainsString('string column names; got int', $e->getMessage());
         }
+
+        // A LIST of scalars is the whereKey batch contract — valid.
+        $this->whereKeyUntyped([1, 2]);
+        $this->addToAssertionCount(1);
     }
 
     /**

@@ -218,9 +218,13 @@ abstract class SqlConnection implements ConnectionInterface
         if ($pk === null) {
             return null;
         }
-        // PDO::lastInsertId() always returns a string (or false when there is
-        // no generated id); the codec passes strings through untouched, so no
-        // decode is needed here.
+        // The lastInsertId() fallback is reachable ONLY on dialects without
+        // RETURNING (MySQL, and old SQLite) — Postgres' grammar always uses
+        // RETURNING, so its sequence-based lastval() hazards never apply
+        // here. On MySQL lastInsertId() is connection-scoped and unaffected
+        // by concurrent inserts on other connections. PDO always returns a
+        // string (or false when there is no generated id); the codec passes
+        // strings through untouched, so no decode is needed.
         $id = $this->pdo->lastInsertId();
         return $id === false ? null : $id;
     }
@@ -605,6 +609,12 @@ abstract class SqlConnection implements ConnectionInterface
      * so the host never writes the match itself. The `create` case routes
      * through {@see create()} so declared indexes are emitted too.
      *
+     * NOTE: applying changes is NOT serialized across processes by itself.
+     * Wrap the whole `diff → apply` loop in a schema lock —
+     * {@see withSchemaLock()} or a
+     * {@see \BlueprintAU\Radiant\Database\Schema\SchemaLocker} adapter — when
+     * more than one deployment instance can migrate concurrently.
+     *
      * @param \BlueprintAU\Radiant\Database\Schema\SchemaChange $change The change to apply.
      */
     final public function apply(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
@@ -614,6 +624,32 @@ abstract class SqlConnection implements ConnectionInterface
             SchemaOperation::AddColumn, SchemaOperation::DropColumn => $this->alter($change->operation, $change->blueprint),
             SchemaOperation::DropTable => $this->drop($change->table),
         };
+    }
+
+    /**
+     * Run schema work while holding a cross-process schema lock, using the
+     * dialect's native advisory-lock mechanism.
+     *
+     * MySQL uses `GET_LOCK`/`RELEASE_LOCK`, Postgres a session advisory
+     * lock, SQLite a `BEGIN IMMEDIATE` transaction. The lock is held on
+     * THIS connection, so the schema work (inspector reads + `apply()`)
+     * must run on this same connection — pass a closure that closes over
+     * `$this` (or use the facade while this connection is current).
+     *
+     * @template TReturn
+     *
+     * @param callable(): TReturn $callback The schema work — the whole
+     *        `diff → apply` loop belongs inside it.
+     * @return TReturn The callback's return value.
+     * @throws UnsupportedFeatureException When the dialect has no native
+     *         cross-process lock (overridable — supply a SchemaLocker then).
+     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     */
+    public function withSchemaLock(callable $callback): mixed
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not provide a native schema lock; supply a SchemaLocker.',
+        );
     }
 
     // ---- Transactions (depth-counter + savepoints) ----
@@ -629,6 +665,29 @@ abstract class SqlConnection implements ConnectionInterface
      * @var int
      */
     private int $transactionLevel = 0;
+
+    /**
+     * Monotonic savepoint sequence — makes savepoint names unique.
+     *
+     * Depth-based names (`trans2`) collided when one connection served
+     * interleaved nested transactions from two coroutines: both frames
+     * would create `trans2`, and a `rollBack()` from one frame rolled back
+     * the other's unit of work. Names now carry a per-connection sequence
+     * number, so every frame's savepoint is distinct.
+     *
+     * @var int
+     */
+    private int $savepointSequence = 0;
+
+    /**
+     * The savepoint created by the currently-innermost open nested frame,
+     * per depth (depth => name). commit/rollBack need the name of THE
+     * savepoint that frame created — with unique names this is tracked at
+     * creation time, not re-derived from depth.
+     *
+     * @var array<int, string>
+     */
+    private array $savepointsByLevel = [];
 
     /**
      * The current transaction nesting depth.
@@ -677,7 +736,11 @@ abstract class SqlConnection implements ConnectionInterface
         if ($toLevel === 1) {
             $this->pdo->beginTransaction();
         } elseif ($this->supportsSavepoints()) {
-            $this->createSavepoint('trans' . $toLevel);
+            // Unique per-frame name (depth + sequence): depth alone collides
+            // when interleaved coroutine frames nest on one connection.
+            $name = 'trans' . $toLevel . '_' . (++$this->savepointSequence);
+            $this->createSavepoint($name);
+            $this->savepointsByLevel[$toLevel] = $name;
         }
         $this->transactionLevel = $toLevel;
     }
@@ -698,7 +761,7 @@ abstract class SqlConnection implements ConnectionInterface
         if ($toLevel === 0) {
             $this->pdo->commit();
         } elseif ($this->supportsSavepoints()) {
-            $this->releaseSavepoint('trans' . ($toLevel + 1));
+            $this->releaseSavepoint($this->savepointNameFor($toLevel + 1));
         }
     }
 
@@ -716,8 +779,24 @@ abstract class SqlConnection implements ConnectionInterface
         if ($toLevel === 0) {
             $this->pdo->rollBack();
         } elseif ($this->supportsSavepoints()) {
-            $this->rollbackToSavepoint('trans' . ($toLevel + 1));
+            $this->rollbackToSavepoint($this->savepointNameFor($toLevel + 1));
         }
+    }
+
+    /**
+     * The savepoint name the frame at a given depth created, forgetting it.
+     *
+     * @param int $level The depth of the frame being closed.
+     * @return string The savepoint name.
+     */
+    private function savepointNameFor(int $level): string
+    {
+        $name = $this->savepointsByLevel[$level]
+            ?? 'trans' . $level;
+
+        unset($this->savepointsByLevel[$level]);
+
+        return $name;
     }
 
     /**
@@ -751,6 +830,33 @@ abstract class SqlConnection implements ConnectionInterface
                 // rollback is secondary (and usually shares its cause).
             }
             throw $e;
+        }
+    }
+
+    /**
+     * Best-effort rollback of an abandoned transaction at teardown.
+     *
+     * The `transaction()` helper already rolls back on exception; the MANUAL
+     * begin/commit/rollback API does not — a host exception that escapes
+     * without `rollBack()` leaves the transaction (and its row locks) open
+     * on a connection the manager caches, effectively forever under a
+     * long-running worker. The destructor reclaims it: rolling back on GC
+     * releases locks and unpoisons the connection's depth counter for the
+     * next borrower. It never throws — a destructor must not.
+     *
+     * @return void
+     */
+    public function __destruct()
+    {
+        if ($this->transactionLevel === 0) {
+            return;
+        }
+        try {
+            $this->transactionLevel = 0;
+            $this->pdo->rollBack();
+        } catch (\Throwable) {
+            // Teardown is best-effort: the connection may already be dead
+            // (which also releases the server-side transaction).
         }
     }
 }

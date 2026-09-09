@@ -600,6 +600,16 @@ class QueryBuilder
     {
         $nested = new self($this->connection, $this->table);
         $callback(new WhereBuilder($nested));
+
+        // An empty group is a declaration bug, not a neutral filter: on SQL
+        // it compiles to degenerate `()` SQL, and evaluators that walk the
+        // clause list would read past its end. Fail fast at declaration.
+        if ($nested->getWheres() === []) {
+            throw new \InvalidArgumentException(
+                'A nested where group must contain at least one clause; the callback added none.'
+            );
+        }
+
         $this->wheres[] = ['type' => WhereType::Nested, 'query' => new WhereBuilder($nested), 'boolean' => $boolean];
         array_push($this->bindings[BindingCategory::Where->value], ...$nested->getBindings([BindingCategory::Where]));
         return $this;
