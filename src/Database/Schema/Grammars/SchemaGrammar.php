@@ -56,12 +56,15 @@ abstract class SchemaGrammar
     /**
      * Compile a `CREATE TABLE` statement.
      *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The columns to create.
+     * The table comes from the blueprint itself ({@see Blueprint::getTable()})
+     * — one source of truth, no parallel parameter that could disagree.
+     *
+     * @param Blueprint $blueprint The table and columns to create.
      * @return string The compiled SQL.
      */
-    public function compileCreate(string $table, Blueprint $blueprint): string
+    public function compileCreate(Blueprint $blueprint): string
     {
+        $table = $blueprint->getTable();
         $columns = $blueprint->getColumns();
         if ($columns === []) {
             throw new \InvalidArgumentException('Cannot create a table with no columns.');
@@ -122,18 +125,23 @@ abstract class SchemaGrammar
     }
 
     /**
-     * Compile an `ALTER TABLE` statement.
+     * Compile an `ALTER TABLE` statement — or, for the whole-table
+     * operations the differ emits, the equivalent `CREATE TABLE` /
+     * `DROP TABLE`. Routing the four {@see SchemaOperation} cases through
+     * one entry point keeps {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::apply()}
+     * a trivial dispatch.
      *
-     * @param string $table The table name.
      * @param SchemaOperation $operation The operation to perform.
-     * @param Blueprint $blueprint The columns involved.
+     * @param Blueprint $blueprint The table and columns involved.
      * @return string The compiled SQL.
      */
-    public function compileAlter(string $table, SchemaOperation $operation, Blueprint $blueprint): string
+    public function compileAlter(SchemaOperation $operation, Blueprint $blueprint): string
     {
         return match ($operation) {
-            SchemaOperation::AddColumn => $this->compileAddColumn($table, $blueprint),
-            SchemaOperation::DropColumn => $this->compileDropColumn($table, $blueprint),
+            SchemaOperation::AddColumn => $this->compileAddColumn($blueprint),
+            SchemaOperation::DropColumn => $this->compileDropColumn($blueprint),
+            SchemaOperation::CreateTable => $this->compileCreate($blueprint),
+            SchemaOperation::DropTable => $this->compileDrop($blueprint->getTable()),
         };
     }
 
@@ -158,30 +166,59 @@ abstract class SchemaGrammar
      * across MySQL, SQLite, and Postgres, so the base implementation needs
      * no dialect override.
      *
-     * @param string $table The table name.
      * @param Blueprint $blueprint The blueprint.
      * @return list<string> One `CREATE INDEX` statement per index.
      */
-    public function compileIndexes(string $table, Blueprint $blueprint): array
+    public function compileIndexes(Blueprint $blueprint): array
     {
+        $table = $blueprint->getTable();
+
         return array_map(
-            fn (array $index) => ($index['unique'] ? 'CREATE UNIQUE INDEX ' : 'CREATE INDEX ')
-                . $this->wrap($table . '_' . $index['name'] . '_index')
-                . ' ON ' . $this->wrap($table)
-                . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $index['columns'])) . ')',
+            function (array $index) use ($table): string {
+                // Names on the blueprint are FINAL (built at declaration
+                // time — user-set names verbatim, derived names with the
+                // table prefix and kind suffix). The grammar renders them
+                // as-is; its only job is quoting + dialect validation.
+                $this->assertValidIdentifier($index['name']);
+
+                return ($index['unique'] ? 'CREATE UNIQUE INDEX ' : 'CREATE INDEX ')
+                    . $this->wrap($index['name'])
+                    . ' ON ' . $this->wrap($table)
+                    . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $index['columns'])) . ')';
+            },
             $blueprint->getIndexes(),
         );
     }
 
     /**
+     * Assert an identifier is valid for this dialect.
+     *
+     * Doctrine's pattern: the dialect VALIDATES the (already-final) name at
+     * compile time and throws — it never silently mutates a name, because a
+     * truncated name is not stable across syncs and would break the differ.
+     *
+     * ABSTRACT on purpose: every dialect must DECIDE its identifier policy
+     * explicitly — a silent no-op base would let a dialect forget the cap
+     * it actually has (MySQL's 64 chars erroring at the server, far from
+     * the declaration). SQLite/Postgres have effectively no practical cap;
+     * their overrides return without throwing.
+     *
+     * @param string $name The final identifier (index name).
+     * @return void
+     * @throws \InvalidArgumentException When the identifier violates a
+     *         dialect limit.
+     */
+    abstract public function assertValidIdentifier(string $name): void;
+
+    /**
      * Compile an `ALTER TABLE ... ADD COLUMN` statement.
      *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The columns to add.
+     * @param Blueprint $blueprint The table and columns to add.
      * @return string The compiled SQL.
      */
-    protected function compileAddColumn(string $table, Blueprint $blueprint): string
+    protected function compileAddColumn(Blueprint $blueprint): string
     {
+        $table = $blueprint->getTable();
         $columns = $blueprint->getColumns();
         if ($columns === []) {
             throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
@@ -199,13 +236,12 @@ abstract class SchemaGrammar
      * SQLite cannot drop columns before 3.35 (and even then only with
      * restrictions), so the base throws; dialects that support it override.
      *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The columns to drop.
+     * @param Blueprint $blueprint The table and columns to drop.
      * @return string The compiled SQL.
      * @throws UnsupportedFeatureException Always — the base dialect cannot
      *         drop columns.
      */
-    protected function compileDropColumn(string $table, Blueprint $blueprint): string
+    protected function compileDropColumn(Blueprint $blueprint): string
     {
         throw new UnsupportedFeatureException('This dialect does not support dropping columns.');
     }
@@ -237,11 +273,19 @@ abstract class SchemaGrammar
             $segments[] = 'UNIQUE';
         }
 
-        // Auto-increment placement is dialect-dependent: MySQL/Postgres
-        // render it before PRIMARY KEY (`AUTO_INCREMENT PRIMARY KEY`,
-        // `GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`), while SQLite
-        // requires it after (`INTEGER PRIMARY KEY AUTOINCREMENT`).
-        if ($column['autoIncrement'] === true && $this->autoIncrementBeforePrimaryKey()) {
+        // A composite PK has no generated id in the ORM's contract (the
+        // caller assigns every key part — insertGetId is a single-column
+        // concept), so the auto-increment clause is suppressed on its
+        // member columns. On SQLite it would be outright invalid:
+        // AUTOINCREMENT is only legal on a single-column INTEGER PRIMARY
+        // KEY. Auto-increment placement is otherwise dialect-dependent:
+        // MySQL/Postgres render it before PRIMARY KEY (`AUTO_INCREMENT
+        // PRIMARY KEY`, `GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY`),
+        // while SQLite requires it after (`INTEGER PRIMARY KEY
+        // AUTOINCREMENT`).
+        $autoIncrement = $column['autoIncrement'] === true && !$composite;
+
+        if ($autoIncrement && $this->autoIncrementBeforePrimaryKey()) {
             $segments[] = $this->autoIncrement();
         }
 
@@ -252,7 +296,7 @@ abstract class SchemaGrammar
             $segments[] = 'PRIMARY KEY';
         }
 
-        if ($column['autoIncrement'] === true && !$this->autoIncrementBeforePrimaryKey()) {
+        if ($autoIncrement && !$this->autoIncrementBeforePrimaryKey()) {
             $segments[] = $this->autoIncrement();
         }
 

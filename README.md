@@ -7,9 +7,9 @@ A **database + ORM package** for the BlueprintAU ecosystem — a fail-fast,
 explicit query builder, SQL connection layer, and attribute-driven ORM.
 Radiant is the database layer split out of the Lucent restructure.
 
-> **Status:** the `Database\` layer is implemented and tested. The ORM
-> (`Model`, `#[Column]`, relations, …) is the next milestone — the examples
-> below are the planned API.
+> **Status:** the `Database\` layer, the attribute-driven ORM (`Model`,
+> `#[Column]`, soft deletes), **Relations** (HasOne/HasMany/BelongsTo +
+> through), and **multi-table inheritance** are implemented and tested.
 
 ## Dependencies
 
@@ -111,13 +111,13 @@ $changed = Database::affectingStatement('UPDATE users SET active = ? WHERE id = 
 $conn = Database::sqlConnection(); // throws UnsupportedFeatureException otherwise
 ```
 
-### ORM *(planned)*
+### ORM
 
 ```php
 use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\Table;
-use BlueprintAU\Radiant\Column;
-use BlueprintAU\Radiant\Database\Schema\ColumnType;
+use BlueprintAU\Radiant\Attributes\Table;
+use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use Carbon\Carbon;
 
 #[Table(name: 'user_accounts')] // optional — see naming below
@@ -126,7 +126,7 @@ class User extends Model
     #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
     public int $id;
 
-    #[Column(type: ColumnType::String, length: 255, fillable: true, unique: true)]
+    #[Column(type: ColumnType::String, length: 255, unique: true)]
     public string $email;
 
     #[Column(type: ColumnType::DateTime, nullable: true)]
@@ -134,7 +134,7 @@ class User extends Model
 }
 
 $user = User::find(1);
-$user->name = 'Alicia';
+$user->email = 'alicia@example.com';
 $user->save();
 ```
 
@@ -187,9 +187,164 @@ Every column name in a constraint attribute is validated against the
 model's `#[Column]` set at build time — renaming a property fails loudly,
 never silently drops out of a constraint. A flag and an attribute covering
 the same column is a build-time error, so constraints can't double-declare.
+`#[ForeignKey]`'s `references` also accepts a model class-string, resolved
+through that model's table.
 
-*(Planned — the attribute classes and metadata factory are not implemented
-yet.)*
+Every `#[Column]` property must declare a single named PHP type — untyped,
+union, and intersection types fail at metadata build — and the property
+type drives the cast between the model and the database (e.g. a `?Carbon`
+property on a DateTime column round-trips `Carbon` instances; an `int`
+property on a timestamp column is a Unix-timestamp cast).
+
+Queries through the model return a `Collection` of hydrated model
+instances (a `blueprintau/collections` subclass with model helpers like
+`find()`). Every column-accepting query method validates its column names
+against the model — an unknown column throws instead of compiling a
+broken query.
+
+### Soft deletes
+
+Opt into soft deletes by applying the `SoftDeletes` trait — the delete
+column (`deleted_at` by default, overridable via `deletedAtColumn()`) is
+declared for you if you haven't:
+
+```php
+use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\SoftDeletes;
+
+class Post extends Model
+{
+    use SoftDeletes;
+}
+
+$post->delete();        // UPDATE sets deleted_at
+$post->trashed();       // true
+$post->restore();       // clears the timestamp
+$post->forceDelete();   // the real DELETE
+```
+
+Queries exclude trashed rows automatically; `withTrashed()` includes them
+and `onlyTrashed()` returns just them. Soft deletes use only the portable
+core (`update()` + `whereKey()`), so they work on any backend — CSV
+included.
+
+### Relations
+
+Declare a relation as a method returning a relation object. The method name
+is the relation's key; the constructor applies the constraint, so the
+relation composes like the builder itself:
+
+```php
+class User extends Model
+{
+    public function posts(): HasMany
+    {
+        return $this->hasMany(Post::class);          // fk: user_id (convention)
+    }
+
+    public function featured(): HasOne
+    {
+        return $this->hasOne(Post::class, 'user_id');
+    }
+}
+
+class Post extends Model
+{
+    public function author(): BelongsTo
+    {
+        return $this->belongsTo(User::class);        // fk: user_id
+    }
+}
+```
+
+The relation carries the shared filter vocabulary itself (`where`, `orWhere`,
+`whereIn`, `whereNull`, `whereBetween`, `orderBy`, `limit`, `offset` — all
+validated against the related model), so composition happens right on the
+relation:
+
+```php
+foreach ($user->posts()->orderBy('created_at')->getResults() as $post) { ... }
+$recent = $user->posts()->where('active', '=', 1)->limit(5)->getResults();
+```
+
+FK/local-key defaults follow the snake_case convention (`user_id`, the
+model's primary key) and are overridable with explicit arguments. Every
+column a relation names is validated against the model's declared columns
+at construction — an unknown FK throws immediately.
+
+Fail-fast semantics: a `BelongsTo` over a null FK yields no results (a
+legitimately optional relation, not an error); a `HasOne` over duplicate
+rows takes the first (stably ordered by the related PK) — uniqueness is the
+schema's job.
+
+**Eager loading.** `with()` runs one extra `whereIn(fk, keys)` query per
+relation — no joins, no row multiplication, pagination stays correct:
+
+```php
+$users = User::with('posts')->get();               // static forwarder
+$users = User::where('active', '=', 1)->with('posts')->get();  // mid-chain
+$users->load('posts', 'followers');                // on an existing Collection
+$fresh = $users->fresh();                          // re-query each model by key
+
+$users = User::with('posts.comments')->get();      // dot-notation nests
+```
+
+An unknown relation name throws **at the `with()` call** — the typo is
+caught at the call site. Loaded relations are cached on the instance
+(`relationLoaded()` / `getRelation()`); lazy access through the relation
+method always executes fresh. Eager-loaded `HasOne`/`BelongsTo` results
+are a single model or `null`; `HasMany` results are a `Collection`.
+
+Dot-notation nests to any depth (`'posts.comments.author'`), loading one
+extra query per path segment.
+
+**Through relations** hop via an intermediate model and are SQL-only (they
+need a join):
+
+```php
+class Mechanic extends Model
+{
+    public function owner(): HasOneThrough
+    {
+        return $this->hasOneThrough(Owner::class, Car::class);
+    }
+}
+```
+
+HasOne/HasMany/BelongsTo ride the portable core (`whereIn` + `select`) and
+work on any backend, CSV included.
+
+### Multi-table inheritance
+
+A concrete subclass that adds columns **and** declares its own `#[Table]`
+is a multi-table-inheritance (MTI) child: the child table holds its own
+columns, the ancestor's table keeps the inherited ones, and the shared
+primary key links them:
+
+```php
+#[Table(name: 'admins')]
+class Admin extends User
+{
+    #[Column(type: ColumnType::String, length: 64)]
+    public string $level;      // lives on admins; email/id live on users
+}
+```
+
+The child declares **no key of its own** — the factory derives it from the
+root's `#[Column]` with `autoIncrement: false` (only the root generates the
+id), and the schema layer emits the FK (`FOREIGN KEY (id) REFERENCES users
+(id) ON DELETE CASCADE`). `Blueprint::fromMetadata(Admin::class)` produces
+that DDL, so the schema sync covers both tables.
+
+Reads JOIN every ancestor table (INNER — the FK CASCADE guarantees each
+ancestor row exists) and alias every column back to its plain name, so one
+hydrated model spans all levels and `Admin::find(5)` returns an admin with
+its `email` intact. Writes split per table in one transaction: the root
+inserts first (generating the id), descendants copy it; updates touch only
+the dirty partitions; deletes run leaf-first. Adding columns without
+`#[Table]` is still a build error (the columns have nowhere to go), and a
+behavior-only subclass still shares the ancestor's table — MTI is opt-in
+via `#[Table]`.
 
 The `ColumnType` enum is the shared, dialect-agnostic type vocabulary for
 both the schema layer (`Blueprint`, `SchemaGrammar`) and the `#[Column]`
@@ -219,7 +374,59 @@ $blueprint = (new Blueprint())
 $conn->create('users', $blueprint);
 ```
 
-`alter()` and `drop()` are available on `SqlConnection` for schema changes.
+`alter()` and `drop()` are available on `SqlConnection` for schema changes —
+see below for the sync layer built on top of them.
+
+### Schema sync
+
+The schema layer also ships a **differ**: desired state vs. live schema →
+ordered, classified changes. Radiant computes and reports; the host command
+(plan → show → apply) decides and acts.
+
+Declare the desired state from your models — `Blueprint::fromMetadata()`
+folds every `#[Column]` and class-level constraint attribute into a
+blueprint (a `SoftDeletes` model's delete column is included):
+
+```php
+use BlueprintAU\Radiant\Database\Schema\Blueprint;
+use BlueprintAU\Radiant\Database\Schema\SchemaDiffer;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+
+/** @var SqlConnection $conn — schema sync is SQL-only */
+$conn = $manager->connection();
+
+$desired = [
+    'users' => Blueprint::fromMetadata(User::class),
+    'posts' => Blueprint::fromMetadata(Post::class),
+];
+
+$differ = new SchemaDiffer($conn->schemaInspector); // never construct an inspector yourself
+$changes = $differ->diff($desired);                 // plan
+
+foreach ($changes as $change) {
+    echo $change->description, $change->destructive ? '  [DESTRUCTIVE]' : '', "\n";
+    if (!$change->destructive) {
+        $conn->apply($change); // show → apply; gate destructive changes behind a confirmation
+    }
+}
+```
+
+Each returned `SchemaChange` carries the table, the operation
+(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`), a `destructive` flag
+(anything that can lose data), and a human-readable `description` for dry-run
+output. Changes are ordered **creates → alters → drops**, so a rename (drop +
+create) never destroys data before its replacement exists.
+
+Rename-shaped diffs are **flagged, never rewritten**: a column add+drop pair
+on one table, or a create+drop table pair sharing at least half their
+columns, is marked `possibleRename` / `renameOf` so the host can ask "is this
+a rename?" — a wrong guess executing `RENAME COLUMN` between unrelated
+columns would corrupt data.
+
+The v1 differ is **column-level only**: it detects whole-table creates/drops
+and column adds/drops. A changed column type, nullable flag, or default
+surfaces as a re-add (reported in the plan) — not an in-place modify — and
+index/FK changes are not diffed yet. Review the plan before applying.
 
 ## SQL-only features
 
@@ -301,7 +508,7 @@ The driver key selects the connector; each connector validates its own config
 at construction and fails fast with a message naming the problem.
 
 | Driver | Key | Required config |
-|---|---|---|
+| --- | --- | --- |
 | MySQL | `mysql` | `host`, `port` (integer), `database`; optional `username`, `password`, `charset` (allowlisted) and PDO `options` |
 | SQLite | `sqlite` | `database` (path string); optional PDO `options` |
 | Postgres | `pgsql` | `host`, `database`; optional `port` (default 5432), `username`, `password`, PDO `options` |
@@ -346,10 +553,10 @@ suits small, simple datasets — not production workloads.
   constructor.
 - **Portable core, gated extras.** The generic `Connection` interface runs a
   structured query against any backend (SQL, CSV, …). The ORM's core CRUD
-  (`find`, `all`, `where`, `save`, `delete`) works on any `Connection`;
-  SQL-only extras (joins, transactions, relations) throw
-  `UnsupportedFeatureException` on a non-SQL backend — never silently
-  ignored.
+  (`find`, `all`, `where`, `save`, `delete` — soft deletes included) works
+  on any `Connection`; SQL-only extras (joins, transactions, raw SQL,
+  schema) throw `UnsupportedFeatureException` on a non-SQL backend — never
+  silently ignored.
 - **Type-driven casting.** Each `Column` casts between the typed property
   value and a bindable value, driven by the PHP property type. The `ValueCodec`
   handles dialect specifics (Postgres' microsecond datetimes, …). The field

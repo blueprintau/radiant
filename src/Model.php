@@ -1,0 +1,1488 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BlueprintAU\Radiant;
+
+use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
+use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Metadata\MetadataFactory;
+use BlueprintAU\Radiant\Metadata\PropertyMapping;
+
+/**
+ * The Active Record base model.
+ *
+ * Typed properties + `#[Column]` attributes declare the schema; the
+ * {@see MetadataFactory} builds the per-class metadata once and caches it.
+ * Core CRUD runs on any {@see ConnectionInterface} — the portable subset
+ * (`select`/`insert`/`update`/`delete`) — while SQL-only extras stay gated
+ * at the connection/builder layer.
+ *
+ * Hydration reconstitutes instances without the constructor
+ * (`newInstanceWithoutConstructor()`), so `Model` subclasses need no
+ * constructor ceremony; dirty tracking compares against the `$original`
+ * snapshot taken at hydration/save time.
+ *
+ * @phpstan-type KeyValue int|string|null|array<string, int|string|null>
+ */
+abstract class Model
+{
+    /** @use FiltersStaticQuery<Model> */
+    use FiltersStaticQuery;
+
+    /**
+     * The loaded values at hydration time, keyed by column name — the
+     * hydration/save-time snapshot dirty tracking compares against.
+     *
+     * Values live in the ENCODED (bindable) space — the same space
+     * {@see Model::getColumnValues()} produces — so the `!=` comparison in
+     * {@see Model::getDirty()} compares like with like. (The raw DB row is
+     * a DIFFERENT space — `'2026-09-06 12:00:00'` strings vs Carbon
+     * objects — and comparing across it would make every datetime column
+     * permanently dirty.)
+     *
+     * Synthetic columns (the runtime {@see Model::$syntheticValues} store)
+     * land here too, so {@see Model::getKeyForRefresh()} and trait-level
+     * checks read one consistent shape.
+     *
+     * @var array<string, mixed>
+     */
+    protected array $original = [];
+
+    /**
+     * Runtime overrides for synthetic columns — columns the metadata
+     * declares but no PHP property backs (the SoftDeletes column injected
+     * by the {@see MetadataFactory} when the model declares none itself).
+     *
+     * EMPTY after hydration: the loaded value lives in {@see Model::$original}
+     * and {@see Model::attribute()} decodes it on demand. This store only
+     * fills when a trait writes a NEW value post-load (via
+     * {@see Model::setAttribute()}) — the synthetic column has no typed
+     * property to hold it in. Never a dynamic property.
+     *
+     * @var array<string, mixed>
+     */
+    protected array $syntheticValues = [];
+
+    /**
+     * Whether the model exists in the database (was inserted/hydrated).
+     *
+     * @var bool
+     */
+    protected bool $exists = false;
+
+    /**
+     * Loaded relation results, keyed by relation name.
+     *
+     * Written by the eager loader and read by getRelation(); a relation
+     * method's own lazy access never consults this — lazy always executes.
+     *
+     * @var array<string, Model|Collection<Model>|null>
+     */
+    protected array $relations = [];
+
+    // ---- Connection ----
+
+    /**
+     * Default connection name for this model.
+     *
+     * Null = the manager's default. A model that always runs on a named
+     * connection (e.g. a tenant model) pins itself with one line:
+     * `protected static ?string $connection = 'tenant';`
+     *
+     * @var string|null
+     */
+    protected static ?string $connection = null;
+
+    /**
+     * The connection this model runs on — the public resolution entry point.
+     *
+     * @return ConnectionInterface The resolved connection.
+     */
+    final public static function connection(): ConnectionInterface
+    {
+        return static::resolveConnection();
+    }
+
+    /**
+     * The single seam for connection resolution.
+     *
+     * Default falls through to the Database facade (the ORM's one ambient
+     * dependency) via its public `connection()` entry point; the `static::`
+     * late binding makes the method overridable per model class and in
+     * tests without mutating global facade state.
+     *
+     * @return ConnectionInterface The resolved connection.
+     */
+    protected static function resolveConnection(): ConnectionInterface
+    {
+        return Database::connection(static::$connection);
+    }
+
+    /**
+     * The table name for this model.
+     *
+     * Computed once by {@see MetadataFactory} and cached in
+     * {@see \BlueprintAU\Radiant\Metadata\ClassMetadata} — a static name by
+     * design; dynamic (per-tenant/partitioned) names are deliberately
+     * unsupported at the model layer (see the `#[Table]` attribute notes)
+     * and belong at the connection layer.
+     *
+     * @return string The resolved table name.
+     */
+    public static function table(): string
+    {
+        $tableName = MetadataFactory::for(static::class)->tableName;
+
+        if ($tableName === null) {
+            throw new \LogicException(
+                'Model [' . static::class . '] declares no columns of its own and resolves no '
+                . 'table. Add #[Column] properties, or extend a table-owning model '
+                . 'behavior-only (no new columns, no #[Table]).'
+            );
+        }
+
+        return $tableName;
+    }
+
+    // ---- Query entry points ----
+
+    /**
+     * A fresh model query builder for this class.
+     *
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function newQuery(): ModelQueryBuilder
+    {
+        return new ModelQueryBuilder(static::class, static::connection());
+    }
+
+    /**
+     * Find a model by its primary key.
+     *
+     * @param KeyValue $id The primary-key value (or a column => value map
+     *        for a composite key).
+     * @return static|null The model, or null when not found.
+     */
+    public static function find(mixed $id): ?static
+    {
+        return static::newQuery()->find($id);
+    }
+
+    /**
+     * Every model in the table.
+     *
+     * @return Collection<static> The hydrated models.
+     */
+    public static function all(): Collection
+    {
+        return static::newQuery()->get();
+    }
+
+    // ---- Static filter-modifier forwarders ----
+
+    /**
+     * Start a model query with a where clause — the sink the shared static
+     * filter trait funnels the where-family helpers into. The trait also
+     * requires orderBy/limit/offset/select/groupBy/having (not
+     * where-derivable — they start a fresh query); this class implements
+     * them directly below the sink.
+     *
+     * @param string $column The column to compare.
+     * @param WhereOperator|string $operator The comparison operator.
+     * @param mixed $value The value to compare against.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function where(
+        string $column,
+        WhereOperator|string $operator,
+        mixed $value,
+        WhereBoolean $boolean = WhereBoolean::And,
+    ): ModelQueryBuilder {
+        return static::newQuery()->where($column, $operator, $value, $boolean);
+    }
+
+    /**
+     * Start a model query with a nested where group — the second static
+     * sink; `orWhereNested` delegates here.
+     *
+     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function whereNested(
+        callable $callback,
+        WhereBoolean $boolean = WhereBoolean::And,
+    ): ModelQueryBuilder {
+        return static::newQuery()->whereNested($callback, $boolean);
+    }
+
+    /**
+     * Start a model query with an OR-connected nested where group.
+     *
+     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function orWhereNested(callable $callback): ModelQueryBuilder
+    {
+        return static::whereNested($callback, WhereBoolean::Or);
+    }
+
+    /**
+     * Start a model query with an order-by clause.
+     *
+     * @param string $column The column to order by.
+     * @param SortDirection|string $direction `ASC` or `DESC`.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function orderBy(
+        string $column,
+        SortDirection|string $direction = SortDirection::Asc,
+    ): ModelQueryBuilder {
+        return static::newQuery()->orderBy($column, $direction);
+    }
+
+    /**
+     * Start a model query with a row limit.
+     *
+     * @param int $limit The row limit.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function limit(int $limit): ModelQueryBuilder
+    {
+        return static::newQuery()->limit($limit);
+    }
+
+    /**
+     * Start a model query with a row offset.
+     *
+     * @param int $offset The number of rows to skip.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function offset(int $offset): ModelQueryBuilder
+    {
+        return static::newQuery()->offset($offset);
+    }
+
+    /**
+     * Start a model query with an explicit column selection.
+     *
+     * @param array<int, string>|string $columns A column list, or a single column.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function select(array|string $columns = ['*']): ModelQueryBuilder
+    {
+        return static::newQuery()->select($columns);
+    }
+
+    /**
+     * Start a model query grouped by one or more columns.
+     *
+     * @param string|array<int, string> $columns The column(s) to group by.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function groupBy(string|array $columns): ModelQueryBuilder
+    {
+        return static::newQuery()->groupBy($columns);
+    }
+
+    /**
+     * Start a model query with a having clause.
+     *
+     * @param string $column The column (or aggregate expression) to compare.
+     * @param WhereOperator|string $operator The comparison operator.
+     * @param mixed $value The value to compare against.
+     * @return ModelQueryBuilder<static> The query builder.
+     */
+    public static function having(
+        string $column,
+        WhereOperator|string $operator,
+        mixed $value,
+    ): ModelQueryBuilder {
+        return static::newQuery()->having($column, $operator, $value);
+    }
+
+    /**
+     * Start a model query with eager-loaded relations.
+     *
+     * Validation happens HERE, at the with() call — an unknown relation is
+     * a typo and fails fast at the call site, not at hydration time.
+     *
+     * Dot-notation nests: `'posts.comments'` eager-loads posts, then each
+     * post's comments.
+     *
+     * @param string ...$relations The relation names to eager-load.
+     * @return ModelQueryBuilder<static> The query builder.
+     * @throws \InvalidArgumentException When a name does not resolve to a
+     *         relation method on the model.
+     */
+    public static function with(string ...$relations): ModelQueryBuilder
+    {
+        // Variadics are already a list — the @param on with() narrows it.
+        /** @var list<string> $relations */
+        return static::newQuery()->with($relations);
+    }
+
+    // ---- Persistence ----
+
+    /**
+     * Save the model — INSERT when new, UPDATE of the dirty columns when not.
+     *
+     * @return bool Always true (failures throw).
+     */
+    public function save(): bool
+    {
+        if (!$this->exists) {
+            return $this->performInsert();
+        }
+
+        // MTI children update per-partition (single query when the dirty
+        // columns land on one table, a transaction across tables otherwise).
+        if (MetadataFactory::for(static::class)->isMtiChild()) {
+            return $this->performMtiUpdate();
+        }
+
+        return $this->performUpdate();
+    }
+
+    /**
+     * Delete the model (soft-delete when the trait is used).
+     *
+     * @return bool Always true (failures throw).
+     */
+    public function delete(): bool
+    {
+        return $this->performDelete();
+    }
+
+    /**
+     * The real DELETE by primary key.
+     *
+     * @return bool Always true (failures throw).
+     */
+    protected function performDelete(): bool
+    {
+        $metadata = MetadataFactory::for(static::class);
+
+        // MTI: leaf-first deletes up the chain — each level removes its own
+        // row. (The schema-level ON DELETE CASCADE is the backstop; the
+        // explicit deletes are the runtime path, portable across dialects
+        // that enforce FKs differently.)
+        if ($metadata->isMtiChild()) {
+            $key = $this->getKeyForRefresh();
+            $pks = static::getPrimaryKeys();
+
+            // Composite MTI keys delete by the full key tuple — every level
+            // shares ALL the key columns, so each table's DELETE matches on
+            // the same column => value pairs. A single key keeps the
+            // scalar form (one where, one binding).
+            $composite = count($pks) > 1;
+
+            for ($class = static::class; $class !== false; $class = get_parent_class($class)) {
+                if (!is_a($class, Model::class, true)) {
+                    continue;
+                }
+
+                $levelMetadata = MetadataFactory::for($class);
+                $levelTable = $levelMetadata->tableName;
+
+                if ($levelTable === null) {
+                    continue;
+                }
+
+                $query = static::connection()->table($levelTable);
+
+                if ($composite) {
+                    foreach ($pks as $pk) {
+                        if ($pk->name !== null) {
+                            $query->where($pk->name, '=', $key[$pk->name] ?? null);
+                        }
+                    }
+                } else {
+                    $query->where($pks[0]->name ?? 'id', '=', $key);
+                }
+
+                $query->delete();
+            }
+
+            $this->exists = false;
+
+            return true;
+        }
+
+        $this->newQuery()->whereKey($this->getKeyForRefresh())->delete();
+        $this->exists = false;
+
+        return true;
+    }
+
+    /**
+     * INSERT the model.
+     *
+     * A single auto-increment PK gets its generated id back via
+     * `insertGetId()`; a composite / UUID / char PK has no generated id, so
+     * the caller must have set all key columns before `save()`.
+     *
+     * @return bool Always true (failures throw).
+     */
+    protected function performInsert(): bool
+    {
+        $metadata = MetadataFactory::for(static::class);
+
+        // MTI: split the insert per table — root first (generating the id),
+        // then each descendant, in ONE transaction on a SQL connection.
+        if ($metadata->isMtiChild()) {
+            return $this->performMtiInsert($metadata);
+        }
+
+        $values = $this->getColumnValues();
+        $pks = static::getPrimaryKeys();
+
+        if (count($pks) === 1 && $pks[0]->autoIncrement) {
+            $this->setPrimaryKey($this->newQuery()->insertGetId($values));
+        } else {
+            $this->newQuery()->insert($values);
+        }
+
+        $this->exists = true;
+        $this->syncOriginal();
+
+        return true;
+    }
+
+    /**
+     * INSERT an MTI chain: root partition first (the generated id seeds
+     * every descendant's shared PK), then each level, all in one
+     * transaction.
+     *
+     * @param \BlueprintAU\Radiant\Metadata\ClassMetadata $metadata The child's metadata.
+     * @return bool Always true (failures throw and roll back).
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
+     *         When the connection is not SQL (transactions + joins are
+     *         required for the split write).
+     */
+    protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): bool
+    {
+        // Fail fast with the MTI-specific message: the insert splits across
+        // tables in one transaction, which only a SQL connection can do.
+        $connection = static::connection();
+
+        if (!$connection instanceof \BlueprintAU\Radiant\Database\Connections\SqlConnection) {
+            throw new \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException(
+                'Multi-table inheritance writes require a SQL connection (the insert splits across tables in one transaction).'
+            );
+        }
+
+        $pk = static::getPrimaryKeys()[0];
+        $pkName = $pk->name ?? throw new \LogicException(
+            'MTI requires a single named primary key on the root table.'
+        );
+
+        // Late static binding does NOT flow into a closure's
+        // get_parent_class()/static:: calls — the closure's scope is the
+        // defining class (Model). Capture the concrete class here and walk
+        // the chain from it.
+        $leafClass = static::class;
+
+        $connection->transaction(function () use ($connection, $metadata, $pkName, $leafClass): void {
+            // Walk root-first: each level's own columns go to its own table.
+            $chain = [];
+
+            for ($class = $leafClass; $class !== false; $class = get_parent_class($class)) {
+                if (!is_a($class, Model::class, true)) {
+                    continue;
+                }
+
+                $levelMetadata = MetadataFactory::for($class);
+
+                if ($levelMetadata->tableName === null) {
+                    continue;
+                }
+
+                $chain[] = [$levelMetadata, $levelMetadata->tableName];
+            }
+
+            // chain is child-first; reverse to insert the root first.
+            $chain = array_reverse($chain);
+
+            $generatedId = null;
+
+            foreach ($chain as [$levelMetadata, $levelTable]) {
+                $values = [];
+
+                foreach ($levelMetadata->properties as $mapping) {
+                    if ($metadata->tableFor($mapping->columnName) !== $levelTable) {
+                        continue; // another level's column
+                    }
+
+                    // The shared PK: root generates it, descendants copy it.
+                    if ($mapping->columnName === $pkName) {
+                        $value = $generatedId ?? ($this->original[$pkName] ?? $this->encodedPkValue($mapping));
+
+                        if ($value !== null) {
+                            $values[$pkName] = $value;
+                        }
+
+                        continue;
+                    }
+
+                    if ($mapping->property === null) {
+                        if (array_key_exists($mapping->columnName, $this->syntheticValues)) {
+                            $values[$mapping->columnName] = $mapping->column->encode(
+                                $this->syntheticValues[$mapping->columnName],
+                            );
+                        }
+                        continue;
+                    }
+
+                    if ($mapping->property->isInitialized($this) === false) {
+                        continue;
+                    }
+
+                    $values[$mapping->columnName] = $mapping->column->encode(
+                        $mapping->property->getValue($this),
+                    );
+                }
+
+                // ONLY the root table generates the id — the decision uses
+                // the ROOT's key (autoIncrement true there), not the child's
+                // derived clone (autoIncrement false by design).
+                $levelRoot = $generatedId === null;
+
+                if ($levelRoot) {
+                    unset($values[$pkName]);
+
+                    $builder = $connection->table($levelTable);
+
+                    if (self::rootAutoIncrement($leafClass)) {
+                        $generatedId = $builder->insertIdColumn($pkName)->insertGetId($values);
+                    } elseif (isset($values[$pkName])) {
+                        $generatedId = $values[$pkName]; // caller-assigned key
+                    } else {
+                        $builder->insert($values);
+                    }
+                } else {
+                    // Descendant: the shared id MUST ride along — the FK is
+                    // the link. The PK mapping's value was already copied
+                    // above when present; fill it from the generated id.
+                    if (!isset($values[$pkName])) {
+                        $values[$pkName] = $generatedId;
+                    }
+
+                    $connection->table($levelTable)->insert($values);
+                }
+            }
+
+            $this->setPrimaryKey($generatedId);
+        });
+
+        $this->exists = true;
+        $this->syncOriginal();
+
+        return true;
+    }
+
+    /**
+     * Whether the MTI chain's ROOT table has an auto-increment key.
+     *
+     * @param class-string<Model> $leafClass The child class.
+     * @return bool True when the root generates the id.
+     */
+    private static function rootAutoIncrement(string $leafClass): bool
+    {
+        $class = $leafClass;
+
+        while (true) {
+            $metadata = MetadataFactory::for($class);
+
+            if ($metadata->parentModel === null) {
+                return $metadata->primaryKeys[0]->autoIncrement;
+            }
+
+            $class = $metadata->parentModel;
+        }
+    }
+
+    /**
+     * The PK value from a typed property (encoded) for a NEW model — the
+     * caller-assigned key path (non-auto-increment roots).
+     *
+     * @param \BlueprintAU\Radiant\Metadata\PropertyMapping $mapping The PK mapping.
+     * @return string|int|null The encoded key value, or null when unset.
+     */
+    private function encodedPkValue(\BlueprintAU\Radiant\Metadata\PropertyMapping $mapping): string|int|null
+    {
+        if ($mapping->property === null || $mapping->property->isInitialized($this) === false) {
+            return null;
+        }
+
+        $value = $mapping->column->encode($mapping->property->getValue($this));
+
+        return is_string($value) || is_int($value) ? $value : null;
+    }
+
+    /**
+     * Write the generated id back onto the single auto-increment PK property.
+     *
+     * The id arrives as the codec's output (int or bigint-string). Writing
+     * it onto the typed property coerces it: `"42"` → int when the property
+     * is int; a bigint string that exceeds `PHP_INT_MAX` stays string. This
+     * is the type boundary — the codec normalizes dialect bytes, the model
+     * property owns the PHP type.
+     *
+     * @param string|int|null $id The generated id.
+     * @return void
+     */
+    protected function setPrimaryKey(string|int|null $id): void
+    {
+        if ($id === null) {
+            return;
+        }
+
+        $pk = static::getPrimaryKeys()[0];
+
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->columnName === $pk->name && $mapping->property !== null) {
+                $mapping->property->setValue($this, $id);
+                return;
+            }
+        }
+    }
+
+    /**
+     * UPDATE the dirty columns by primary key.
+     *
+     * @return bool Always true (failures throw).
+     */
+    protected function performUpdate(): bool
+    {
+        $dirty = $this->getDirty();
+
+        if ($dirty !== []) {
+            $this->newQuery()->whereKey($this->getKeyForRefresh())->update($dirty);
+        }
+
+        $this->syncOriginal();
+
+        return true;
+    }
+
+    /**
+     * UPDATE the dirty columns, split per owning table when the model is
+     * an MTI child. One UPDATE per dirty partition; a transaction wraps
+     * the writes only when they span more than one table.
+     *
+     * @return bool Always true (failures throw).
+     */
+    protected function performMtiUpdate(): bool
+    {
+        $metadata = MetadataFactory::for(static::class);
+        $dirty = $this->getDirty();
+
+        if ($dirty === []) {
+            $this->syncOriginal();
+
+            return true;
+        }
+
+        $key = $this->getKeyForRefresh();
+        $connection = static::connection();
+        $pks = static::getPrimaryKeys();
+
+        // Partition the dirty columns per owning table.
+        $perTable = [];
+
+        foreach ($dirty as $column => $value) {
+            $perTable[$metadata->tableFor($column)][$column] = $value;
+        }
+
+        $multiTable = count($perTable) > 1;
+
+        // A composite MTI key retargets every partition with the full key
+        // tuple (all levels share ALL key columns); a single key keeps the
+        // scalar form.
+        $composite = count($pks) > 1;
+
+        $apply = function () use ($perTable, $key, $connection, $pks, $composite): void {
+            foreach ($perTable as $table => $values) {
+                $query = $connection->table($table);
+
+                if ($composite) {
+                    foreach ($pks as $pk) {
+                        if ($pk->name !== null) {
+                            $query->where($pk->name, '=', $key[$pk->name] ?? null);
+                        }
+                    }
+                } else {
+                    $query->where($pks[0]->name ?? 'id', '=', $key);
+                }
+
+                $query->update($values);
+            }
+        };
+
+        if ($multiTable) {
+            // A multi-table update must be atomic — SQL-only, narrowed
+            // fail-fast (UnsupportedFeatureException on a non-SQL backend),
+            // no @var docblock needed.
+            SqlConnection::from($connection)->transaction($apply);
+        } else {
+            $apply();
+        }
+
+        $this->syncOriginal();
+
+        return true;
+    }
+
+    // ---- Dirty tracking ----
+
+    /**
+     * The columns changed since the last sync, keyed by column name with
+     * their encoded (bindable) values.
+     *
+     * @return array<string, mixed> The dirty column values.
+     */
+    protected function getDirty(): array
+    {
+        $dirty = [];
+
+        foreach ($this->getColumnValues() as $column => $value) {
+            if (!array_key_exists($column, $this->original) || $this->original[$column] != $value) {
+                $dirty[$column] = $value;
+            }
+        }
+
+        return $dirty;
+    }
+
+    /**
+     * Snapshot the current column values as the hydration-time original.
+     *
+     * @return void
+     */
+    protected function syncOriginal(): void
+    {
+        $this->original = $this->getColumnValues();
+    }
+
+    /**
+     * The model's primary-key value for re-targeting the row.
+     *
+     * A single PK returns its loaded (original) value; a composite PK
+     * returns an associative array of column => value.
+     *
+     * @return KeyValue The key value, or a column => value map.
+     */
+    public function getKeyForRefresh(): mixed
+    {
+        $pks = static::getPrimaryKeys();
+
+        if (count($pks) === 1 && $pks[0]->name !== null) {
+            return $this->original[$pks[0]->name] ?? null;
+        }
+
+        $key = [];
+
+        foreach ($pks as $pk) {
+            if ($pk->name !== null) {
+                $key[$pk->name] = $this->original[$pk->name] ?? null;
+            }
+        }
+
+        return $key;
+    }
+
+    // ---- Hydration (reconstitution, not creation) ----
+
+    /**
+     * Reconstitute a model from a raw row.
+     *
+     * Hydration does NOT run the constructor — the instance is created
+     * without it and each column property is decoded through its column's
+     * cast. A `\DateTimeInterface`-typed property re-bases the decoded
+     * Carbon to the property's concrete class when the two differ.
+     *
+     * @param \stdClass $row The raw row (stdClass), keyed by column name.
+     * @return static The hydrated model.
+     */
+    public static function fromRow(\stdClass $row): static
+    {
+        $instance = (new \ReflectionClass(static::class))->newInstanceWithoutConstructor();
+
+        foreach (static::getProperties() as $mapping) {
+            $columnName = $mapping->columnName;
+
+            if (!property_exists($row, $columnName)) {
+                continue;
+            }
+
+            if ($mapping->property === null) {
+                // Synthetic column — no property slot to hydrate. Seed the
+                // snapshot directly: the raw bytes ARE the encoded space
+                // `$original` lives in, so no decode/encode round-trip is
+                // needed (or wanted). For synthetic mappings
+                // `propertyName === columnName` by construction (the
+                // factory creates them from the same name), so this key
+                // matches the rest of the column-keyed snapshot.
+                $instance->original[$columnName] = $row->{$columnName};
+                continue;
+            }
+
+            $instance->hydrateProperty($mapping, $mapping->column->decode($row->{$columnName}));
+        }
+
+        $instance->exists = true;
+        $instance->syncOriginal();
+
+        return $instance;
+    }
+
+    /**
+     * Write one decoded value onto the instance.
+     *
+     * A `\DateTimeInterface`-typed property re-bases a decoded Carbon to
+     * the property's concrete class (`CarbonImmutable`, `DateTime`,
+     * custom subclasses) via `createFromInterface()` — the cast never
+     * needs to know the concrete class.
+     *
+     * @param PropertyMapping $mapping The column mapping.
+     * @param mixed $value The decoded value.
+     * @return void
+     */
+    private function hydrateProperty(PropertyMapping $mapping, mixed $value): void
+    {
+        $property = $mapping->property;
+
+        if ($property === null) {
+            return;
+        }
+
+        $propertyType = $mapping->column->propertyType;
+
+        if (
+            $value instanceof \DateTimeInterface
+            && $propertyType !== null
+            && $value::class !== $propertyType
+            && is_a($propertyType, \DateTimeInterface::class, true)
+        ) {
+            // DateTimeImmutable::createFromInterface etc. exist on every
+            // concrete datetime class, but not on the interface itself —
+            // reflect the method off the concrete class-string so PHPStan
+            // sees a verified call, not a static guess.
+            $method = new \ReflectionMethod($propertyType, 'createFromInterface');
+            $value = $method->invoke(null, $value);
+        }
+
+        $property->setValue($this, $value);
+    }
+
+    /**
+     * Read a column's current value by DB column name — works for BOTH
+     * typed-property columns and synthetic columns (which hold no PHP
+     * property, so there is nothing to read except through here).
+     *
+     * A synthetic column resolves in priority order: a post-load runtime
+     * override ({@see Model::setAttribute()}) first, then the loaded value
+     * decoded out of {@see Model::$original} on demand — the store only
+     * exists because the column has no typed property to read.
+     *
+     * @param string $columnName The DB column name.
+     * @return mixed The decoded (typed-property-shaped) value, or null when
+     *         unset.
+     */
+    public function attribute(string $columnName): mixed
+    {
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->columnName !== $columnName) {
+                continue;
+            }
+
+            if ($mapping->property === null) {
+                // Runtime override wins; else decode the loaded snapshot.
+                if (array_key_exists($columnName, $this->syntheticValues)) {
+                    return $this->syntheticValues[$columnName];
+                }
+
+                $encoded = $this->original[$columnName] ?? null;
+
+                return $encoded === null ? null : $mapping->column->decode($encoded);
+            }
+
+            if ($mapping->property->isInitialized($this) === false) {
+                return null;
+            }
+
+            return $mapping->property->getValue($this);
+        }
+
+        throw new \InvalidArgumentException(
+            'Unknown column [' . $columnName . '] on model [' . static::class . '].'
+        );
+    }
+
+    /**
+     * Write a synthetic column's runtime value.
+     *
+     * Synthetic columns have no typed property to hold a value — this store
+     * is their ONLY writable slot. A column backed by a typed property is
+     * written through the property itself (`$model->columnName = ...`):
+     * writing it here would silently diverge from what the property reads,
+     * so it fails fast instead.
+     *
+     * @param string $columnName The DB column name.
+     * @param mixed $value The decoded (typed) value.
+     * @return void
+     * @throws \InvalidArgumentException When the column is backed by a
+     *         typed property (write the property directly), or is unknown.
+     */
+    public function setAttribute(string $columnName, mixed $value): void
+    {
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->columnName !== $columnName) {
+                continue;
+            }
+
+            if ($mapping->property !== null) {
+                throw new \InvalidArgumentException(
+                    'Column [' . $columnName . '] on model [' . static::class . '] is backed by a typed '
+                    . 'property; write the property directly instead of setAttribute().'
+                );
+            }
+
+            $this->syntheticValues[$columnName] = $value;
+
+            return;
+        }
+
+        throw new \InvalidArgumentException(
+            'Unknown column [' . $columnName . '] on model [' . static::class . '].'
+        );
+    }
+
+    // ---- Metadata (delegating to the MetadataFactory cache) ----
+
+    /**
+     * The class's merged column mappings, keyed by property name.
+     *
+     * @return PropertyMapping[] The merged mappings.
+     */
+    protected static function getProperties(): array
+    {
+        return MetadataFactory::for(static::class)->properties;
+    }
+
+    /**
+     * The class's primary-key column declarations.
+     *
+     * @return list<Column> The primary-key columns.
+     */
+    protected static function getPrimaryKeys(): array
+    {
+        return MetadataFactory::for(static::class)->primaryKeys;
+    }
+
+    /**
+     * The current column values, keyed by column name with their encoded
+     * (bindable) values.
+     *
+     * Unset (uninitialized) typed properties are skipped — a partial model
+     * writes only what it holds. Synthetic columns contribute their
+     * runtime value when set.
+     *
+     * @return array<string, mixed> column => encoded value
+     */
+    protected function getColumnValues(): array
+    {
+        $values = [];
+
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->property === null) {
+                // Synthetic column — the runtime store holds the value when
+                // a trait has written one post-load; otherwise the loaded
+                // snapshot stands (seeded at hydration from the raw row).
+                // Without the fallback, `syncOriginal()` would silently
+                // drop the loaded value on every save.
+                if (array_key_exists($mapping->columnName, $this->syntheticValues)) {
+                    $values[$mapping->columnName] = $mapping->column->encode(
+                        $this->syntheticValues[$mapping->columnName],
+                    );
+                } elseif (array_key_exists($mapping->columnName, $this->original)) {
+                    $values[$mapping->columnName] = $this->original[$mapping->columnName];
+                }
+                continue;
+            }
+
+            if ($mapping->property->isInitialized($this) === false) {
+                continue;
+            }
+
+            $values[$mapping->columnName] = $mapping->column->encode(
+                $mapping->property->getValue($this),
+            );
+        }
+
+        return $values;
+    }
+
+    /**
+     * Encode a single value for a column (used by traits writing raw values).
+     *
+     * @param string $columnName The DB column name.
+     * @param mixed $value The typed property value.
+     * @return mixed The bindable value.
+     */
+    protected function castForWrite(string $columnName, mixed $value): mixed
+    {
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->columnName === $columnName) {
+                return $mapping->column->encode($value);
+            }
+        }
+
+        return $value;
+    }
+
+    // ---- Relations ----
+
+    /**
+     * A one-to-many relation: this model's key is referenced by the
+     * related table's FK.
+     *
+     * Declared as a method so it composes: `$user->posts()->where(...)`
+     * keeps the constraint and adds to it. Override the FK with
+     * `$foreignKey` when the column is not the snake_case default.
+     *
+     * Composite keys: when this model has a composite PK, `$localKey`
+     * defaults to the full PK column list — and `$foreignKey` must then be
+     * declared explicitly as a matching column list (a composite FK cannot
+     * be derived by convention).
+     *
+     * @param string|list<string>|null $foreignKey The FK column (or column
+     *        list) on the related table.
+     * @param string|list<string>|null $localKey The key column (or column
+     *        list) on this table.
+     * @return Relations\HasMany<TRelated> The relation (a lazily-executed query).
+     * @throws \InvalidArgumentException When the FK column does not exist
+     *         on the related model.
+     *
+     * @template TRelated of Model
+     * @param class-string<TRelated> $related The related model class.
+     */
+    protected function hasMany(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasMany
+    {
+        $localKey ??= self::defaultLocalKey();
+        $foreignKey ??= self::defaultForeignKeyFor($localKey);
+
+        self::assertColumnExists($related, $foreignKey, 'foreign key');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return new Relations\HasMany($this, $related, $foreignKey, $localKey);
+    }
+
+    /**
+     * Composite keys follow the same rules as {@see Model::hasMany()}.
+     *
+     * @param string|list<string>|null $foreignKey The FK column (or column
+     *        list) on the related table.
+     * @param string|list<string>|null $localKey The key column (or column
+     *        list) on this table.
+     * @return Relations\HasOne<TRelated> The relation.
+     * @throws \InvalidArgumentException When the FK column does not exist
+     *         on the related model.
+     *
+     * @template TRelated of Model
+     * @param class-string<TRelated> $related The related model class.
+     */
+    protected function hasOne(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasOne
+    {
+        $localKey ??= self::defaultLocalKey();
+        $foreignKey ??= self::defaultForeignKeyFor($localKey);
+
+        self::assertColumnExists($related, $foreignKey, 'foreign key');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return new Relations\HasOne($this, $related, $foreignKey, $localKey);
+    }
+
+    /**
+     * The inverse relation: this model's table holds the FK.
+     *
+     * Composite keys: when the related model has a composite PK, `$ownerKey`
+     * defaults to its full PK column list — and `$foreignKey` must then be
+     * declared explicitly as a matching column list.
+     *
+     * @param string|list<string>|null $foreignKey The FK column (or column
+     *        list) on THIS table.
+     * @param string|list<string>|null $ownerKey The key column (or column
+     *        list) on the related table.
+     * @return Relations\BelongsTo<TRelated> The relation.
+     * @throws \InvalidArgumentException When the FK column does not exist
+     *         on this model.
+     *
+     * @template TRelated of Model
+     * @param class-string<TRelated> $related The related (owning) model class.
+     */
+    protected function belongsTo(string $related, string|array|null $foreignKey = null, string|array|null $ownerKey = null): Relations\BelongsTo
+    {
+        $ownerKey ??= self::defaultLocalKeyOf($related);
+        $foreignKey ??= self::defaultForeignKeyFromKey($ownerKey, $related);
+
+        self::assertColumnExists(static::class, $foreignKey, 'foreign key');
+        self::assertColumnExists($related, $ownerKey, 'owner key');
+
+        return new Relations\BelongsTo($this, $related, $foreignKey, $ownerKey);
+    }
+
+    /**
+     * A two-hop relation through an intermediate model.
+     *
+     * `hasOneThrough(Owner::class, Car::class)` — the intermediate model
+     * is the SECOND argument; the FKs derive from the snake_case convention
+     * and are overridable for non-standard keys. Composite keys are declared
+     * as matching column lists on every side that is composite.
+     *
+     * @param string|list<string>|null $firstKey FK column (or list) on the
+     *        intermediate table → this model.
+     * @param string|list<string>|null $secondKey FK column (or list) on the
+     *        related table → intermediate.
+     * @param string|list<string>|null $localKey The key column (or list) on
+     *        this table.
+     * @return Relations\HasOneThrough<TRelated> The relation.
+     * @throws \InvalidArgumentException When any derived column does not
+     *         exist on its model.
+     *
+     * @template TRelated of Model
+     * @param class-string<TRelated> $related The final related model class.
+     * @param class-string<Model> $through The intermediate model class.
+     */
+    protected function hasOneThrough(
+        string $related,
+        string $through,
+        string|array|null $firstKey = null,
+        string|array|null $secondKey = null,
+        string|array|null $localKey = null,
+    ): Relations\HasOneThrough {
+        $localKey ??= self::defaultLocalKey();
+        $firstKey ??= self::defaultForeignKeyFor($localKey);
+        $secondKey ??= self::defaultForeignKeyFrom($through);
+
+        self::assertColumnExists($through, $firstKey, 'first key');
+        self::assertColumnExists($related, $secondKey, 'second key');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return new Relations\HasOneThrough($this, $related, $through, $firstKey, $secondKey, $localKey);
+    }
+
+    /**
+     * A one-to-many two-hop relation through an intermediate model.
+     *
+     * @param string|list<string>|null $firstKey FK column (or list) on the
+     *        intermediate table → this model.
+     * @param string|list<string>|null $secondKey FK column (or list) on the
+     *        related table → intermediate.
+     * @param string|list<string>|null $localKey The key column (or list) on
+     *        this table.
+     * @return Relations\HasManyThrough<TRelated> The relation.
+     * @throws \InvalidArgumentException When any derived column does not
+     *         exist on its model.
+     *
+     * @template TRelated of Model
+     * @param class-string<TRelated> $related The final related model class.
+     * @param class-string<Model> $through The intermediate model class.
+     */
+    protected function hasManyThrough(
+        string $related,
+        string $through,
+        string|array|null $firstKey = null,
+        string|array|null $secondKey = null,
+        string|array|null $localKey = null,
+    ): Relations\HasManyThrough {
+        $localKey ??= self::defaultLocalKey();
+        $firstKey ??= self::defaultForeignKeyFor($localKey);
+        $secondKey ??= self::defaultForeignKeyFrom($through);
+
+        self::assertColumnExists($through, $firstKey, 'first key');
+        self::assertColumnExists($related, $secondKey, 'second key');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return new Relations\HasManyThrough($this, $related, $through, $firstKey, $secondKey, $localKey);
+    }
+
+    /**
+     * Cache a relation's loaded result on the instance.
+     *
+     * Written by the eager loader; a relation method's lazy access never
+     * consults the cache.
+     *
+     * @param string $name The relation name (the relation method's name).
+     * @param Model|Collection<Model>|null $value The loaded result — a
+     *        single related model (HasOne/BelongsTo), a collection
+     *        (HasMany/through), or null (an empty single-valued relation).
+     * @return static The model.
+     */
+    public function setRelation(string $name, Model|Collection|null $value): static
+    {
+        $this->relations[$name] = $value;
+
+        return $this;
+    }
+
+    /**
+     * A loaded relation's cached result.
+     *
+     * Pass `$related` to TYPE the result — the conditional return narrows
+     * it statically: `$user->getRelation('posts', Post::class)` reads as
+     * `Post|Collection<Post>|null` with no local instanceof dance, and the
+     * narrowing is BACKED by a runtime check (a mismatch throws — a
+     * name/class pair that disagrees is a caller bug, not an empty result).
+     * Callers who want the loose contract omit the arg and keep
+     * `Model|Collection<Model>|null`.
+     *
+     * @param string $name The relation name.
+     * @template TRelated of Model
+     * @param class-string<TRelated>|null $related The expected related model
+     *        class. Null keeps the untyped `Model|Collection|null` contract.
+     * @return ($related is null ? Model|Collection<Model>|null : TRelated|Collection<TRelated>|null) The cached
+     *         result, or null when not loaded (or loaded empty). With
+     *         `$related`, runtime-verified to be `TRelated` (single) or a
+     *         collection of `TRelated` items.
+     * @throws \InvalidArgumentException When `$related` is given and the
+     *         cached relation's class does not match it.
+     */
+    public function getRelation(string $name, ?string $related = null): Model|Collection|null
+    {
+        $value = $this->relations[$name] ?? null;
+
+        if (!$value instanceof Model && !$value instanceof Collection) {
+            return null;
+        }
+
+        if ($related !== null) {
+            if ($value instanceof Model) {
+                if (!$value instanceof $related) {
+                    throw new \InvalidArgumentException(
+                        'Relation [' . $name . '] on [' . static::class . '] holds a ['
+                        . $value::class . '] but [' . $related . '] was expected.'
+                    );
+                }
+
+                return $value;
+            }
+
+            foreach ($value as $item) {
+                if (!$item instanceof $related) {
+                    throw new \InvalidArgumentException(
+                        'Relation [' . $name . '] on [' . static::class . '] holds a collection with a ['
+                        . $item::class . '] item but [' . $related . '] was expected.'
+                    );
+                }
+            }
+
+            return $value;
+        }
+
+        return $value;
+    }
+
+    /**
+     * Whether a relation has been (eager-)loaded on this instance.
+     *
+     * @param string $name The relation name.
+     * @return bool True when the relation result is cached.
+     */
+    public function relationLoaded(string $name): bool
+    {
+        return array_key_exists($name, $this->relations);
+    }
+
+    /**
+     * The FK default for a relation keyed off `$localKey` (this model's).
+     *
+     * @param string|list<string> $localKey The local key the FK mirrors.
+     * @return string The FK default (a scalar column).
+     * @throws \LogicException When the local key is composite.
+     */
+    private static function defaultForeignKeyFor(string|array $localKey): string
+    {
+        self::assertDerivableKey($localKey);
+
+        return self::defaultForeignKey();
+    }
+
+    /**
+     * The FK default for a belongsTo keyed off `$ownerKey` (pointing at
+     * `$related`).
+     *
+     * @param string|list<string> $ownerKey The owner key the FK mirrors.
+     * @param class-string<Model> $related The model the FK references.
+     * @return string The FK default (a scalar column).
+     * @throws \LogicException When the owner key is composite.
+     */
+    private static function defaultForeignKeyFromKey(string|array $ownerKey, string $related): string
+    {
+        self::assertDerivableKey($ownerKey);
+
+        return self::defaultForeignKeyFrom($related);
+    }
+
+    /**
+     * Fail fast when a composite key cannot derive its FK counterpart.
+     *
+     * There is no naming convention for a column tuple — the caller must
+     * declare both sides explicitly.
+     *
+     * @param string|list<string> $key The key whose counterpart is wanted.
+     * @return void
+     * @throws \LogicException When the key is composite.
+     */
+    private static function assertDerivableKey(string|array $key): void
+    {
+        if (is_array($key)) {
+            throw new \LogicException(
+                'A relation over a composite key cannot derive its counterpart columns by '
+                . 'convention; declare both sides explicitly as matching column lists, e.g. '
+                . 'hasMany(Post::class, [\'region_id\', \'country\']).'
+            );
+        }
+    }
+
+    /**
+     * The snake_case foreign-key default for THIS model: its short class
+     * name + `_id`.
+     *
+     * @return string The FK column name.
+     */
+    private static function defaultForeignKey(): string
+    {
+        $short = (new \ReflectionClass(static::class))->getShortName();
+
+        return strtolower((string) preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $short)) . '_id';
+    }
+
+    /**
+     * The snake_case foreign-key default pointing AT another model: that
+     * model's short class name + `_id` (the belongsTo direction).
+     *
+     * @param class-string<Model> $related The model the FK references.
+     * @return string The FK column name.
+     */
+    private static function defaultForeignKeyFrom(string $related): string
+    {
+        $short = (new \ReflectionClass($related))->getShortName();
+
+        return strtolower((string) preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $short)) . '_id';
+    }
+
+    /**
+     * THIS model's primary-key column(s) (the local-key default).
+     *
+     * A single PK returns the column name; a composite PK returns the full
+     * column list — the relation then carries BOTH sides as lists, and the
+     * FK side must be declared explicitly (no naming convention exists for
+     * a tuple).
+     *
+     * @return string|list<string> The PK column name, or the column list.
+     * @throws \LogicException When the model has no primary key at all.
+     */
+    private static function defaultLocalKey(): string|array
+    {
+        return self::primaryKeyNamesOf(static::class);
+    }
+
+    /**
+     * Another model's primary-key column(s) (the owner-key default).
+     *
+     * @param class-string<Model> $related The model whose PK to resolve.
+     * @return string|list<string> The PK column name, or the column list.
+     * @throws \LogicException When the model has no primary key at all.
+     */
+    private static function defaultLocalKeyOf(string $related): string|array
+    {
+        return self::primaryKeyNamesOf($related);
+    }
+
+    /**
+     * A model's primary-key column name(s).
+     *
+     * @param class-string<Model> $class The model to resolve.
+     * @return string|list<string> The single column name, or the column list.
+     * @throws \LogicException When the model declares no primary key, or a
+     *         PK column resolves without a name (never happens post-build —
+     *         the factory names every column — but the guard keeps the
+     *         contract provable).
+     */
+    private static function primaryKeyNamesOf(string $class): string|array
+    {
+        $keys = MetadataFactory::for($class)->primaryKeys;
+
+        if ($keys === []) {
+            throw new \LogicException(
+                "Relation endpoints require a primary key; model [{$class}] declares none."
+            );
+        }
+
+        $names = [];
+
+        foreach ($keys as $key) {
+            if ($key->name === null) {
+                throw new \LogicException(
+                    "Relation endpoints require a named primary key; model [{$class}] has one without a name."
+                );
+            }
+
+            $names[] = $key->name;
+        }
+
+        return count($names) === 1 ? $names[0] : $names;
+    }
+
+    /**
+     * Fail fast when a column does not exist on a model.
+     *
+     * @param class-string<Model> $model The model the column must exist on.
+     * @param string|list<string> $column The column name (or column list).
+     * @param string $role What the column is (for the message).
+     * @return void
+     * @throws \InvalidArgumentException When the column is unknown.
+     */
+    private static function assertColumnExists(string $model, string|array $column, string $role): void
+    {
+        foreach (is_array($column) ? $column : [$column] as $name) {
+            self::assertSingleColumnExists($model, $name, $role);
+        }
+    }
+
+    /**
+     * Fail fast when ONE column does not exist on a model.
+     *
+     * @param class-string<Model> $model The model the column must exist on.
+     * @param string $column The column name.
+     * @param string $role What the column is (for the message).
+     * @return void
+     * @throws \InvalidArgumentException When the column is unknown.
+     */
+    private static function assertSingleColumnExists(string $model, string $column, string $role): void
+    {
+        $metadata = MetadataFactory::for($model);
+
+        foreach ($metadata->properties as $mapping) {
+            if ($mapping->columnName === $column) {
+                return;
+            }
+        }
+
+        throw new \InvalidArgumentException(
+            "Unknown {$role} column [{$column}] on model [{$model}]. A relation's columns "
+            . 'must match the model\'s declared column names.'
+        );
+    }
+}

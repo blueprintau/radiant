@@ -47,6 +47,8 @@
     },
     "scripts": {
         "test": "phpunit",
+        "test:integration": "phpunit --group integration-remote-sql",
+        "test:all": "phpunit --group default,integration-remote-sql",
         "analyse": "phpstan analyse --memory-limit=512M",
         "security:audit": "composer audit --locked"
     },

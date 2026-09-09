@@ -8,6 +8,8 @@ use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\MySqlGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 
 /**
  * A database connection backed by MySQL.
@@ -40,6 +42,16 @@ final class MySqlConnection extends SqlConnection
     protected function getDefaultSchemaGrammar(): SchemaGrammar
     {
         return new MySqlSchemaGrammar();
+    }
+
+    /**
+     * The dialect's live-schema reader ({@see SchemaInspector}).
+     *
+     * @return MySqlSchemaInspector The live-schema inspector.
+     */
+    protected function getDefaultSchemaInspector(): SchemaInspector
+    {
+        return new MySqlSchemaInspector($this->pdo);
     }
 
     /**

@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema;
 
+use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Attributes\ReferenceResolver;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
+use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
  * A fluent column definition for a `CREATE TABLE` / `ALTER TABLE`.
@@ -35,6 +39,44 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 final class Blueprint
 {
     /**
+     * The table this blueprint builds — REQUIRED at construction so index
+     * names can be derived to their FINAL form (with the table prefix and
+     * kind suffix) the moment they are declared. A name on the blueprint
+     * is always the name the database will see; the grammar renders it
+     * verbatim. Consumers (grammars, differ, connection) read it via
+     * {@see getTable()} — no parallel $table parameters anywhere.
+     *
+     * @var string
+     */
+    private readonly string $table;
+
+    /**
+     * Create a table-bound blueprint.
+     *
+     * The table is REQUIRED: the blueprint owns the table name (index
+     * names derive to their final form at declaration time from it), so
+     * every downstream consumer — grammars, the differ, the connection —
+     * reads it from {@see getTable()} instead of carrying a parallel
+     * `$table` parameter that could disagree with the blueprint.
+     *
+     * @param string $table The table the blueprint builds.
+     */
+    public function __construct(string $table)
+    {
+        $this->table = $table;
+    }
+
+    /**
+     * The table this blueprint builds.
+     *
+     * @return string The table name the blueprint is bound to.
+     */
+    final public function getTable(): string
+    {
+        return $this->table;
+    }
+
+    /**
      * The columns to create, in declaration order.
      *
      * @var list<ColumnShape>
@@ -49,33 +91,130 @@ final class Blueprint
     private array $dropColumns = [];
 
     /**
-     * Indexes (single or composite), each with its own name.
+     * Indexes (single or composite), each with its FINAL name.
+     *
+     * Every name stored here is exactly what the database will see: user-
+     * set names pass through verbatim; derived names are built at
+     * declaration time via {@see Blueprint::deriveIndexName()} (table
+     * prefix + columns + kind suffix). The grammar renders them verbatim —
+     * it makes NO naming decisions, so the differ and the collision checks
+     * read the same final names.
      *
      * @var list<array{name: string, columns: list<string>, unique: bool}>
      */
     private array $indexes = [];
 
     /**
+     * Derive the FINAL index name from its kind and columns.
+     *
+     * Mirrors the framework consensus (Laravel's `createIndexName`, built
+     * at blueprint time; SQLAlchemy's naming conventions): the derivation
+     * needs the table + columns, both available HERE — not at render time.
+     * Shape: `{table}_{columns}_{kind}` for plain indexes, `{table}_{columns}_unique`
+     * for uniques (the kind suffix says WHAT the index is, so a unique and
+     * a plain index over the same columns can coexist).
+     *
+     * @param list<string> $columns The covered columns.
+     * @param bool $unique Whether the index is unique.
+     * @return string The final index name.
+     */
+    private function deriveIndexName(array $columns, bool $unique): string
+    {
+        return implode('_', [$this->table, ...$columns, $unique ? 'unique' : 'index']);
+    }
+
+    /**
+     * Normalize a `foreign` reference to its `table.column` form.
+     *
+     * Accepted inputs:
+     * - `table.column` — passes through (already explicit).
+     * - `table` — references that table's primary key; resolved as
+     *   `table.id` (the package's PK convention).
+     * - a model class-string (contains `\`) — resolves to its table via
+     *   the shared {@see \BlueprintAU\Radiant\Attributes\ReferenceResolver},
+     *   and the PK column comes from the referenced model's metadata when
+     *   it declares a single PK (a composite PK has no single default —
+     *   the caller must use the explicit `table.column` form).
+     *
+     * @param class-string<\BlueprintAU\Radiant\Model>|string $foreign The raw reference.
+     * @param string $column The local column name (for the message).
+     * @return string The normalized `table.column` reference.
+     * @throws \InvalidArgumentException When the reference is malformed or
+     *         a model reference cannot resolve.
+     */
+    private function normalizeForeignReference(string $foreign, string $column): string
+    {
+        // Already explicit `table.column`.
+        if (str_contains($foreign, '.')) {
+            if (count(explode('.', $foreign)) !== 2) {
+                throw new \InvalidArgumentException(
+                    'Foreign key reference must be "table.column"; got ' . $foreign . '.'
+                );
+            }
+
+            return $foreign;
+        }
+
+        $table = ReferenceResolver::resolve($foreign);
+
+        // The referenced model's single PK (if declared) gives the column;
+        // fall back to the package's `id` convention for tables the ORM
+        // does not own. resolve() already guaranteed a Model when the
+        // reference contains a backslash — this branch only runs for
+        // model-shaped references, and resolve() guaranteed the class
+        // exists AND is a Model; assert it for the type system.
+        $pkColumn = 'id';
+
+        if (str_contains($foreign, '\\')) {
+            if (!is_a($foreign, Model::class, true)) {
+                throw new \LogicException(
+                    "Reference [{$foreign}] resolved as a model but is not one."
+                );
+            }
+
+            $pks = MetadataFactory::for($foreign)->primaryKeys;
+
+            if (count($pks) === 1) {
+                $pkColumn = $pks[0]->name ?? $pkColumn;
+            } elseif (count($pks) > 1) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Column [%s] references model [%s], which has a composite primary '
+                    . 'key; a single-column foreign key cannot reference it. Declare a '
+                    . 'class-level #[ForeignKey(columns: [...], references: %s::class)] '
+                    . 'with the full column list instead.',
+                    $column,
+                    $foreign,
+                    (new \ReflectionClass($foreign))->getShortName(),
+                ));
+            }
+        }
+
+        return $table . '.' . $pkColumn;
+    }
+
+    /**
      * Add an index over one or more columns.
      *
-     * A single column gets a custom-named index; multiple columns form a
-     * composite. The name is used (prefixed by the table) for the
-     * `CREATE INDEX` statement.
+     * A single column gets a derived name; multiple columns form a
+     * composite. When `$name` is given it is the WHOLE final name (user-set
+     * names pass through verbatim — no prefix, no suffix); when omitted the
+     * name is derived to its final form here, so anything downstream (the
+     * grammar, the differ, the collision checks) reads the same string.
      *
-     * @param string $name The index name (also used for the `CREATE INDEX`).
+     * @param string|null $name The final index name, or null to derive.
      * @param list<string> $columns The columns to index.
      * @param bool $unique Whether the index is unique.
      * @return $this
      * @throws \InvalidArgumentException When no columns are given.
      */
-    public function index(string $name, array $columns, bool $unique = false): static
+    public function index(?string $name, array $columns, bool $unique = false): static
     {
         if ($columns === []) {
             throw new \InvalidArgumentException('An index requires at least one column.');
         }
 
         $this->indexes[] = [
-            'name' => $name,
+            'name' => $name ?? $this->deriveIndexName($columns, $unique),
             'columns' => $columns,
             'unique' => $unique,
         ];
@@ -117,6 +256,20 @@ final class Blueprint
         ForeignKeyAction|string|null $onDelete = null,
         ForeignKeyAction|string|null $onUpdate = null,
     ): static {
+        // Fail fast at DECLARATION, and NORMALIZE the reference to
+        // `table.column` so the getter is a pure read. Two accepted forms:
+        //   - `table.column` — a plain reference.
+        //   - `table` (or a model class-string) — references THAT table's
+        //     primary key; a model class-string resolves to its table via
+        //     the shared {@see ReferenceResolver} (the same convention the
+        //     class-level #[ForeignKey] uses), and the PK column name is
+        //     taken from the referenced model's primary key when one is
+        //     declared (a table with no single PK must use the explicit
+        //     `table.column` form).
+        if ($foreign !== null) {
+            $foreign = $this->normalizeForeignReference($foreign, $name);
+        }
+
         $this->columns[] = [
             'type' => $type,
             'name' => $name,
@@ -131,6 +284,18 @@ final class Blueprint
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
             'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
         ];
+
+        // A flagged plain index derives its FINAL name at DECLARATION time
+        // (`unique: true` rides the column's inline UNIQUE constraint, so
+        // no separate index). Getters stay pure reads.
+        if ($index === true && $unique !== true) {
+            $this->indexes[] = [
+                'name' => $this->deriveIndexName([$name], false),
+                'columns' => [$name],
+                'unique' => false,
+            ];
+        }
+
         return $this;
     }
 
@@ -246,10 +411,11 @@ final class Blueprint
     /**
      * Foreign-key constraints — derived single-column plus explicit composite.
      *
-     * Single-column FKs come from columns declared with `foreign` (parsed
-     * from the `table.column` reference). Explicit {@see foreignKey()}
-     * declarations (single or composite) are appended after. Each entry's
-     * `references` is `[table, ...columns]`.
+     * Single-column FKs come from columns declared with `foreign` (the
+     * `table.column` reference was VALIDATED at {@see column()} time);
+     * explicit {@see foreignKey()} declarations (single or composite) are
+     * appended after. Each entry's `references` is `[table, ...columns]`.
+     * No derivation happens here — pure read.
      *
      * @return list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null}>
      */
@@ -262,16 +428,11 @@ final class Blueprint
                 continue;
             }
 
-            $reference = explode('.', $column['foreign']);
-            if (count($reference) !== 2) {
-                throw new \InvalidArgumentException(
-                    'Foreign key reference must be "table.column"; got ' . $column['foreign'] . '.'
-                );
-            }
+            [$table, $referenced] = explode('.', $column['foreign']);
 
             $foreignKeys[] = [
                 'columns' => [$column['name']],
-                'references' => [$reference[0], $reference[1]],
+                'references' => [$table, $referenced],
                 'onDelete' => $column['onDelete'],
                 'onUpdate' => $column['onUpdate'],
             ];
@@ -313,29 +474,183 @@ final class Blueprint
     }
 
     /**
-     * The indexes — derived single-column plus explicit composite.
-     *
-     * Single-column indexes come from columns declared with `index: true`
-     * (named by the column), unless the column is also `unique: true` (the
-     * inline UNIQUE constraint already covers it). Explicit {@see index()}
-     * declarations (single or composite) are appended after.
+     * The indexes — every index declared on the blueprint, each with its
+     * FINAL name (derived at declaration time from the bound table, or
+     * user-set verbatim). Pure read: no derivation happens here.
      *
      * @return list<array{name: string, columns: list<string>, unique: bool}>
      */
     public function getIndexes(): array
     {
-        $indexes = [];
+        return $this->indexes;
+    }
 
-        foreach ($this->columns as $column) {
-            if ($column['index'] === true && $column['unique'] !== true) {
-                $indexes[] = [
-                    'name' => $column['name'],
-                    'columns' => [$column['name']],
-                    'unique' => false,
-                ];
+    /**
+     * Build the desired-state Blueprint for a model from its cached
+     * metadata — the one place ORM metadata and DDL meet.
+     *
+     * A pure mapping, no I/O: every `#[Column]` (whichever ancestor
+     * declared it — the metadata is the MERGED view) folds into a
+     * `column()` call; `#[Column]` flags (unique/index/foreign) ride the
+     * same call; the class-level `#[Unique]` / `#[ForeignKey]` /
+     * `#[CompositeIndex]` attributes become explicit `index()` /
+     * `foreignKey()` declarations (with the duplicate-declaration rule
+     * already enforced at metadata build, so a flag and an attribute can
+     * never double-declare here).
+     *
+     * @param class-string<Model> $model The model class.
+     * @return static The desired-state blueprint.
+     * @throws \InvalidArgumentException When the model resolves no table
+     *         (a column-less model has nothing to sync).
+     */
+    public static function fromMetadata(string $model): static
+    {
+        $metadata = MetadataFactory::for($model);
+        $tableName = $metadata->tableName;
+
+        if ($tableName === null) {
+            throw new \InvalidArgumentException(
+                "Model [{$model}] owns no table (no columns of its own); there is "
+                . 'nothing to build a blueprint for.'
+            );
+        }
+
+        $blueprint = new static($tableName);
+
+        // MTI children: the child table holds ONLY the child's own columns
+        // plus the derived key — the inherited columns live on the parent's
+        // table (that is what multi-table inheritance means). The partition
+        // map ({@see ClassMetadata::tableFor()}) resolves each merged
+        // mapping to its owning table; a non-MTI model resolves every
+        // column to its own table, so the filter is a no-op there.
+        foreach ($metadata->properties as $mapping) {
+            $column = $mapping->column;
+
+            if ($metadata->tableFor($mapping->columnName) !== $tableName) {
+                continue; // inherited column — belongs on the parent's table
+            }
+
+            $blueprint->column(
+                $column->type,
+                $mapping->columnName,
+                primaryKey: $column->primaryKey,
+                autoIncrement: $column->autoIncrement,
+                nullable: $column->nullable,
+                unique: $column->unique,
+                index: $column->index,
+                length: $column->length,
+                default: $column->default,
+                foreign: $column->foreign,
+                onDelete: $column->onDelete,
+                onUpdate: $column->onUpdate,
+            );
+        }
+
+        // Class-level composite constraints (the single-column flag cases
+        // already rode the column() calls above). For an MTI child, only
+        // constraints over the CHILD'S OWN columns belong on the child's
+        // table — a constraint covering an inherited column travels with
+        // the parent's table (its flag is already there).
+        //
+        // Unique index naming: a hardcoded constant would collide — two
+        // `#[Unique]` attributes would emit two CREATE UNIQUE INDEX
+        // statements with the same name and the second would fail at the
+        // DB. The default derives from the covered columns with a `_unique`
+        // suffix (`{columns}_unique`, rendered `{table}_{name}_unique` by
+        // the grammar): the suffix says WHAT the index is, it cannot
+        // collide with a #[CompositeIndex] over the same columns (which
+        // derives `{columns}` bare), and an explicit #[Unique(name: ...)]
+        // always wins. The duplicate-name guard at the bottom of this
+        // method catches any remaining collision (e.g. genuinely duplicated
+        // constraints) at blueprint-build time instead of at DDL time.
+        $ownColumns = null;
+
+        if ($metadata->parentModel !== null) {
+            $ownColumns = array_map(
+                fn ($mapping) => $mapping->columnName,
+                array_values(array_filter(
+                    $metadata->properties,
+                    fn ($mapping) => $metadata->tableFor($mapping->columnName) === $tableName,
+                )),
+            );
+        }
+
+        foreach ($metadata->uniques as $unique) {
+            if ($ownColumns !== null && array_diff($unique->columns, $ownColumns) !== []) {
+                continue; // covers inherited columns — parent table's constraint
+            }
+
+            // null name → the blueprint derives the final
+            // `{table}_{columns}_unique` name; a user-set name passes
+            // through verbatim (it IS the whole name).
+            $blueprint->index($unique->name, $unique->columns, unique: true);
+        }
+
+        foreach ($metadata->indexes as $index) {
+            if ($ownColumns !== null && array_diff($index->columns, $ownColumns) !== []) {
+                continue;
+            }
+
+            $blueprint->index($index->name, $index->columns);
+        }
+
+        foreach ($metadata->foreignKeys as $foreignKey) {
+            if ($ownColumns !== null && array_diff($foreignKey->columns, $ownColumns) !== []) {
+                continue;
+            }
+
+            $blueprint->foreignKey(
+                $foreignKey->columns,
+                $foreignKey->resolvedReferences(),
+                $foreignKey->resolvedReferencesColumns(),
+                $foreignKey->onDelete,
+                $foreignKey->onUpdate,
+            );
+        }
+
+        // MTI children: the factory-emitted FK to the parent table. The
+        // shared primary key IS the table link — the child declares no key
+        // of its own (the factory derives it with autoIncrement: false), so
+        // the DDL carries `FOREIGN KEY (id) REFERENCES <parent> (id) ON
+        // DELETE CASCADE`. No user declaration exists to double-declare it.
+        if ($metadata->parentModel !== null) {
+            $parentMetadata = MetadataFactory::for($metadata->parentModel);
+            $parentTable = $parentMetadata->tableName;
+            $parentKeys = $parentMetadata->primaryKeys;
+
+            if ($parentTable !== null && count($parentKeys) === 1 && $parentKeys[0]->name !== null) {
+                $blueprint->foreignKey(
+                    [$parentKeys[0]->name],
+                    $parentTable,
+                    [$parentKeys[0]->name],
+                    ForeignKeyAction::Cascade,
+                );
             }
         }
 
-        return [...$indexes, ...$this->indexes];
+        // Fail fast on duplicate index names WITHIN this blueprint — a
+        // collision would compile two CREATE INDEX statements with the same
+        // name and the second would fail at the database, far from the
+        // declaration that caused it. (Column-derived names collide only
+        // when the covered columns are identical — a genuinely duplicated
+        // constraint, which SHOULD fail here rather than at DDL time.)
+        $names = [];
+
+        foreach ($blueprint->getIndexes() as $index) {
+            if (isset($names[$index['name']])) {
+                throw new \InvalidArgumentException(sprintf(
+                    'Model [%s] declares two indexes named [%s] (columns [%s]); '
+                    . 'index names must be unique per table. Give the #[CompositeIndex] '
+                    . 'an explicit name, or drop the duplicate constraint.',
+                    $model,
+                    $index['name'],
+                    implode(', ', $index['columns']),
+                ));
+            }
+
+            $names[$index['name']] = true;
+        }
+
+        return $blueprint;
     }
 }

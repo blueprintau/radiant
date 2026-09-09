@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Grammars\PostgresGrammar;
 use BlueprintAU\Radiant\Database\Grammars\SqliteGrammar;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Expression;
+use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\ToSqlValue;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
@@ -26,6 +27,13 @@ use PHPUnit\Framework\TestCase;
 final class GrammarTest extends TestCase
 {
     /**
+     * The most recently built builder (for binding-order assertions).
+     *
+     * @var QueryBuilder
+     */
+    private QueryBuilder $lastBuilder;
+
+    /**
      * Build a query builder with a null connection (compilation never uses it).
      *
      * @param string $table The table to query.
@@ -33,7 +41,7 @@ final class GrammarTest extends TestCase
      */
     private function builder(string $table = 'users'): QueryBuilder
     {
-        return new QueryBuilder(new NullConnection(), $table);
+        return $this->lastBuilder = new QueryBuilder(new NullConnection(), $table);
     }
 
     // ---- Identifier wrapping ----
@@ -189,6 +197,77 @@ final class GrammarTest extends TestCase
     }
 
     /**
+     * on() appends an AND-connected condition to the most recent join.
+     */
+    public function testOnAppendsCondition(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()
+                ->join('posts', 'posts.user_id', '=', 'users.id')
+                ->on('posts.active', '=', 'users.active'),
+        );
+        self::assertSame(
+            'SELECT * FROM "users" INNER JOIN "posts" ON "posts"."user_id" = "users"."id" AND "posts"."active" = "users"."active"',
+            $sql,
+        );
+    }
+
+    /**
+     * orOn() renders an OR connector between join conditions.
+     */
+    public function testOrOn(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()
+                ->leftJoin('posts', 'posts.user_id', '=', 'users.id')
+                ->on('posts.active', '=', 'users.active')
+                ->orOn('posts.visible', '=', 'users.admin'),
+        );
+        self::assertSame(
+            'SELECT * FROM "users" LEFT JOIN "posts" ON "posts"."user_id" = "users"."id" AND "posts"."active" = "users"."active" OR "posts"."visible" = "users"."admin"',
+            $sql,
+        );
+    }
+
+    /**
+     * on() targets only the join it follows — an earlier join keeps its own conditions.
+     */
+    public function testOnTargetsLastJoin(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()
+                ->join('posts', 'posts.user_id', '=', 'users.id')
+                ->leftJoin('comments', 'comments.post_id', '=', 'posts.id')
+                ->on('comments.approved', '=', 'posts.approved'),
+        );
+        self::assertSame(
+            'SELECT * FROM "users" INNER JOIN "posts" ON "posts"."user_id" = "users"."id" LEFT JOIN "comments" ON "comments"."post_id" = "posts"."id" AND "comments"."approved" = "posts"."approved"',
+            $sql,
+        );
+    }
+
+    /**
+     * on() before any join is a LogicException — an ON belongs to the join it follows.
+     */
+    public function testOnWithoutJoinThrows(): void
+    {
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('Cannot call on()/orOn() before a join');
+        $this->builder()->on('a.id', '=', 'b.id');
+    }
+
+    /**
+     * A non-column operator in on() is rejected like the join condition itself.
+     */
+    public function testOnRejectsNonColumnOperator(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->builder()
+            ->join('posts', 'posts.user_id', '=', 'users.id')
+            ->on('posts.user_id', 'IN', 'users.id');
+    }
+
+    /**
      * Basic, in, null, between, raw, column, and nested wheres compile.
      */
     public function testWheres(): void
@@ -201,7 +280,7 @@ final class GrammarTest extends TestCase
                 ->whereBetween('age', [18, 65])
                 ->whereRaw('lower(email) = ?', ['a@b.c'])
                 ->whereColumn('updated_at', '>', 'created_at')
-                ->whereNested(function (QueryBuilder $q): void {
+                ->whereNested(function (WhereBuilder $q): void {
                     $q->where('a', WhereOperator::Eq, 1)->orWhere('b', WhereOperator::Eq, 2);
                 }),
         );
@@ -209,6 +288,30 @@ final class GrammarTest extends TestCase
             'SELECT * FROM "users" WHERE "active" = ? AND "role" IN (?, ?) AND "deleted_at" IS NULL AND "age" BETWEEN ? AND ? AND lower(email) = ? AND "updated_at" > "created_at" AND ("a" = ? OR "b" = ?)',
             $sql,
         );
+    }
+
+    /**
+     * orWhereNested() appends OR-connected parenthesized groups — the
+     * tuple-match shape: (a = ? AND b = ?) OR (a = ? AND b = ?).
+     */
+    public function testOrWhereNested(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()
+                ->where('tenant', WhereOperator::Eq, 7)
+                ->orWhereNested(function (WhereBuilder $q): void {
+                    $q->where('region_id', WhereOperator::Eq, 1)->where('country', WhereOperator::Eq, 'US');
+                })
+                ->orWhereNested(function (WhereBuilder $q): void {
+                    $q->where('region_id', WhereOperator::Eq, 2)->where('country', WhereOperator::Eq, 'DE');
+                }),
+        );
+
+        self::assertSame(
+            'SELECT * FROM "users" WHERE "tenant" = ? OR ("region_id" = ? AND "country" = ?) OR ("region_id" = ? AND "country" = ?)',
+            $sql,
+        );
+        self::assertSame([7, 1, 'US', 2, 'DE'], $this->lastBuilder->getBindings());
     }
 
     /**
@@ -510,7 +613,7 @@ final class GrammarTest extends TestCase
             ->whereIn('role', ['admin', 'editor'])
             ->whereBetween('age', [18, 65])
             ->whereRaw('lower(email) = ?', ['a@b.c'])
-            ->whereNested(function (QueryBuilder $q): void {
+            ->whereNested(function (WhereBuilder $q): void {
                 $q->where('a', WhereOperator::Eq, 1)->orWhere('b', WhereOperator::Eq, 2);
             });
 

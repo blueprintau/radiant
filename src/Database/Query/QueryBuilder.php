@@ -38,7 +38,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: QueryBuilder, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: WhereBuilder, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -295,6 +295,78 @@ class QueryBuilder
     }
 
     /**
+     * Append an additional ON condition to the most recent join.
+     *
+     * The first condition comes from the `join()` call itself; each `on()`
+     * call adds another, connected by AND: `join('posts', 'posts.user_id', '=', 'users.id')->on('posts.active', '=', 'users.active')`
+     * compiles to `ON "posts"."user_id" = "users"."id" AND "posts"."active" = "users"."active"`.
+     *
+     * Like the join condition itself, `on()` is strictly column-to-column —
+     * values belong in `where()` after the join, not in the ON clause.
+     *
+     * @param string $first The first column of the condition.
+     * @param ColumnOperator|string $operator The comparison operator.
+     * @param string $second The second column of the condition.
+     * @return $this
+     * @throws \LogicException When no join has been added yet.
+     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     */
+    public function on(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
+    {
+        return $this->addOn(WhereBoolean::And, $first, $operator, $second);
+    }
+
+    /**
+     * Append an additional OR-connected ON condition to the most recent join.
+     *
+     * @param string $first The first column of the condition.
+     * @param ColumnOperator|string $operator The comparison operator.
+     * @param string $second The second column of the condition.
+     * @return $this
+     * @throws \LogicException When no join has been added yet.
+     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     */
+    public function orOn(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
+    {
+        return $this->addOn(WhereBoolean::Or, $first, $operator, $second);
+    }
+
+    /**
+     * Append an ON condition to the last added join.
+     *
+     * Conditions are strictly column-to-column ({@see WhereType::Column}) —
+     * the join clause never binds values. The last join is targeted because
+     * an ON condition always belongs to the join it follows.
+     *
+     * @param WhereBoolean $boolean The connector to the join's previous condition.
+     * @param string $first The first column of the condition.
+     * @param ColumnOperator|string $operator The comparison operator.
+     * @param string $second The second column of the condition.
+     * @return $this
+     * @throws \LogicException When no join has been added yet.
+     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     */
+    protected function addOn(WhereBoolean $boolean, string $first, ColumnOperator|string $operator, string $second): static
+    {
+        if ($this->joins === []) {
+            throw new \LogicException(
+                'Cannot call on()/orOn() before a join: an ON condition belongs to the join it follows. Call join()/leftJoin()/rightJoin()/crossJoin() first.'
+            );
+        }
+
+        $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
+        $last = count($this->joins) - 1;
+        $this->joins[$last]['wheres'][] = [
+            'type' => WhereType::Column,
+            'first' => $first,
+            'operator' => $resolved,
+            'second' => $second,
+            'boolean' => $boolean,
+        ];
+        return $this;
+    }
+
+    /**
      * Append a join clause to the query.
      *
      * The operator is resolved to a {@see ColumnOperator} — either passed as
@@ -514,18 +586,40 @@ class QueryBuilder
     /**
      * Add a nested group of where clauses.
      *
-     * @param callable(QueryBuilder): void $callback Receives a fresh builder
-     *        to constrain; its clauses are wrapped in parentheses.
+     * The callback receives a {@see WhereBuilder} — the where-family ONLY:
+     * a parenthesized group is a filter, not a query, so it cannot JOIN,
+     * select, order, or page. The clauses land on THIS builder and are
+     * wrapped in parentheses at compile time.
+     *
+     * @param callable(WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
      * @param WhereBoolean $boolean The boolean connector.
      * @return $this
      */
     public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $query = new self($this->connection, $this->table);
-        $callback($query);
-        $this->wheres[] = ['type' => WhereType::Nested, 'query' => $query, 'boolean' => $boolean];
-        array_push($this->bindings[BindingCategory::Where->value], ...$query->getBindings([BindingCategory::Where]));
+        $nested = new self($this->connection, $this->table);
+        $callback(new WhereBuilder($nested));
+        $this->wheres[] = ['type' => WhereType::Nested, 'query' => new WhereBuilder($nested), 'boolean' => $boolean];
+        array_push($this->bindings[BindingCategory::Where->value], ...$nested->getBindings([BindingCategory::Where]));
         return $this;
+    }
+
+    /**
+     * Add an OR-connected nested group of where clauses.
+     *
+     * The sugar for composing tuple matches: each call appends one parenthesized
+     * group connected by OR —
+     * `whereNested(fn ($q) => ...)->orWhereNested(fn ($q) => ...)` compiles to
+     * `WHERE (... AND ...) OR (... AND ...)`.
+     *
+     * @param callable(WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
+     * @return $this
+     */
+    public function orWhereNested(callable $callback): static
+    {
+        return $this->whereNested($callback, WhereBoolean::Or);
     }
 
     // ---- Grouping / Having ----

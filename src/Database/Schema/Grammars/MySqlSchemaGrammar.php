@@ -62,12 +62,12 @@ class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * Compile an `ALTER TABLE ... DROP COLUMN` statement.
      *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The columns to drop.
+     * @param Blueprint $blueprint The table and columns to drop.
      * @return string The compiled SQL.
      */
-    protected function compileDropColumn(string $table, Blueprint $blueprint): string
+    protected function compileDropColumn(Blueprint $blueprint): string
     {
+        $table = $blueprint->getTable();
         $columns = $blueprint->getDropColumns();
         if ($columns === []) {
             throw new \InvalidArgumentException('Cannot drop columns with no columns defined.');
@@ -77,5 +77,28 @@ class MySqlSchemaGrammar extends SchemaGrammar
             fn (string $column) => $this->wrap($column),
             $columns,
         ));
+    }
+
+    /**
+     * MySQL caps identifiers at 64 characters — a derived index name over
+     * a long table/column set can exceed it. Fail fast at compile time
+     * (Doctrine's pattern: the dialect validates, never silently
+     * truncates — a truncated name is not stable across syncs and would
+     * break the differ).
+     *
+     * @param string $name The final identifier (index name).
+     * @return void
+     * @throws \InvalidArgumentException When the identifier exceeds 64 chars.
+     */
+    public function assertValidIdentifier(string $name): void
+    {
+        if (strlen($name) > 64) {
+            throw new \InvalidArgumentException(sprintf(
+                'Identifier [%s] exceeds MySQL\'s 64-character limit (%d chars); '
+                . 'declare a shorter #[Unique(name: ...)] / #[CompositeIndex(name: ...)].',
+                $name,
+                strlen($name),
+            ));
+        }
     }
 }

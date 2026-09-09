@@ -8,7 +8,6 @@ use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connectors\ConnectorInterface;
 use BlueprintAU\Radiant\Database\Connectors\MySqlConnector;
 use BlueprintAU\Radiant\Database\Connectors\PostgresConnector;
-use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
@@ -18,16 +17,22 @@ use PHPUnit\Framework\TestCase;
 /**
  * Live integration tests against a real SQL server.
  *
- * These only run when a MySQL or Postgres server is reachable. Each test
- * connects *through the connector*, so the DSN construction, option merging
- * and post-connect SQL are all exercised — not just the PDO handshake. When
- * no server is reachable (e.g. a dev machine without one), the test is
- * skipped rather than failed.
+ * **Policy: fail, never skip.** These tests require a reachable MySQL or
+ * Postgres server. When no server is up, they FAIL — the caller must
+ * exclude the `integration` group explicitly (phpunit.xml excludes it for
+ * the default local run; CI runs the full suite where a skip would hide a
+ * misconfigured environment). A silent skip is a lie: a test that
+ * "passes" without running proves nothing.
+ *
+ * Each test connects *through the connector*, so the DSN construction,
+ * option merging and post-connect SQL are all exercised — not just the
+ * PDO handshake.
  *
  * Env overrides (with local defaults):
  *  - RADIANT_MYSQL_{HOST,PORT,USER,PASSWORD,DATABASE} (127.0.0.1:3306 root/"" radiant)
  *  - RADIANT_PGSQL_{HOST,PORT,USER,PASSWORD,DATABASE} (127.0.0.1:5432 postgres/postgres radiant)
  */
+#[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
 final class SqlServerIntegrationTest extends TestCase
 {
     /**
@@ -50,11 +55,7 @@ final class SqlServerIntegrationTest extends TestCase
      */
     private function connect(array $config, ConnectorInterface $connector, string $driver): void
     {
-        try {
-            $connection = $connector->connect($config);
-        } catch (ConnectionException $e) {
-            self::markTestSkipped(sprintf('%s server not reachable (%s).', $driver, $e->getMessage()));
-        }
+        $connection = $connector->connect($config);
 
         if (!$connection instanceof SqlConnection) {
             self::fail(sprintf('%s connector did not return an SqlConnection.', $driver));
@@ -130,7 +131,7 @@ final class SqlServerIntegrationTest extends TestCase
     {
         $this->connect($config, $connector, $driver);
 
-        $this->connection->create('users', (new Blueprint())
+        $this->connection->create((new Blueprint('users'))
             ->id()
             ->string('name', 100)
             ->column(ColumnType::Int, 'age'));
@@ -170,7 +171,7 @@ final class SqlServerIntegrationTest extends TestCase
     {
         $this->connect($config, $connector, $driver);
 
-        $this->connection->create('users', (new Blueprint())
+        $this->connection->create((new Blueprint('users'))
             ->id()
             ->string('name', 100));
 
@@ -207,7 +208,7 @@ final class SqlServerIntegrationTest extends TestCase
     {
         $this->connect($config, $connector, $driver);
 
-        $this->connection->create('users', (new Blueprint())
+        $this->connection->create((new Blueprint('users'))
             ->id()
             ->string('name', 100)
             ->column(ColumnType::Int, 'age'));
@@ -235,17 +236,17 @@ final class SqlServerIntegrationTest extends TestCase
     {
         $this->connect($config, $connector, $driver);
 
-        $this->connection->create('users', (new Blueprint())
+        $this->connection->create((new Blueprint('users'))
             ->id()
             ->string('name', 100));
 
-        $this->connection->alter('users', SchemaOperation::AddColumn, (new Blueprint())->column(ColumnType::Int, 'age'));
+        $this->connection->alter(SchemaOperation::AddColumn, (new Blueprint('users'))->column(ColumnType::Int, 'age'));
         $this->connection->table('users')->insert(['name' => 'Alice', 'age' => 30]);
         $row = $this->connection->table('users')->where('name', '=', 'Alice')->first();
         self::assertNotNull($row);
         self::assertSame(30, (int) $row->age);
 
-        $this->connection->alter('users', SchemaOperation::DropColumn, (new Blueprint())->dropColumn('age'));
+        $this->connection->alter(SchemaOperation::DropColumn, (new Blueprint('users'))->dropColumn('age'));
         $row = $this->connection->table('users')->where('name', '=', 'Alice')->first();
         self::assertNotNull($row);
         self::assertObjectNotHasProperty('age', $row);

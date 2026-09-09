@@ -8,6 +8,7 @@ use BlueprintAU\Collections\Collection;
 use BlueprintAU\Radiant\Database\Concerns\DetectsConnectionLoss;
 use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
+use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
@@ -58,6 +59,17 @@ abstract class SqlConnection implements ConnectionInterface
     public readonly SchemaGrammar $schemaGrammar;
 
     /**
+     * Reads the live schema — the read-side twin of {@see $schemaGrammar},
+     * owned by the connection the same way (initialized in the constructor
+     * from {@see getDefaultSchemaInspector()}). The schema differ consumes
+     * `$db->schemaInspector`; the host never constructs one and never
+     * touches a PDO to do it.
+     *
+     * @var \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+     */
+    public readonly \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector $schemaInspector;
+
+    /**
      * Create a new SQL connection wrapping a PDO instance.
      *
      * Exception mode is forced here because the entire error contract of
@@ -83,6 +95,60 @@ abstract class SqlConnection implements ConnectionInterface
         $this->codec = $this->getDefaultValueCodec();
         $this->grammar = $this->getDefaultQueryGrammar();
         $this->schemaGrammar = $this->getDefaultSchemaGrammar();
+        $this->schemaInspector = $this->getDefaultSchemaInspector();
+    }
+
+    /**
+     * Assert the connection speaks SQL — throw when it does not.
+     *
+     * The narrowing assert: at runtime a non-SQL connection is a
+     * feature-contract violation (SQL-only work on a backend that can't
+     * do it), so it throws {@see UnsupportedFeatureException} rather than
+     * letting the caller explode later on the first raw SQL / transaction
+     * / schema call. For the type system, the {@see \phpstan-assert}
+     * annotation narrows the argument to `SqlConnection` after the call —
+     * no `@var` docblock needed at the call site.
+     *
+     * @param ConnectionInterface $connection The connection to check.
+     * @phpstan-assert SqlConnection $connection
+     */
+    final public static function assertSql(ConnectionInterface $connection): void
+    {
+        if (!$connection instanceof self) {
+            throw new UnsupportedFeatureException('The connection is not a SQL connection.');
+        }
+    }
+
+    /**
+     * Narrow a connection to SQL AND to this dialect — return it typed, or
+     * throw.
+     *
+     * The return-value twin of {@see assertSql()}: the fail-fast contract
+     * is stricter here, because `static` promises the CONCRETE dialect —
+     * `SqliteConnection::from(...)` guarantees a SqliteConnection, not
+     * merely some SQL connection. Three failure modes, three precise
+     * errors: a non-SQL backend delegates to {@see assertSql()} (one place
+     * owns the generic message); a SQL-but-wrong-dialect connection throws
+     * its own message naming the expected class.
+     *
+     * @param ConnectionInterface $connection The connection to narrow.
+     * @return static The same connection, typed as the calling dialect.
+     * @throws UnsupportedFeatureException When the connection is not a
+     *         {@see SqlConnection} at all, or is SQL but not the calling
+     *         dialect.
+     */
+    final public static function from(ConnectionInterface $connection): static
+    {
+        if (!$connection instanceof static) {
+            // A non-SQL backend gets the generic message; a SQL one gets
+            // the dialect-specific one.
+            self::assertSql($connection);
+            throw new UnsupportedFeatureException(
+                'The connection is SQL, but not a ' . static::class . '.'
+            );
+        }
+
+        return $connection;
     }
 
     /**
@@ -406,7 +472,23 @@ abstract class SqlConnection implements ConnectionInterface
                 );
             }
             $value = $this->codec->encode($value);
-            $stmt->bindValue(is_int($key) ? $key + 1 : $key, $value);
+
+            // Bind with an EXPLICIT PDO type. Without one, PDO defaults to
+            // PARAM_STR — and an expression like `count(*) > ?` then
+            // compares against the string '1', which SQLite evaluates as
+            // text-vs-number and always false. Typed columns survive the
+            // string bind via column affinity; aggregate expressions have
+            // no affinity to save them. (int→PARAM_INT, float→PARAM_STR —
+            // PDO has no float type and SQLite compares numerically anyway,
+            // bool→PARAM_INT, null→PARAM_NULL.)
+            $type = match (true) {
+                is_int($value) => \PDO::PARAM_INT,
+                is_bool($value) => \PDO::PARAM_INT,
+                $value === null => \PDO::PARAM_NULL,
+                default => \PDO::PARAM_STR,
+            };
+
+            $stmt->bindValue(is_int($key) ? $key + 1 : $key, $value, $type);
         }
     }
 
@@ -469,19 +551,28 @@ abstract class SqlConnection implements ConnectionInterface
      */
     abstract protected function getDefaultSchemaGrammar(): SchemaGrammar;
 
+    /**
+     * The dialect's live-schema reader — the factory hook for
+     * {@see $schemaInspector}, the read-side twin of the schema grammar.
+     *
+     * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector The inspector used to read the live schema.
+     */
+    abstract protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
+
     // ---- Schema operations (SQL-only) ----
 
     /**
      * Create a table from a blueprint, plus any indexes declared on it.
      *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The columns to create.
+     * The table name comes from the blueprint itself — one source of truth.
+     *
+     * @param Blueprint $blueprint The table and columns to create.
      */
-    final public function create(string $table, Blueprint $blueprint): void
+    final public function create(Blueprint $blueprint): void
     {
-        $this->statement($this->schemaGrammar->compileCreate($table, $blueprint));
+        $this->statement($this->schemaGrammar->compileCreate($blueprint));
 
-        foreach ($this->schemaGrammar->compileIndexes($table, $blueprint) as $indexSql) {
+        foreach ($this->schemaGrammar->compileIndexes($blueprint) as $indexSql) {
             $this->statement($indexSql);
         }
     }
@@ -489,13 +580,14 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Alter a table — add or drop columns.
      *
-     * @param string $table The table name.
+     * The table name comes from the blueprint itself — one source of truth.
+     *
      * @param SchemaOperation $operation The operation to perform.
-     * @param Blueprint $blueprint The columns involved.
+     * @param Blueprint $blueprint The table and columns involved.
      */
-    final public function alter(string $table, SchemaOperation $operation, Blueprint $blueprint): void
+    final public function alter(SchemaOperation $operation, Blueprint $blueprint): void
     {
-        $this->statement($this->schemaGrammar->compileAlter($table, $operation, $blueprint));
+        $this->statement($this->schemaGrammar->compileAlter($operation, $blueprint));
     }
 
     /**
@@ -506,6 +598,22 @@ abstract class SqlConnection implements ConnectionInterface
     final public function drop(string $table): void
     {
         $this->statement($this->schemaGrammar->compileDrop($table));
+    }
+
+    /**
+     * Apply a differ-produced change — dispatches create/alter/drop
+     * so the host never writes the match itself. The `create` case routes
+     * through {@see create()} so declared indexes are emitted too.
+     *
+     * @param \BlueprintAU\Radiant\Database\Schema\SchemaChange $change The change to apply.
+     */
+    final public function apply(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        match ($change->operation) {
+            SchemaOperation::CreateTable => $this->create($change->blueprint),
+            SchemaOperation::AddColumn, SchemaOperation::DropColumn => $this->alter($change->operation, $change->blueprint),
+            SchemaOperation::DropTable => $this->drop($change->table),
+        };
     }
 
     // ---- Transactions (depth-counter + savepoints) ----

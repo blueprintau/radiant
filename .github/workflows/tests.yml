@@ -87,6 +87,14 @@ jobs:
             - name: Run tests
               run: composer test
 
+            # The integration-remote-sql group (live MySQL/Postgres) is
+            # excluded from phpunit.xml's default run — these service
+            # containers ARE the required servers, so run it explicitly
+            # here. A failure is a real signal: these tests fail, never
+            # skip.
+            - name: Run integration tests
+              run: composer test:integration
+
             - name: Run static analysis
               run: composer analyse
 

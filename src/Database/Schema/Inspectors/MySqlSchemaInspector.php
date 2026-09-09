@@ -1,0 +1,197 @@
+<?php
+
+declare(strict_types=1);
+
+namespace BlueprintAU\Radiant\Database\Schema\Inspectors;
+
+/**
+ * Reads the live schema on MySQL — `information_schema` tables.
+ */
+final class MySqlSchemaInspector extends SchemaInspector
+{
+    /**
+     * Every table name in the live schema (the connection's default database).
+     *
+     * @return list<string> The table names.
+     */
+    public function tables(): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT table_name FROM information_schema.tables '
+            . 'WHERE table_schema = DATABASE() ORDER BY table_name',
+        );
+        $statement->execute();
+
+        return array_values(array_map('strval', $statement->fetchAll(\PDO::FETCH_COLUMN)));
+    }
+
+    /**
+     * One table's live schema.
+     *
+     * @param string $name The table name.
+     * @return LiveTable The live snapshot.
+     * @throws \RuntimeException When the table does not exist.
+     */
+    public function table(string $name): LiveTable
+    {
+        if (!$this->hasTable($name)) {
+            throw new \RuntimeException("Table [{$name}] does not exist in the MySQL schema.");
+        }
+
+        return new LiveTable(
+            $name,
+            $this->columns($name),
+            $this->indexes($name),
+            $this->foreignKeys($name),
+        );
+    }
+
+    /**
+     * The live columns, from `information_schema.columns`.
+     *
+     * @param string $name The table name.
+     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}> The columns.
+     */
+    private function columns(string $name): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT c.column_name, c.column_type, c.is_nullable, c.column_default, '
+            . '(c.column_key = \'PRI\') AS is_primary '
+            . 'FROM information_schema.columns c '
+            . 'WHERE c.table_schema = DATABASE() AND c.table_name = ? '
+            . 'ORDER BY c.ordinal_position',
+        );
+        $statement->execute([$name]);
+
+        $columns = [];
+
+        /** @var array<string, mixed> $row */
+        foreach ($statement->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            $default = $row['column_default'];
+
+            $columns[] = [
+                'name' => (string) $row['column_name'],
+                'type' => strtolower((string) $row['column_type']),
+                'nullable' => strtoupper((string) $row['is_nullable']) === 'YES',
+                // MySQL reports CURRENT_TIMESTAMP (and other literals) as
+                // strings; pass through as-is — the differ compares text.
+                'default' => $default,
+                'primaryKey' => ((int) $row['is_primary']) === 1,
+            ];
+        }
+
+        return $columns;
+    }
+
+    /**
+     * The live indexes, from `information_schema.statistics`.
+     *
+     * @param string $name The table name.
+     * @return list<array{name: string|null, columns: list<string>, unique: bool}> The indexes.
+     */
+    private function indexes(string $name): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT index_name, column_name, non_unique, seq_in_index '
+            . 'FROM information_schema.statistics '
+            . 'WHERE table_schema = DATABASE() AND table_name = ? '
+            . 'ORDER BY index_name, seq_in_index',
+        );
+        $statement->execute([$name]);
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $statement->fetchAll(\PDO::FETCH_ASSOC);
+
+        $groups = [];
+
+        foreach ($rows as $row) {
+            $indexName = (string) $row['index_name'];
+
+            // PRIMARY rides the columns' primaryKey flag, not the index list.
+            if ($indexName === 'PRIMARY') {
+                continue;
+            }
+
+            $groups[$indexName]['columns'][(int) $row['seq_in_index']] = (string) $row['column_name'];
+            $groups[$indexName]['unique'] = ((int) $row['non_unique']) === 0;
+        }
+
+        $indexes = [];
+
+        foreach ($groups as $indexName => $group) {
+            $indexes[] = [
+                'name' => $indexName,
+                'columns' => array_values($group['columns']),
+                'unique' => $group['unique'],
+            ];
+        }
+
+        return $indexes;
+    }
+
+    /**
+     * The live foreign keys, from `information_schema.key_column_usage` +
+     * `referential_constraints` (for the actions).
+     *
+     * @param string $name The table name.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null}> The constraints.
+     */
+    private function foreignKeys(string $name): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT kcu.constraint_name, kcu.column_name, kcu.referenced_table_name, '
+            . 'kcu.referenced_column_name, kcu.ordinal_position, '
+            . 'rc.delete_rule, rc.update_rule '
+            . 'FROM information_schema.key_column_usage kcu '
+            . 'JOIN information_schema.referential_constraints rc '
+            . 'ON rc.constraint_name = kcu.constraint_name '
+            . 'AND rc.constraint_schema = kcu.constraint_schema '
+            . 'WHERE kcu.table_schema = DATABASE() AND kcu.table_name = ? '
+            . 'AND kcu.referenced_table_name IS NOT NULL '
+            . 'ORDER BY kcu.constraint_name, kcu.ordinal_position',
+        );
+        $statement->execute([$name]);
+
+        /** @var list<array<string, mixed>> $rows */
+        $rows = $statement->fetchAll(\PDO::FETCH_ASSOC);
+
+        $groups = [];
+
+        foreach ($rows as $row) {
+            $constraintName = (string) $row['constraint_name'];
+            $groups[$constraintName]['columns'][] = (string) $row['column_name'];
+            $groups[$constraintName]['referencesTable'] = (string) $row['referenced_table_name'];
+            $groups[$constraintName]['referencesColumns'][(int) $row['ordinal_position']] = (string) $row['referenced_column_name'];
+            $groups[$constraintName]['onDelete'] = $row['delete_rule'];
+            $groups[$constraintName]['onUpdate'] = $row['update_rule'];
+        }
+
+        $constraints = [];
+
+        foreach ($groups as $group) {
+            $constraints[] = [
+                'columns' => $group['columns'],
+                'referencesTable' => $group['referencesTable'],
+                'referencesColumns' => array_values($group['referencesColumns']),
+                'onDelete' => $this->normalizeAction($group['onDelete']),
+                'onUpdate' => $this->normalizeAction($group['onUpdate']),
+            ];
+        }
+
+        return $constraints;
+    }
+
+    /**
+     * Normalize MySQL's referential-action text to a canonical value, null
+     * for the no-op default.
+     *
+     * @param mixed $action The raw action text.
+     * @return string|null The canonical action, or null for NO ACTION.
+     */
+    private function normalizeAction(mixed $action): ?string
+    {
+        $normalized = strtoupper(trim((string) $action));
+
+        return $normalized === 'NO ACTION' ? null : $normalized;
+    }
+}

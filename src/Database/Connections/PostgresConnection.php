@@ -8,6 +8,8 @@ use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\PostgresGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\PostgresSchemaInspector;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 use BlueprintAU\Radiant\Database\ValueCodecs\PostgresValueCodec;
 use BlueprintAU\Radiant\Database\ValueCodecs\ValueCodecInterface;
 
@@ -42,6 +44,16 @@ final class PostgresConnection extends SqlConnection
     protected function getDefaultSchemaGrammar(): SchemaGrammar
     {
         return new PostgresSchemaGrammar();
+    }
+
+    /**
+     * The dialect's live-schema reader ({@see SchemaInspector}).
+     *
+     * @return PostgresSchemaInspector The live-schema inspector.
+     */
+    protected function getDefaultSchemaInspector(): SchemaInspector
+    {
+        return new PostgresSchemaInspector($this->pdo);
     }
 
     /**

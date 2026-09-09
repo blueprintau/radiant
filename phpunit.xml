@@ -10,6 +10,16 @@
             <directory>tests</directory>
         </testsuite>
     </testsuites>
+    <!-- Live-server tests (group "integration-remote-sql": real MySQL and
+         Postgres connections) are excluded from the default local run.
+         They fail (never skip) when no server is reachable, so the caller
+         must opt in explicitly (or drop this exclusion in CI, where the
+         servers exist and a failure is a real signal). -->
+    <groups>
+        <exclude>
+            <group>integration-remote-sql</group>
+        </exclude>
+    </groups>
     <source>
         <include>
             <directory>src</directory>

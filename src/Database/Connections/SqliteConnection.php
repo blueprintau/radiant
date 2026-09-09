@@ -7,6 +7,8 @@ namespace BlueprintAU\Radiant\Database\Connections;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Grammars\SqliteGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
 
 /**
@@ -38,6 +40,16 @@ final class SqliteConnection extends SqlConnection
     protected function getDefaultSchemaGrammar(): SchemaGrammar
     {
         return new SqliteSchemaGrammar();
+    }
+
+    /**
+     * The dialect's live-schema reader ({@see SchemaInspector}).
+     *
+     * @return SqliteSchemaInspector The live-schema inspector.
+     */
+    protected function getDefaultSchemaInspector(): SchemaInspector
+    {
+        return new SqliteSchemaInspector($this->pdo);
     }
 
     /**

@@ -79,4 +79,15 @@ class SqliteSchemaGrammar extends SchemaGrammar
     {
         return false;
     }
+
+    /**
+     * SQLite has no practical identifier length cap (the limit is a byte
+     * count in the millions) — anything the user writes is valid.
+     *
+     * @param string $name The final identifier (index name).
+     * @return void
+     */
+    public function assertValidIdentifier(string $name): void
+    {
+    }
 }

@@ -5,10 +5,9 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Schema\Enums;
 
 /**
- * The kind of `ALTER TABLE` operation to compile.
- *
- * The schema layer is DB-only, consumed by
- * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::alter()}.
+ * The schema-change vocabulary — the single currency of the schema layer: the differ
+ * emits it, {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::apply()}
+ * dispatches it, generated and hand-written migrations express it.
  */
 enum SchemaOperation: string
 {
@@ -17,4 +16,10 @@ enum SchemaOperation: string
 
     /** Drop one or more columns. */
     case DropColumn = 'drop';
+
+    /** Create a whole table (differ output; `apply()` → `create()`). */
+    case CreateTable = 'create';
+
+    /** Drop a whole table (differ output; `apply()` → `drop()`, destructive). */
+    case DropTable = 'drop_table';
 }
