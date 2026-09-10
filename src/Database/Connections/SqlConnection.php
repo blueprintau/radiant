@@ -612,7 +612,7 @@ abstract class SqlConnection implements ConnectionInterface
      * NOTE: applying changes is NOT serialized across processes by itself.
      * Wrap the whole `diff → apply` loop in a schema lock —
      * {@see withSchemaLock()} or a
-     * {@see \BlueprintAU\Radiant\Database\Schema\SchemaLocker} adapter — when
+     * {@see \BlueprintAU\Radiant\Database\Locks\Lock} adapter — when
      * more than one deployment instance can migrate concurrently.
      *
      * @param \BlueprintAU\Radiant\Database\Schema\SchemaChange $change The change to apply.
@@ -628,7 +628,10 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Run schema work while holding a cross-process schema lock, using the
-     * dialect's native advisory-lock mechanism.
+     * dialect's native advisory-lock mechanism. It is a thin schema-flavored
+     * wrapper over the general locking layer —
+     * {@see \BlueprintAU\Radiant\Database\Locks\Lock} — for anything else
+     * (cron overlap, cache warmups), instantiate an adapter directly.
      *
      * MySQL uses `GET_LOCK`/`RELEASE_LOCK`, Postgres a session advisory
      * lock, SQLite a `BEGIN IMMEDIATE` transaction. The lock is held on
@@ -642,13 +645,13 @@ abstract class SqlConnection implements ConnectionInterface
      *        `diff → apply` loop belongs inside it.
      * @return TReturn The callback's return value.
      * @throws UnsupportedFeatureException When the dialect has no native
-     *         cross-process lock (overridable — supply a SchemaLocker then).
+     *         cross-process lock (overridable — supply a Lock adapter then).
      * @throws \Throwable Whatever the callback throws, after releasing the lock.
      */
     public function withSchemaLock(callable $callback): mixed
     {
         throw new UnsupportedFeatureException(
-            'This dialect does not provide a native schema lock; supply a SchemaLocker.',
+            'This dialect does not provide a native schema lock; supply a Lock adapter.',
         );
     }
 

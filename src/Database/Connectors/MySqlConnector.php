@@ -56,25 +56,20 @@ final class MySqlConnector extends SqlConnector
     }
 
     /**
-     * MySQL-mandated PDO attributes — merged last, cannot be overridden by
-     * the user.
+     * MySQL-mandated PDO attributes — merged over the base forced layer by
+     * {@see SqlConnector::createPdo()}, so only the MySQL addition is
+     * declared here.
      *
      * `PDO::MYSQL_ATTR_FOUND_ROWS` makes UPDATE/DELETE return the number of
      * rows *actually changed* rather than rows *matched*. The update()
      * contract is "affected rows", and dirty-tracking save() depends on that
-     * being honest — so this is forced on.
+     * being honest — so this is forced on. (ERRMODE and EMULATE_PREPARES are
+     * forced by the base connector for every dialect.)
      *
      * @var array<int, int|bool>
      */
     protected static array $FORCED_OPTIONS = [
-        \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
         \PDO\Mysql::ATTR_FOUND_ROWS => true,
-        // Native prepared statements are forced on MySQL: client-side
-        // emulation interpolates bound values into the SQL TEXT, which both
-        // widens the surface of any host raw-path mistake into classic SQLi
-        // (stacked-query edges) and makes failed-query text carry real PII.
-        // A config line cannot opt back out.
-        \PDO::ATTR_EMULATE_PREPARES => false,
     ];
 
     /**

@@ -435,13 +435,14 @@ and column adds/drops. A changed column type, nullable flag, or default
 surfaces as a re-add (reported in the plan) — not an in-place modify — and
 index/FK changes are not diffed yet. Review the plan before applying.
 
-### Schema locking (concurrent deploys)
+### Locking (concurrent processes)
 
-`diff → apply` reads the live schema then executes DDL — including
-`DROP TABLE`. Two deployment instances doing this concurrently race on
-stale snapshots: duplicated CREATEs, half-applied ALTERs, a DROP landing on
-a renamed table. Wrap the whole loop in a schema lock — every SQL dialect
-ships a native adapter:
+Any work that must not run twice concurrently needs a cross-process lock —
+the schema `diff → apply` loop is the prime case: it reads the live schema,
+then executes DDL including `DROP TABLE`, and two overlapping instances race
+on stale snapshots (duplicated CREATEs, half-applied ALTERs, a DROP landing
+on a renamed table). Every SQL dialect ships a native adapter in
+`BlueprintAU\Radiant\Database\Locks`:
 
 ```php
 $conn->withSchemaLock(function () use ($differ, $desired, $conn): void {
@@ -451,9 +452,28 @@ $conn->withSchemaLock(function () use ($differ, $desired, $conn): void {
 });
 ```
 
+The locks are general-purpose, not schema-specific. The lock *name* is
+supplied at call time — one name is one mutual-exclusion domain, so
+distinct jobs use distinct names and never serialize each other:
+
+```php
+use BlueprintAU\Radiant\Database\Locks\PostgresLock;
+
+(new PostgresLock($conn))
+    ->withLock(fn () => $this->buildNightlyReport(), 'report:nightly');
+```
+
+MySQL and Postgres take a session-level advisory lock on the given name.
+SQLite has no advisory locks: its adapter runs the callback inside a
+`BEGIN IMMEDIATE` write transaction, which serializes *all* writes for the
+duration and therefore refuses to run inside an already-open transaction
+(the name is accepted for signature parity but ignored — a database-wide
+transaction has nothing to name).
+
 For custom locking (a locker service, file locks across machines), implement
-`SchemaLocker` and call `->withLock(fn () => ...)` around the loop. Without
-any lock, schema sync is safe only for single-instance deployments.
+`BlueprintAU\Radiant\Database\Locks\Lock` and call
+`->withLock(fn () => ...)` around the critical section. Without any lock,
+schema sync is safe only for single-instance deployments.
 
 ## SQL-only features
 

@@ -23,12 +23,13 @@ use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 abstract class SqlConnector implements ConnectorInterface
 {
     /**
-     * Default PDO attributes applied to every SQL connection.
+     * Default PDO attributes applied to every SQL connection. Subclass
+     * defaults are merged OVER these (see {@see createPdo()}), so subclasses
+     * only declare their additions — e.g. SQLite's busy timeout — and do
+     * not have to restate this list.
      *
      * - ATTR_STRINGIFY_FETCHES => false — return native types, not strings.
-
-     * - ATTR_EMULATE_PREPARES => false — use real prepared statements.
-
+     *
      * These are strong defaults but can be overridden by the user when they
      * have a good reason. Subclasses may override this property to provide
      * driver-appropriate defaults; it is read with `static::` late binding
@@ -37,13 +38,12 @@ abstract class SqlConnector implements ConnectorInterface
      * @var array<int, int|bool>
      */
     protected static array $DEFAULT_OPTIONS = [
-        \PDO::ATTR_STRINGIFY_FETCHES => false,
-        \PDO::ATTR_EMULATE_PREPARES => false
+        \PDO::ATTR_STRINGIFY_FETCHES => false
     ];
 
     /**
      * PDO attributes that cannot be overridden by the user — always merged
-     * last.
+     * after user options.
      *
      * ERRMODE_EXCEPTION is contract-critical: the entire error path of
      * {@see SqlConnection} (`run()`, transactions, savepoints) assumes
@@ -52,17 +52,27 @@ abstract class SqlConnector implements ConnectorInterface
      * in a confusing way (e.g. prepare() returning false → TypeError), so it
      * is forced unconditionally on every SQL connection.
      *
-     * Subclasses may override this property to force driver-specific
-     * attributes (e.g. MySQL's INIT_COMMAND or SQLite's BUSY_TIMEOUT); it is
-     * read with `static::` late binding in {@see createPdo()} so overrides
-     * take effect. ERRMODE itself remains guaranteed regardless of any
-     * override, because {@see SqlConnection::__construct()} re-asserts it on
-     * every connection.
+     * EMULATE_PREPARES => false forces real server-side prepares on every
+     * SQL connector: client-side emulation interpolates bound values into
+     * the SQL TEXT, which both widens the surface of any host raw-path
+     * mistake into classic SQL injection and makes failed-query text carry
+     * real PII.
+     *
+     * Merge order and extension: see {@see createPdo()}. In short, subclass
+     * forced options merge OVER these — so a connector can deliberately
+     * override a base-forced attribute where its dialect demands it — but
+     * user config can never reach past any forced layer. (ERRMODE itself
+     * remains guaranteed regardless of everything, because
+     * {@see SqlConnection::__construct()} re-asserts it on every
+     * connection.)
      *
      * @var array<int, int|bool>
      */
     protected static array $FORCED_OPTIONS = [
         \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
+        // Native prepared statements on every dialect; see the class docblock
+        // for why emulation must not be re-enableable via config.
+        \PDO::ATTR_EMULATE_PREPARES => false,
     ];
 
     /**
@@ -178,13 +188,25 @@ abstract class SqlConnector implements ConnectorInterface
     }
 
     /**
-     * Create a PDO instance from a DSN, merging user options between the
-     * driver defaults and the non-overridable forced attributes.
+     * Create a PDO instance from a DSN, merging option layers in strict
+     * precedence order.
      *
-     * Precedence, lowest to highest: {@see DEFAULT_OPTIONS} → user-supplied
-     * `$options` → {@see FORCED_OPTIONS}. The forced layer always wins, so
-     * contract-critical attributes (ERRMODE_EXCEPTION) can't be dropped —
-     * this is a defense-in-depth guarantee alongside the enforcement in
+     * Merge order, lowest to highest:
+     *
+     * 1. base {@see DEFAULT_OPTIONS} — the library's cross-dialect defaults;
+     * 2. `static::$DEFAULT_OPTIONS` — the subclass's driver-appropriate
+     *    additions (e.g. SQLite's busy timeout), merged so a subclass only
+     *    declares its differences;
+     * 3. user-supplied `$options` — host config, which can tune anything
+     *    the library merely defaults;
+     * 4. base {@see FORCED_OPTIONS} — contract-critical attributes user
+     *    config can never drop;
+     * 5. `static::$FORCED_OPTIONS` — the subclass's deliberate dialect
+     *    mandates, able to override even the base forced layer when a
+     *    dialect genuinely requires it (a documented, code-level decision —
+     *    never reachable from config).
+     *
+     * This is a defense-in-depth guarantee alongside the enforcement in
      * {@see SqlConnection::__construct()}, which also covers PDO instances
      * built directly.
      *
@@ -208,7 +230,13 @@ abstract class SqlConnector implements ConnectorInterface
     final protected function createPdo(string $dsn, ?string $username, #[\SensitiveParameter] ?string $password, array $options): \Pdo
     {
         $this->validateOptions($options);
-        $options = array_replace(static::$DEFAULT_OPTIONS, $options, static::$FORCED_OPTIONS);
+        $options = array_replace(
+            self::$DEFAULT_OPTIONS,
+            static::$DEFAULT_OPTIONS,
+            $options,
+            self::$FORCED_OPTIONS,
+            static::$FORCED_OPTIONS,
+        );
         try {
             return \PDO::connect($dsn, $username, $password, $options);
         } catch (\PDOException $e) {

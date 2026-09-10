@@ -27,6 +27,9 @@ use Override;
  */
 final class PostgresConnection extends SqlConnection
 {
+    /** The lock domain `withSchemaLock()` serializes schema work under. */
+    private const SCHEMA_LOCK_NAME = 'radiant:schema';
+
     /**
      * The default query grammar for this connection.
      *
@@ -122,7 +125,7 @@ final class PostgresConnection extends SqlConnection
     #[Override]
     public function withSchemaLock(callable $callback): mixed
     {
-        return (new \BlueprintAU\Radiant\Database\Schema\Lockers\PostgresSchemaLocker($this))
-            ->withLock($callback);
+        return (new \BlueprintAU\Radiant\Database\Locks\PostgresLock($this))
+            ->withLock($callback, self::SCHEMA_LOCK_NAME);
     }
 }

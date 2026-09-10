@@ -23,6 +23,9 @@ use Override;
  */
 final class SqliteConnection extends SqlConnection
 {
+    /** The lock domain `withSchemaLock()` serializes schema work under. */
+    private const SCHEMA_LOCK_NAME = 'radiant:schema';
+
     /**
      * The default query grammar for this connection.
      *
@@ -106,7 +109,7 @@ final class SqliteConnection extends SqlConnection
     #[Override]
     public function withSchemaLock(callable $callback): mixed
     {
-        return (new \BlueprintAU\Radiant\Database\Schema\Lockers\SqliteSchemaLocker($this))
-            ->withLock($callback);
+        return (new \BlueprintAU\Radiant\Database\Locks\SqliteLock($this))
+            ->withLock($callback, self::SCHEMA_LOCK_NAME);
     }
 }

@@ -18,13 +18,15 @@ use Override;
 final class SqliteConnector extends SqlConnector
 {
     /**
-     * SQLite-specific default PDO attributes.
+     * SQLite-specific default PDO attributes — merged over the base
+     * defaults by {@see SqlConnector::createPdo()}, so only the addition is
+     * declared here.
      *
-     * Extends the shared defaults with SQLite's busy timeout. SQLite's
-     * default busy timeout is 0ms — the moment another connection holds a
-     * write lock, a query fails immediately with "database is locked". A
-     * 5s timeout lets concurrent access wait briefly instead of failing
-     * spuriously. Overridable by the user via config.
+     * The busy timeout: SQLite's default is 0ms — the moment another
+     * connection holds a write lock, a query fails immediately with
+     * "database is locked". A 5s timeout lets concurrent access wait
+     * briefly instead of failing spuriously. Overridable by the user via
+     * config.
      *
      * The busy timeout is set via \PDO::ATTR_TIMEOUT, which pdo_sqlite
      * maps to SQLite's busy timeout in seconds (verified empirically:
@@ -36,8 +38,6 @@ final class SqliteConnector extends SqlConnector
      * @var array<int, int|bool>
      */
     protected static array $DEFAULT_OPTIONS = [
-        \PDO::ATTR_STRINGIFY_FETCHES => false,
-        \PDO::ATTR_EMULATE_PREPARES => false,
         \PDO::ATTR_TIMEOUT => 5, // seconds → SQLite busy timeout (5000ms)
     ];
 
