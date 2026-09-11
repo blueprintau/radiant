@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Metadata\PropertyMapping;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Admin;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\AlignedDefaultModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ArityMismatchModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteBase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteUser;
@@ -16,6 +17,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Contractor;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ColumnAddingAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\CustomDeletedAtPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DoubleUniqueModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DivergentDefaultModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmailVerificationToken;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyTableModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Box;
@@ -116,6 +118,32 @@ final class MetadataFactoryTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('string column without a length');
         MetadataFactory::for(LengthlessStringModel::class);
+    }
+
+    /**
+     * A PHP property default that diverges from the declared column default
+     * is a fail-fast metadata error — the initialized property shadows the
+     * column default on every model INSERT, so the pair silently disagrees
+     * with raw SQL writes.
+     */
+    public function testDivergentDefaultThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('declares a PHP default');
+        MetadataFactory::for(DivergentDefaultModel::class);
+    }
+
+    /**
+     * An aligned (identical) PHP default is redundant but allowed, and a
+     * property without a PHP default coexists with a column default — the
+     * column default applies when the property is uninitialized.
+     */
+    public function testAlignedAndAbsentDefaultsPass(): void
+    {
+        $properties = MetadataFactory::for(AlignedDefaultModel::class)->properties;
+
+        self::assertSame('anon', $properties['name']->column->default);
+        self::assertSame(0, $properties['hits']->column->default);
     }
 
     // ---- Table resolution (rules 1–5) ----

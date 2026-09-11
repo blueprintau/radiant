@@ -142,6 +142,68 @@ class Column
     }
 
     /**
+     * Assert the PHP property default does not silently shadow the column
+     * default.
+     *
+     * The write path (see `Model::getColumnValues()`) skips uninitialized
+     * typed properties, so the DB `DEFAULT` applies — that is the intended
+     * use. But a property WITH a PHP default is always initialized after
+     * `new`, so its value is encoded and INSERTed explicitly and the column
+     * default is never reached. When the two differ, the schema and the
+     * model's inserts disagree silently: model writes use the PHP value,
+     * raw SQL and other clients use the declared DB default. That
+     * divergence violates the fail-fast contract, so it is an error at
+     * metadata build.
+     *
+     * Strict (`===`) comparison — `int 5` vs `'5'`, and `null` vs a
+     * non-null default, are divergences too (an explicit `null` inserts
+     * NULL, overriding the declared default). A default of `null` on the
+     * ATTRIBUTE means "no declared default" and never conflicts; an
+     * Expression default can never strictly equal a PHP scalar, so that
+     * combination throws as well — a PHP-side default always shadows an
+     * expression default on the write path, so one of the two should go.
+     *
+     * @param \ReflectionProperty $property The reflected column property
+     *        (its default value is read when declared).
+     * @param string $class The model class (for the message).
+     * @return void
+     * @throws \InvalidArgumentException When the property declares a
+     *         PHP default that differs from the declared column default.
+     */
+    public function assertDefaultConsistent(\ReflectionProperty $property, string $class): void
+    {
+        if (!$property->hasDefaultValue()) {
+            return; // uninitialized after `new` — the DB default applies
+        }
+
+        if ($this->default === null) {
+            return; // no declared column default — nothing to shadow
+        }
+
+        $phpDefault = $property->getDefaultValue();
+
+        if ($phpDefault === $this->default) {
+            return; // redundant but harmless — the two agree
+        }
+
+        throw new \InvalidArgumentException(sprintf(
+            "Model [%s] property [%s] declares a PHP default [%s] that differs from the "
+                . "declared column default [%s]. A property with a PHP default is always "
+                . "initialized after `new`, so its value is INSERTed explicitly and the "
+                . "column default is never reached — the two silently diverge for raw SQL "
+                . "and other clients. Either drop the PHP default (letting the column "
+                . "default apply), align it with the column default, or drop the column "
+                . "default.",
+            $class,
+            $property->getName(),
+            var_export($phpDefault, true),
+            $this->default instanceof \BlueprintAU\Radiant\Database\Query\Expression
+                ? $this->default->value
+                : var_export($this->default, true),
+        ));
+    }
+
+    /**
      * The field-type → compatible-column-types matrix.
      *
      * A single source of truth consumed by {@see Column::assertTypeCompatible()}.
@@ -266,8 +328,35 @@ class Column
         }
 
         return match ($this->propertyType) {
-            'array' => json_encode($value),
+            'array' => $this->encodeJson($value),
             default => $value,
         };
+    }
+
+    /**
+     * Encode a JSON column value — idempotent on already-encoded input.
+     *
+     * Double-encoding guard: a value that is already a JSON STRING is
+     * passed through unchanged. Without this, `update(['meta' => $model
+     * ->meta])` on a hydrated model would re-encode the decoded array's
+     * JSON string into a quoted JSON string — a write that silently
+     * corrupted the cell. The identity only holds for strings: `'"x"'`
+     * (a JSON string cell) is a legal pass-through, so the guard is an
+     * accepted, documented trade — one direction a round-trip cannot
+     * distinguish, and the same policy every broad cast layer pays.
+     *
+     * @param mixed $value The typed array value, or an already-encoded
+     *        JSON string when a write passes decoded state back through.
+     * @return string The JSON text to bind.
+     * @throws \JsonException When the value cannot be encoded (fails fast
+     *         with PHP's own diagnostic — no silent `false` to miss).
+     */
+    private function encodeJson(mixed $value): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        return json_encode($value, JSON_THROW_ON_ERROR);
     }
 }

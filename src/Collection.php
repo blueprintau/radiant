@@ -195,9 +195,10 @@ final class Collection extends BaseCollection
      *
      * @param KeyValue $key The key value.
      * @return string The serialized key.
+     * @throws \JsonException When a composite key cannot be encoded.
      */
     private static function serializeKeyValue(mixed $key): string
     {
-        return is_array($key) ? (string) json_encode($key) : (string) $key;
+        return is_array($key) ? json_encode($key, JSON_THROW_ON_ERROR) : (string) $key;
     }
 }

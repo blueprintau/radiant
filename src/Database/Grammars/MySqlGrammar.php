@@ -32,6 +32,19 @@ class MySqlGrammar extends Grammar
     }
 
     /**
+     * MySQL has no `INSERT ... DEFAULT VALUES` form — the one-row
+     * `VALUES ()` fallback compiles instead (MySQL accepts it and applies
+     * the column defaults).
+     *
+     * @return bool False — MySQL uses the `VALUES ()` fallback.
+     */
+    #[\Override]
+    protected function supportsDefaultValues(): bool
+    {
+        return false;
+    }
+
+    /**
      * Compile the offset clause, padding a bare offset with the max limit.
      *
      * MySQL requires a `LIMIT` before `OFFSET`; a bare offset is padded with

@@ -517,6 +517,7 @@ abstract class Relation
      *
      * @param mixed $key The scalar or column => value map.
      * @return string The serialized key.
+     * @throws \JsonException When a composite key cannot be encoded.
      */
     final protected static function serializeKey(mixed $key): string
     {
@@ -524,10 +525,6 @@ abstract class Relation
             return (string) $key;
         }
 
-        $encoded = json_encode($key);
-
-        return $encoded === false
-            ? throw new \LogicException('A composite relation key could not be serialized for matching.')
-            : $encoded;
+        return json_encode($key, JSON_THROW_ON_ERROR);
     }
 }

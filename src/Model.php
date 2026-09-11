@@ -453,9 +453,53 @@ abstract class Model
         }
 
         $this->exists = true;
+        $this->materializeDefaults();
         $this->syncOriginal();
 
         return true;
+    }
+
+    /**
+     * Materialize declared column defaults onto uninitialized properties
+     * after a successful INSERT.
+     *
+     * Uninitialized typed properties were omitted from the INSERT (that is
+     * WHY the DB default fired) — but leaving them uninitialized makes the
+     * in-memory model diverge from the row it just wrote: the property
+     * still throws "must not be accessed before initialization" even
+     * though `exists` is true and the row holds the default. Writing the
+     * declared default through the column's own decode keeps the model the
+     * row's honest picture without a re-fetch.
+     *
+     * Scope: only properties that are (a) uninitialized, (b) carry a
+     * literal (non-Expression) default, and (c) are not the auto-increment
+     * PK (it gets its generated value from `setPrimaryKey()`). An
+     * `Expression` default (e.g. `CURRENT_TIMESTAMP`) is skipped — its
+     * DB-computed value is unknowable client-side, so guessing would be
+     * worse than leaving the property uninitialized. A `null` attribute
+     * default means "no declared default" — nothing to materialize; for a
+     * nullable property, uninitialized already reads as null through
+     * `attribute()`, so there is no gap to fill.
+     *
+     * @return void
+     */
+    private function materializeDefaults(): void
+    {
+        foreach (static::getProperties() as $mapping) {
+            $property = $mapping->property;
+
+            if ($property === null || $property->isInitialized($this)) {
+                continue;
+            }
+
+            $default = $mapping->column->default;
+
+            if ($default === null || $default instanceof \BlueprintAU\Radiant\Database\Query\Expression) {
+                continue;
+            }
+
+            $property->setValue($this, $mapping->column->decode($default));
+        }
     }
 
     /**
@@ -585,6 +629,7 @@ abstract class Model
         });
 
         $this->exists = true;
+        $this->materializeDefaults();
         $this->syncOriginal();
 
         return true;

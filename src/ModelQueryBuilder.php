@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
@@ -431,7 +432,7 @@ class ModelQueryBuilder extends QueryBuilder
                 continue; // a null key component matches nothing — skip
             }
 
-            $serialized = json_encode($tuple);
+            $serialized = json_encode($tuple, JSON_THROW_ON_ERROR);
             $keys[$serialized] = true;
             $keyIndex[$serialized] = $tuple;
         }
@@ -558,6 +559,122 @@ class ModelQueryBuilder extends QueryBuilder
         parent::select($selects);
     }
 
+    /**
+     * Add a column-to-column comparison with model-aware column validation.
+     *
+     * The operator is interpolated verbatim between two identifiers in the
+     * compiled SQL, so it is resolved to a {@see ColumnOperator} — either
+     * passed as the enum directly, or validated from a string. The enum is
+     * stored, not a string: nothing raw ever reaches the SQL. Both columns
+     * are validated like any other column-accepting method: a bare name
+     * must be a declared model column; a qualified `table.column` must name
+     * the model's own table or a table this query JOINs.
+     *
+     * @param string $first The first column.
+     * @param ColumnOperator|string $operator The comparison operator (=, !=, <, <=, >, >=).
+     * @param string $second The second column.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return static The builder.
+     * @throws \InvalidArgumentException When the operator is not a valid
+     *         column comparison, or a column is not declared on the model
+     *         (or a valid qualified reference).
+     */
+    public function whereColumn(string $first, ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        $this->validateColumn($first);
+        $this->validateColumn($second);
+
+        return parent::whereColumn($first, $operator, $second, $boolean);
+    }
+
+    /**
+     * Add a raw SQL where clause.
+     *
+     * NOT overridden on purpose: the SQL is spliced verbatim by design
+     * (it is an expression, not a column reference, so there is nothing
+     * to {@see validateColumn()}), and its bindings are POSITIONAL — the
+     * column each belongs to is not knowable, so no per-column cast
+     * applies. DateTime bindings pass through and the connection's codec
+     * formats them, exactly as on the base builder.
+     *
+     * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
+     * @param array<int, mixed> $bindings The values to bind into the condition.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return static The builder.
+     */
+    public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return parent::whereRaw($sql, $bindings, $boolean);
+    }
+
+    /**
+     * Add a nested group of where clauses with model-aware column validation.
+     *
+     * NOT overridden: the base {@see QueryBuilder::whereNested()} owns the
+     * whole group algorithm (build → callback → empty guard → store) and
+     * delegates construction to {@see newNestedBuilder()} — which this
+     * class overrides to construct a MODEL builder, so every
+     * `$nested->where(...)` in the callback funnels through the validating
+     * `where()`, exactly like the outer query. The callback and the stored
+     * group share the ONE `WhereBuilder` instance.
+     *
+     * @return QueryBuilder The group's backing builder (a NEW builder, not
+     *         `$this`; typed as the base because a group is clause storage,
+     *         not a hydration target — the group's TModel is irrelevant to
+     *         consumers, which only call `getWheres()`/`getBindings()`).
+     * @throws \InvalidArgumentException When the callback added no clause,
+     *         or a column in the group is not a declared model column.
+     */
+    protected function newNestedBuilder(): QueryBuilder
+    {
+        return new self($this->modelClass, $this->connection);
+    }
+
+    /**
+     * Append an ON condition to the last added join, with validation.
+     *
+     * Both columns are validated before the condition is appended — the
+     * same fail-fast the `where()` override gives every filter. Through
+     * relations (`HasManyThrough::addConstraints()`) qualify their
+     * conditions to JOINED tables, which the qualified branch of
+     * {@see validateColumn()} accepts.
+     *
+     * @param string $first The first column of the condition.
+     * @param ColumnOperator|string $operator The comparison operator.
+     * @param string $second The second column of the condition.
+     * @return static The builder.
+     * @throws \LogicException When no join has been added yet.
+     * @throws \InvalidArgumentException When the operator is not a valid
+     *         column comparison, or a column is not a valid reference.
+     */
+    public function on(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
+    {
+        $this->validateColumn($first);
+        $this->validateColumn($second);
+
+        return parent::on($first, $operator, $second);
+    }
+
+    /**
+     * Append an OR-connected ON condition to the last added join, with
+     * validation.
+     *
+     * @param string $first The first column of the condition.
+     * @param ColumnOperator|string $operator The comparison operator.
+     * @param string $second The second column of the condition.
+     * @return static The builder.
+     * @throws \LogicException When no join has been added yet.
+     * @throws \InvalidArgumentException When the operator is not a valid
+     *         column comparison, or a column is not a valid reference.
+     */
+    public function orOn(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
+    {
+        $this->validateColumn($first);
+        $this->validateColumn($second);
+
+        return parent::orOn($first, $operator, $second);
+    }
+
     // ---- Soft-delete scope ----
 
     /**
@@ -679,6 +796,29 @@ class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
+     * Stream the query, hydrating each row into a model as it arrives.
+     *
+     * Overrides the base {@see QueryBuilder::cursor()}: the base yields
+     * raw `\stdClass` rows, but a model-bound builder's contract is
+     * hydration — the streaming counterpart of {@see get()} must yield
+     * the same instances. Eager loads CANNOT ride a stream (they need the
+     * full parent collection to batch the `IN` queries); call
+     * {@see with()}-less or accept un-populated relations, or use
+     * `get()` when relations are required. `getRaw()` remains the raw-row
+     * escape hatch.
+     *
+     * @return \Generator<int, TModel> The hydrated models, one at a time.
+     *
+     * @phpstan-ignore method.childReturnType
+     */
+    public function cursor(): \Generator
+    {
+        foreach ($this->connection->cursor($this) as $row) {
+            yield $this->modelClass::fromRow($row);
+        }
+    }
+
+    /**
      * Run the query and hydrate the first row.
      *
      * Fetches the raw row directly (not through `parent::first()`, which
@@ -715,6 +855,213 @@ class ModelQueryBuilder extends QueryBuilder
     public function find(mixed $id): ?Model
     {
         return $this->whereKey($id)->first();
+    }
+
+    // ---- Scalar reads (decoded through the column casts) ----
+
+    /**
+     * The scalar method — the value of a single column from the first row,
+     * DECODED through the column's cast.
+     *
+     * Overrides the base {@see QueryBuilder::value()}: the base returns the
+     * raw driver value (SQLite hands datetimes back as strings), so
+     * `max('created_at')` would return `'2026-09-11 10:00:00'` where the
+     * model's own attribute reads a Carbon. Here, a bare declared column
+     * name runs through its {@see Column::decode()} — the same cast
+     * {@see Model::fromRow()} hydrates through, so builder scalar reads
+     * and attribute reads agree. Aggregate expressions, raw SQL, and
+     * user-aliased columns (`sum(price) as total`) pass through raw — the
+     * model layer has no cast for a computed value.
+     *
+     * @param string $column The column to read.
+     * @return mixed The decoded column value, or null when no row matches.
+     */
+    public function value(string $column): mixed
+    {
+        [$sql, $alias] = $this->scalarColumn($column);
+
+        // Fetch the RAW row directly (mirroring first()): the hydrating
+        // first() would return a Model, which has no `radiant_scalar`
+        // property to read the aliased scalar back from. The scoped
+        // builder keeps THIS builder's select untouched — the base's
+        // `$this->select()` mutated state permanently.
+        $rows = $this->connection->select($this->scopedFor($sql)->limit(1));
+        $raw = $rows[0] ?? null;
+
+        return $this->decodeScalar($column, $raw === null ? null : $raw->{$alias});
+    }
+
+    /**
+     * A collection of a single column's values, DECODED through the casts.
+     *
+     * See {@see value()} for the decode policy. The returned collection
+     * holds decoded values for declared columns (a `pluck('created_at')`
+     * yields Carbons); anything else plucks the raw values. The return is
+     * the RAW-row collection (values are not Models, so the model-typed
+     * Collection cannot hold them).
+     *
+     * @param string $column The column to pluck.
+     * @return BaseCollection<int, mixed> The decoded column values.
+     */
+    public function pluck(string $column): BaseCollection
+    {
+        [$sql, $alias] = $this->scalarColumn($column);
+
+        return $this->scopedFor($sql)->getRaw()->pluck($alias)->map(
+            fn (mixed $raw) => $this->decodeScalar($column, $raw),
+        )->values();
+    }
+
+    /**
+     * A clone of this builder scoped to a scalar select.
+     *
+     * `value()`/`pluck()` must run ONE column under the stable
+     * `radiant_scalar` alias — on THIS builder, `select()` would (a)
+     * permanently overwrite `$columns` (a later `get()` would inherit the
+     * scalar select) and (b) re-merge the forced PK, dragging extra
+     * columns into the query. The clone carries the constraints (wheres,
+     * joins, soft-delete state) but owns its own column list.
+     *
+     * Shallow clone + one `parent::select()` call: all mutable builder
+     * state is value-type arrays (wheres, bindings, orders) — the only
+     * reference-type state is `$connection` (shared, readonly, safe) and
+     * `$from`/`$unions` sub-builders (none exist on a table-bound
+     * scalar read; a unioned pluck is not a shape the scalar path
+     * supports).
+     *
+     * @param string $sql The column expression to select.
+     * @return static The scoped clone.
+     */
+    private function scopedFor(string $sql): static
+    {
+        $clone = clone $this;
+        $clone->columns = [$sql];
+
+        return $clone;
+    }
+
+    /**
+     * Decode one scalar read when the column is a declared model column.
+     *
+     * Only a BARE declared column name (or `column as alias` over one)
+     * decodes — the mapping is the single source of the cast. Aggregate
+     * expressions, qualified specs, and raw SQL return the value
+     * unchanged: the model layer cannot cast a computed value.
+     *
+     * @param string $column The column expression the caller asked for.
+     * @param mixed $raw The raw driver value.
+     * @return mixed The decoded value (or `$raw` unchanged).
+     */
+    private function decodeScalar(string $column, mixed $raw): mixed
+    {
+        $bare = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
+        $metadata = MetadataFactory::for($this->modelClass);
+
+        if (!$metadata->hasColumn($bare)) {
+            return $raw;
+        }
+
+        return $metadata->mappingFor($bare)->column->decode($raw);
+    }
+
+    // ---- Aggregates (decoded like every other scalar read) ----
+
+    /**
+     * Count the matching rows.
+     *
+     * @return int The row count.
+     */
+    public function count(): int
+    {
+        return (int) $this->value('count(*)');
+    }
+
+    /**
+     * Whether any matching rows exist.
+     *
+     * @return bool True when at least one row matches.
+     */
+    public function exists(): bool
+    {
+        return $this->count() > 0;
+    }
+
+    /**
+     * The maximum value of a column — decoded through the cast for
+     * declared columns (e.g. a Carbon for a datetime column).
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The maximum value.
+     */
+    public function max(string $column): mixed
+    {
+        return $this->decodeScalar($column, $this->value("max({$column})"));
+    }
+
+    /**
+     * The minimum value of a column — decoded through the cast for
+     * declared columns.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The minimum value.
+     */
+    public function min(string $column): mixed
+    {
+        return $this->decodeScalar($column, $this->value("min({$column})"));
+    }
+
+    /**
+     * The sum of a column's values — decoded through the cast for
+     * declared columns.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The sum.
+     */
+    public function sum(string $column): mixed
+    {
+        return $this->decodeScalar($column, $this->value("sum({$column})"));
+    }
+
+    /**
+     * The average of a column's values — decoded through the cast for
+     * declared columns.
+     *
+     * @param string $column The column to aggregate.
+     * @return mixed The average.
+     */
+    public function avg(string $column): mixed
+    {
+        return $this->decodeScalar($column, $this->value("avg({$column})"));
+    }
+
+    /**
+     * Multiple aggregates in one query — the raw values decoded through
+     * each aggregate's column cast (see {@see decodeScalar()}); computed
+     * targets (`count(*)`) pass through raw.
+     *
+     * @param array<string, array{0: string, 1: string}> $aggregates
+     *        `['total' => ['count', '*'], 'max_price' => ['max', 'price']]`.
+     * @return array<string, mixed> The aggregate values keyed by alias.
+     */
+    public function aggregates(array $aggregates): array
+    {
+        $columns = [];
+
+        foreach ($aggregates as $alias => [$function, $column]) {
+            $columns[] = "{$function}({$column}) as {$alias}";
+        }
+
+        // Raw rows — a hydrated Model has no alias properties to read the
+        // aggregates back from.
+        $row = $this->select($columns)->getRaw()->first();
+
+        $values = [];
+
+        foreach ($aggregates as $alias => [, $column]) {
+            $values[$alias] = $this->decodeScalar($column, $row === null ? null : $row->{$alias});
+        }
+
+        return $values;
     }
 
     /**
@@ -1132,5 +1479,168 @@ class ModelQueryBuilder extends QueryBuilder
         throw new \InvalidArgumentException(
             "Unknown column [{$column}] on model [{$this->modelClass}]."
         );
+    }
+
+    // ---- Writes (validated + encoded through the column casts) ----
+
+    /**
+     * Insert rows with model-aware validation and cast encoding.
+     *
+     * Every column key must be a declared model column (fail-fast, the
+     * same contract `where()`/`select()` enforce) and every value runs
+     * through its column's {@see Column::encode()} — so a builder-level
+     * `insert(['created_at' => $carbon])` binds the same way a
+     * `$model->save()` does. Null values are preserved (skip encode — it
+     * passes null through anyway, but explicit is cheap and clear).
+     *
+     * @param array<string, mixed>|list<array<string, mixed>> $values A single
+     *        row or a list of rows.
+     * @return int The number of rows inserted.
+     * @throws \InvalidArgumentException When a row key is not a declared
+     *         model column.
+     */
+    public function insert(array $values): int
+    {
+        return parent::insert($this->encodeRows($values));
+    }
+
+    /**
+     * Insert a single row and return the generated id, validated and
+     * encoded like {@see insert()}.
+     *
+     * @param array<string, mixed> $values The row to insert.
+     * @return string|int|null The generated id, or null when there is none.
+     * @throws \InvalidArgumentException When a row key is not a declared
+     *         model column.
+     */
+    public function insertGetId(array $values): string|int|null
+    {
+        return parent::insertGetId($this->encodeRow($values));
+    }
+
+    /**
+     * Update the matching rows with model-aware validation and cast
+     * encoding.
+     *
+     * The value map keys are validated against the declared columns and
+     * each value encoded through its cast — `update(['views' => 5,
+     * 'published_at' => $carbon])` binds exactly what a `$model->save()`
+     * would write.
+     *
+     * @param array<string, mixed> $values The columns to change and their new values.
+     * @return int How many rows were updated.
+     * @throws \InvalidArgumentException When a key is not a declared
+     *         model column.
+     */
+    public function update(array $values): int
+    {
+        return parent::update($this->encodeRow($values));
+    }
+
+    /**
+     * Encode a SINGLE row through the column casts.
+     *
+     * Each key is validated and its value encoded through the column's
+     * {@see Column::encode()} — `\DateTimeInterface` and array (JSON)
+     * values bind identically to a model-level `save()`. A non-list input
+     * IS the row; a list input (bulk insert) encodes row-by-row and keeps
+     * the list shape.
+     *
+     * @param array<string, mixed>|list<array<string, mixed>> $values The input row(s).
+     * @return array<string, mixed>|list<array<string, mixed>> The encoded row(s).
+     * @throws \InvalidArgumentException When a row key is not a declared
+     *         model column.
+     */
+    private function encodeRows(array $values): array
+    {
+        if (!array_is_list($values)) {
+            return $this->encodeRow($values);
+        }
+
+        // A list whose first entry is NOT an array is a single associative
+        // row that array_is_list cannot distinguish (PHP list keys are
+        // ints) — but `insert(['name' => 'x'])` is never a list, so a list
+        // of scalars is caller error and `array_map` below throws the
+        // named validation error on its first key.
+        $encoded = [];
+
+        foreach ($values as $row) {
+            $encodedRow = [];
+
+            foreach ($row as $column => $value) {
+                $name = (string) $column;
+                $encodedRow[$name] = $this->encodeValue($name, $value);
+            }
+
+            $encoded[] = $encodedRow;
+        }
+
+        return $encoded;
+    }
+
+    /**
+     * Encode one row map — the shared body of {@see encodeRows()}.
+     *
+     * Keys are normalized to their string form (an int-keyed entry can
+     * only be caller error, and fails {@see validateWriteColumn()} with
+     * the named column).
+     *
+     * @param array<int|string, mixed> $row The row: column => value.
+     * @return array<string, mixed> The encoded row: column => bindable value.
+     * @throws \InvalidArgumentException When a key is not a declared
+     *         model column.
+     */
+    private function encodeRow(array $row): array
+    {
+        $encoded = [];
+
+        foreach ($row as $column => $value) {
+            $name = (string) $column;
+            $encoded[$name] = $this->encodeValue($name, $value);
+        }
+
+        return $encoded;
+    }
+
+    /**
+     * Validate one write-path column key and encode its value.
+     *
+     * @param string $column The DB column name.
+     * @param mixed $value The value as the caller supplied it.
+     * @return mixed The bindable (encoded) value.
+     * @throws \InvalidArgumentException When the column is not declared.
+     */
+    private function encodeValue(string $column, mixed $value): mixed
+    {
+        $this->validateWriteColumn($column);
+
+        return MetadataFactory::for($this->modelClass)
+            ->mappingFor($column)
+            ->column
+            ->encode($value);
+    }
+
+    /**
+     * Validate one write-path column key.
+     *
+     * The write path validates against the declared columns only — a
+     * qualified spec is meaningless for a row map (there is one table per
+     * statement root) and an aggregate-expression pass-through would be
+     * nonsense on an INSERT/UPDATE. MTI children are handled upstream:
+     * `performMtiInsert()`/`performMtiUpdate()` partition writes per
+     * owning table through plain per-table builders, so a model-level
+     * write never reaches here with cross-table columns.
+     *
+     * @param string $column The column key to check.
+     * @return void
+     * @throws \InvalidArgumentException When the column is not declared.
+     */
+    private function validateWriteColumn(string $column): void
+    {
+        if (!MetadataFactory::for($this->modelClass)->hasColumn($column)) {
+            throw new \InvalidArgumentException(
+                "Unknown column [{$column}] on model [{$this->modelClass}]."
+            );
+        }
     }
 }

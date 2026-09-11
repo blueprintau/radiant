@@ -194,6 +194,12 @@ final class MetadataFactory
             $column->propertyType = $type?->getName();
             $column->assertTypeCompatible($column->propertyType, $class, $property->getName());
 
+            // Fail fast when a PHP property default would silently shadow
+            // the declared column default — an initialized property is
+            // always INSERTed explicitly, so a divergent pair writes one
+            // value from models and another from raw SQL.
+            $column->assertDefaultConsistent($property, $class);
+
             // Resolve the DB column name ONTO the column at build time, so
             // every consumer downstream (primary-key handling, DDL
             // emission, query building) reads a concrete `$column->name`

@@ -281,6 +281,26 @@ abstract class Grammar
     public function compileInsert(QueryBuilder $builder, array $values, ?string $pk = null): string
     {
         $rows = $this->normalizeInsertRows($values);
+
+        // An EMPTY row (a model with no set properties, a DEFAULTS-only
+        // insert) cannot compile to the degenerate `INSERT INTO t () VALUES
+        // ()` — invalid SQL on every dialect. The portable form is
+        // `INSERT INTO t DEFAULT VALUES` (SQLite, Postgres); MySQL 8 has
+        // no DEFAULT VALUES and gets the one-row `VALUES ()` form, which
+        // it accepts.
+        if (isset($rows[0]) && $rows[0] === []) {
+            $sql = "INSERT INTO {$this->wrapFromTable($builder)} DEFAULT VALUES";
+            if (!$this->supportsDefaultValues()) {
+                $sql = "INSERT INTO {$this->wrapFromTable($builder)} () VALUES ()";
+            }
+
+            if ($this->usesReturning() && $pk !== null) {
+                $sql .= ' RETURNING ' . $this->wrapSegments($pk);
+            }
+
+            return $sql;
+        }
+
         $columns = implode(', ', array_map(fn ($column) => $this->wrapSegments($column), array_keys($rows[0])));
         $placeholders = implode(', ', array_map(
             fn ($row) => '(' . implode(', ', array_fill(0, count($row), '?')) . ')',
@@ -292,6 +312,17 @@ abstract class Grammar
             $sql .= ' RETURNING ' . $this->wrapSegments($pk);
         }
         return $sql;
+    }
+
+    /**
+     * Whether the dialect accepts the SQL-standard `INSERT INTO t DEFAULT
+     * VALUES` form.
+     *
+     * @return bool True when DEFAULT VALUES is supported (default).
+     */
+    protected function supportsDefaultValues(): bool
+    {
+        return true;
     }
 
     /**

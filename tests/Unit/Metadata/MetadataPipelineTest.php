@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\ModelQueryBuilder;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DefaultedModelProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DirtyProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnProbe;
@@ -450,5 +451,48 @@ final class MetadataPipelineTest extends TestCase
         self::assertNotNull($raw);
         self::assertSame('published', $raw->state);
         self::assertSame([], $probe->dirtyColumns());
+    }
+
+    /**
+     * Uninitialized properties with declared column defaults are
+     * materialized onto the model after save() — the in-memory model
+     * matches the row the DB default produced, without a re-fetch.
+     *
+     * A column WITHOUT a declared default stays uninitialized, and the
+     * materialized model is clean (materialization is not dirty state).
+     */
+    public function testInsertMaterializesColumnDefaults(): void
+    {
+        $this->connection->create(
+            (new Blueprint('defaulted_models'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::Int, 'hits', default: 0)
+                ->column(ColumnType::String, 'author', length: 32, nullable: true, default: 'anon')
+                ->column(ColumnType::String, 'note', length: 255, nullable: true),
+        );
+
+        // EVERY column omitted at insert — the empty-row compile path
+        // (`INSERT INTO ... DEFAULT VALUES`) fires, applying all defaults.
+        $model = new DefaultedModelProbe();
+        $model->save();
+
+        self::assertTrue($model->existsExposed());
+        self::assertSame(0, $model->hits);
+        self::assertSame('anon', $model->author);
+
+        // `note` was never set and has no declared default — the property
+        // stays uninitialized after save().
+        self::assertFalse($model->propertyIsInitialized('note'));
+
+        // The row agrees with the model.
+        $raw = $this->connection->table('defaulted_models')->first();
+        self::assertNotNull($raw);
+        self::assertSame(0, $raw->hits);
+        self::assertSame('anon', $raw->author);
+
+        // Materialized values are the original snapshot, not dirty state —
+        // a second save() emits no spurious UPDATE.
+        self::assertSame([], $model->dirtyColumns());
+        $model->save();
     }
 }

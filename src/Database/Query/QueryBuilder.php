@@ -598,8 +598,9 @@ class QueryBuilder
      */
     public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $nested = new self($this->connection, $this->table);
-        $callback(new WhereBuilder($nested));
+        $nested = $this->newNestedBuilder();
+        $group = new WhereBuilder($nested);
+        $callback($group);
 
         // An empty group is a declaration bug, not a neutral filter: on SQL
         // it compiles to degenerate `()` SQL, and evaluators that walk the
@@ -610,7 +611,7 @@ class QueryBuilder
             );
         }
 
-        $this->wheres[] = ['type' => WhereType::Nested, 'query' => new WhereBuilder($nested), 'boolean' => $boolean];
+        $this->wheres[] = ['type' => WhereType::Nested, 'query' => $group, 'boolean' => $boolean];
         array_push($this->bindings[BindingCategory::Where->value], ...$nested->getBindings([BindingCategory::Where]));
         return $this;
     }
@@ -630,6 +631,24 @@ class QueryBuilder
     public function orWhereNested(callable $callback): static
     {
         return $this->whereNested($callback, WhereBoolean::Or);
+    }
+
+    /**
+     * The builder a nested where group stores its clauses on.
+     *
+     * The ONE construction point `whereNested()` owns the whole group
+     * algorithm through (build → callback → empty guard → store), so a
+     * subclass only swaps WHAT the group is: {@see ModelQueryBuilder}
+     * constructs a MODEL builder, which makes every callback clause funnel
+     * through column validation — no per-subclass duplication of the
+     * merge/guard steps, and the callback and the stored group share the
+     * ONE `WhereBuilder` instance.
+     *
+     * @return self The group's backing builder.
+     */
+    protected function newNestedBuilder(): self
+    {
+        return new self($this->connection, $this->table);
     }
 
     // ---- Grouping / Having ----
@@ -860,7 +879,7 @@ class QueryBuilder
      * @param string $column The column expression.
      * @return array{0: string, 1: string} The select SQL and result alias.
      */
-    private function scalarColumn(string $column): array
+    protected function scalarColumn(string $column): array
     {
         if (preg_match('/\s+as\s+[`"]?([a-z_][a-z0-9_]*)[`"]?$/i', $column, $matches)) {
             return [$column, $matches[1]];

@@ -491,6 +491,27 @@ final class GrammarTest extends TestCase
         self::assertSame('INSERT INTO `users` (`name`) VALUES (?)', $sql);
     }
 
+    /**
+     * An EMPTY row compiles to the SQL-standard DEFAULT VALUES form on
+     * dialects that support it — the degenerate `() VALUES ()` is invalid
+     * SQL on SQLite/Postgres.
+     */
+    public function testInsertEmptyRowUsesDefaultValues(): void
+    {
+        $sql = (new SqliteGrammar())->compileInsert($this->builder(), [[]]);
+        self::assertSame('INSERT INTO "users" DEFAULT VALUES', $sql);
+    }
+
+    /**
+     * MySQL has no DEFAULT VALUES form — the one-row `VALUES ()` fallback,
+     * which MySQL accepts and applies the column defaults to.
+     */
+    public function testInsertEmptyRowMySqlFallsBackToValues(): void
+    {
+        $sql = (new MySqlGrammar())->compileInsert($this->builder(), [[]]);
+        self::assertSame('INSERT INTO `users` () VALUES ()', $sql);
+    }
+
     // ---- Update / Delete ----
 
     /**
