@@ -23,7 +23,15 @@ final class PostgresSchemaInspector extends SchemaInspector
         );
         $statement->execute();
 
-        return array_values(array_map('strval', $statement->fetchAll(\PDO::FETCH_COLUMN)));
+        // Build by append: the append target is inferred as list<string>,
+        // which keeps the return type exact no matter how the underlying
+        // PHP version types fetchAll(PDO::FETCH_COLUMN).
+        $tables = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            $tables[] = (string) $name;
+        }
+
+        return $tables;
     }
 
     /**

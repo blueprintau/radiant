@@ -30,7 +30,15 @@ final class SqliteSchemaInspector extends SchemaInspector
             throw new \RuntimeException('Could not list SQLite tables.');
         }
 
-        return array_values(array_map('strval', $result->fetchAll(\PDO::FETCH_COLUMN)));
+        // Build by append: the append target is inferred as list<string>,
+        // which keeps the return type exact no matter how the underlying
+        // PHP version types fetchAll(PDO::FETCH_COLUMN).
+        $tables = [];
+        foreach ($result->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            $tables[] = (string) $name;
+        }
+
+        return $tables;
     }
 
     /**
@@ -108,10 +116,13 @@ final class SqliteSchemaInspector extends SchemaInspector
             $infoStatement = $this->pdo->prepare('PRAGMA index_info(' . $this->quoteIdentifier($indexName) . ')');
             $infoStatement->execute();
 
-            $columns = array_values(array_map(
-                'strval',
-                $infoStatement->fetchAll(\PDO::FETCH_COLUMN, 2),
-            ));
+            // Build by append: the append target is inferred as list<string>,
+            // which keeps the type exact no matter how the underlying PHP
+            // version types fetchAll(PDO::FETCH_COLUMN).
+            $columns = [];
+            foreach ($infoStatement->fetchAll(\PDO::FETCH_COLUMN, 2) as $column) {
+                $columns[] = (string) $column;
+            }
 
             $indexes[] = [
                 // Auto-named indexes (sqlite_autoindex_*) are unnamed from

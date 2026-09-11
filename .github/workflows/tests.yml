@@ -89,15 +89,18 @@ jobs:
                       ${{ runner.os }}-php${{ matrix.php }}-deps${{ matrix.dependencies }}-
 
             - name: Install dependencies
-              # The `highest` leg installs the COMMITTED lock (nothing is
-              # re-resolved) so tests and `composer audit --locked` exercise
+              # The `highest` leg installs the COMMITTED lock (`composer
+              # install` installs from composer.lock when present — it never
+              # re-resolves) so tests and `composer audit --locked` exercise
               # the exact reviewed, reproducible tree. Only the lowest-bounds
               # leg resolves — that is its purpose.
+              # Note: `--locked` is not an install option (it belongs to
+              # update/audit), so it must not be passed here.
               run: |
                   if [ "${{ matrix.dependencies }}" = "lowest" ]; then
                       composer update --no-interaction --prefer-dist --prefer-lowest
                   else
-                      composer install --locked --no-interaction --prefer-dist
+                      composer install --no-interaction --prefer-dist
                   fi
                   composer dump-autoload
 
