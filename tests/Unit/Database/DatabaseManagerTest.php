@@ -157,6 +157,6 @@ final class DatabaseManagerTest extends TestCase
         yield 'unknown driver' => [['main' => ['driver' => 'nope']], 'No connector registered for [nope]'];
         yield 'missing driver' => [['main' => ['host' => 'localhost']], 'must declare a non-empty string "driver"'];
         yield 'not an array' => [['main' => 'sqlite'], 'must be an array of settings'];
-        yield 'missing sqlite database' => [['main' => ['driver' => 'sqlite']], 'SQLite database must be a path string'];
+        yield 'missing sqlite database' => [['main' => ['driver' => 'sqlite']], 'SQLite database must be a non-empty path string'];
     }
 }

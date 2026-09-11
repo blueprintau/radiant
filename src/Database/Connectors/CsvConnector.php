@@ -56,9 +56,9 @@ final class CsvConnector implements ConnectorInterface
     #[Override]
     public function validConfig(array $config): void
     {
-        if (!isset($config['path']) || !is_string($config['path'])) {
+        if (!isset($config['path']) || !is_string($config['path']) || $config['path'] === '') {
             throw new \InvalidArgumentException(
-                'CSV requires a "path" string; got '
+                'CSV requires a non-empty "path" string; got '
                     . (isset($config['path']) ? get_debug_type($config['path']) : 'nothing')
                     . '.'
             );

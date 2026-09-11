@@ -92,10 +92,13 @@ final class MySqlConnector extends SqlConnector
         $this->validConfig($config);
 
         $host = $config['host'] ?? null;
-        $port = $config['port'] ?? 3306;
+        $port = $config['port'] ?? null;
         $database = $config['database'] ?? null;
         $charset = $this->validCharset($config['charset'] ?? 'utf8mb4');
 
+        // validConfig() has already validated host, port and database — the
+        // combined shape check stays as defense-in-depth for direct
+        // connect() calls that skip the manager.
         if (!is_string($host) || !is_int($port) || !is_string($database)) {
             throw new \InvalidArgumentException(
                 'MySQL requires a string host, an integer port and a string database.'

@@ -96,7 +96,7 @@ class PostgresSchemaGrammar extends SchemaGrammar
         if (strlen($name) > 63) {
             throw new \InvalidArgumentException(sprintf(
                 'Identifier [%s] exceeds Postgres\'s 63-byte limit (%d bytes); '
-                . 'declare a shorter #[Unique(name: ...)] / #[CompositeIndex(name: ...)].',
+                . 'declare a shorter #[Unique(name: ...)] / #[Index(name: ...)].',
                 $name,
                 strlen($name),
             ));

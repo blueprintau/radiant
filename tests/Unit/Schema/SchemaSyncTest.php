@@ -629,7 +629,7 @@ final class SchemaSyncTest extends TestCase
      * Two class-level #[Unique] attributes compile DISTINCT unique-index
      * names (derived from the covered columns with a `_unique` suffix —
      * the suffix says WHAT the index is and cannot collide with a
-     * #[CompositeIndex] over the same columns). A hardcoded name would
+     * #[Index] over the same columns). A hardcoded name would
      * emit two CREATE UNIQUE INDEX statements with the same name and the
      * second would fail at the database.
      */

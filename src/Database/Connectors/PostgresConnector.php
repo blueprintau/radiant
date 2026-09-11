@@ -68,6 +68,10 @@ final class PostgresConnector extends SqlConnector
             );
         }
 
+        // (Port's type was already validated by validConfig() above; the
+        // combined check remains as defense-in-depth for direct connect()
+        // calls that skip the manager.)
+
         $dsn = sprintf(
             'pgsql:host=%s;port=%d;dbname=%s',
             $host,
@@ -110,12 +114,21 @@ final class PostgresConnector extends SqlConnector
         parent::validConfig($config);
 
         $host = $config['host'] ?? null;
+        $port = $config['port'] ?? null;
         $database = $config['database'] ?? null;
 
         if (!is_string($host) || $host === '') {
             throw new \InvalidArgumentException(
                 'Postgres requires a non-empty string "host"; got '
                 . ($host === null ? 'nothing' : get_debug_type($host))
+                . '.'
+            );
+        }
+
+        if (array_key_exists('port', $config) && !is_int($config['port'])) {
+            throw new \InvalidArgumentException(
+                'Postgres "port" must be an integer; got '
+                . get_debug_type($config['port'])
                 . '.'
             );
         }

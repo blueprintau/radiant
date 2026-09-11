@@ -13,7 +13,7 @@ namespace BlueprintAU\Radiant\Attributes;
  * `#[Column]` set at build time by the {@see \BlueprintAU\Radiant\Metadata\MetadataFactory}.
  */
 #[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]
-final class CompositeIndex
+final class Index
 {
     /**
      * Create an index declaration.

@@ -44,9 +44,9 @@ construction and fails fast with a message naming the problem.
 | Driver | Key | Required | Optional |
 | --- | --- | --- | --- |
 | MySQL | `mysql` | `host`, `port` (integer), `database` | `username`, `password`, `charset` (allowlisted), PDO `options` |
-| SQLite | `sqlite` | `database` (path string) | PDO `options` |
-| Postgres | `pgsql` | `host`, `database` | `port` (default 5432), `username`, `password`, PDO `options` |
-| CSV | `csv` | `path` | `readonly` boolean |
+| SQLite | `sqlite` | `database` (non-empty path string) | PDO `options` |
+| Postgres | `pgsql` | `host`, `database` | `port` (integer, default 5432), `sslmode` (allowlisted), `username`, `password`, PDO `options` |
+| CSV | `csv` | `path` (non-empty string) | `readonly` boolean |
 
 ```php
 'sqlite' => ['driver' => 'sqlite', 'database' => __DIR__.'/app.sqlite'],

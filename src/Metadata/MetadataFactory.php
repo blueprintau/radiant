@@ -9,7 +9,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\SoftDeletes;
-use BlueprintAU\Radiant\Attributes\CompositeIndex;
+use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Attributes\Unique;
 
@@ -470,7 +470,7 @@ final class MetadataFactory
      * @param \ReflectionClass<Model> $reflection The leaf class.
      * @param class-string<Model> $class The leaf class name.
      * @param PropertyMapping[] $properties The merged mappings.
-     * @return array{list<Unique>, list<CompositeIndex>, list<ForeignKey>}
+     * @return array{list<Unique>, list<Index>, list<ForeignKey>}
      *         The uniques, indexes, and foreign keys, most-derived first.
      * @throws \InvalidArgumentException On unknown columns, arity
      *         mismatches, or duplicate declarations.
@@ -495,8 +495,8 @@ final class MetadataFactory
                 $uniques[] = $unique;
             }
 
-            foreach ($level->getAttributes(CompositeIndex::class) as $attribute) {
-                /** @var CompositeIndex $index */
+            foreach ($level->getAttributes(Index::class) as $attribute) {
+                /** @var Index $index */
                 $index = $attribute->newInstance();
                 self::validateConstraintColumns($index->columns, $properties, $class, 'index');
                 self::validateNoFlagDuplicates($index->columns, $properties, $class, 'index');

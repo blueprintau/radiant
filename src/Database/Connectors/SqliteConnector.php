@@ -90,9 +90,9 @@ final class SqliteConnector extends SqlConnector
     {
         parent::validConfig($config);
 
-        if (!isset($config['database']) || !is_string($config['database'])) {
+        if (!isset($config['database']) || !is_string($config['database']) || $config['database'] === '') {
             throw new \InvalidArgumentException(
-                'SQLite database must be a path string; got '
+                'SQLite database must be a non-empty path string; got '
                 . (isset($config['database']) ? get_debug_type($config['database']) : 'nothing')
                 . '.'
             );

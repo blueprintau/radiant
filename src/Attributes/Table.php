@@ -30,7 +30,7 @@ namespace BlueprintAU\Radiant\Attributes;
  *
  * Composite constraints (unique / foreign key / index) do NOT live here —
  * they are separate class-level attributes ({@see Unique},
- * {@see ForeignKey}, {@see CompositeIndex}). `#[Table]` stays a
+ * {@see ForeignKey}, {@see Index}). `#[Table]` stays a
  * naming/placement concern; constraints are a vocabulary of their own.
  */
 #[\Attribute(\Attribute::TARGET_CLASS)]

@@ -80,7 +80,7 @@ explicit configuration, is a class-level attribute.** Single-column
 uniques, indexes, and foreign keys ride the `#[Column]` flags.
 
 ```php
-use BlueprintAU\Radiant\Attributes\CompositeIndex;
+use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\Unique;
 
@@ -91,7 +91,7 @@ use BlueprintAU\Radiant\Attributes\Unique;
     referencesColumns: ['id', 'country'],
     onDelete: 'cascade',
 )]
-#[CompositeIndex(columns: ['country', 'created_at'])]
+#[Index(columns: ['country', 'created_at'])]
 class Shipment extends Model
 {
     #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
@@ -124,7 +124,7 @@ through that model's table.
 
 **Composite support.** A composite primary key is declared by setting
 `primaryKey: true` on multiple `#[Column]` properties. Every constraint
-location accepts a column list: `#[Unique]` and `#[CompositeIndex]` take
+location accepts a column list: `#[Unique]` and `#[Index]` take
 `columns:` lists by shape, and a composite foreign key is the class-level
 `#[ForeignKey]` with a `columns:` list (its `referencesColumns` defaults
 to the target model's full primary key). The single-column `foreign:`

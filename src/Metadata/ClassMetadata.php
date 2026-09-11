@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Metadata;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\CompositeIndex;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
+use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\SoftDeletes;
 use BlueprintAU\Radiant\Attributes\Unique;
@@ -53,7 +53,7 @@ final class ClassMetadata
      * @param list<Column> $primaryKeys The primary-key column declarations.
      * @param list<Unique> $uniques Every `#[Unique]` on the class hierarchy.
      *        Column names are validated against `$properties` at build.
-     * @param list<CompositeIndex> $indexes Every `#[CompositeIndex]`.
+     * @param list<Index> $indexes Every `#[Index]`.
      * @param list<ForeignKey> $foreignKeys Every `#[ForeignKey]`.
      * @param string|null $softDeleteColumn The resolved soft-delete column
      *        name when the class uses {@see SoftDeletes}, else null. Carried

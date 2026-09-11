@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\CompositeIndex;
+use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
@@ -17,7 +17,7 @@ use BlueprintAU\Radiant\Attributes\Unique;
  * The composite-constraint model — every class-level constraint family.
  */
 #[Unique(columns: ['country', 'tracking'])]
-#[CompositeIndex(columns: ['country', 'shippedAt'])]
+#[Index(columns: ['country', 'shippedAt'])]
 #[ForeignKey(columns: ['regionId', 'country'], references: 'geo_regions', referencesColumns: ['id', 'country'], onDelete: ForeignKeyAction::Cascade)]
 #[Table(name: 'shipments')]
 class Shipment extends Model

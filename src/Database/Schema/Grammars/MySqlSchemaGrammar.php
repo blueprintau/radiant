@@ -95,7 +95,7 @@ class MySqlSchemaGrammar extends SchemaGrammar
         if (strlen($name) > 64) {
             throw new \InvalidArgumentException(sprintf(
                 'Identifier [%s] exceeds MySQL\'s 64-character limit (%d chars); '
-                . 'declare a shorter #[Unique(name: ...)] / #[CompositeIndex(name: ...)].',
+                . 'declare a shorter #[Unique(name: ...)] / #[Index(name: ...)].',
                 $name,
                 strlen($name),
             ));

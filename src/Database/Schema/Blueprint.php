@@ -493,7 +493,7 @@ final class Blueprint
      * declared it — the metadata is the MERGED view) folds into a
      * `column()` call; `#[Column]` flags (unique/index/foreign) ride the
      * same call; the class-level `#[Unique]` / `#[ForeignKey]` /
-     * `#[CompositeIndex]` attributes become explicit `index()` /
+     * `#[Index]` attributes become explicit `index()` /
      * `foreignKey()` declarations (with the duplicate-declaration rule
      * already enforced at metadata build, so a flag and an attribute can
      * never double-declare here).
@@ -558,7 +558,7 @@ final class Blueprint
         // DB. The default derives from the covered columns with a `_unique`
         // suffix (`{columns}_unique`, rendered `{table}_{name}_unique` by
         // the grammar): the suffix says WHAT the index is, it cannot
-        // collide with a #[CompositeIndex] over the same columns (which
+        // collide with a #[Index] over the same columns (which
         // derives `{columns}` bare), and an explicit #[Unique(name: ...)]
         // always wins. The duplicate-name guard at the bottom of this
         // method catches any remaining collision (e.g. genuinely duplicated
@@ -640,7 +640,7 @@ final class Blueprint
             if (isset($names[$index['name']])) {
                 throw new \InvalidArgumentException(sprintf(
                     'Model [%s] declares two indexes named [%s] (columns [%s]); '
-                    . 'index names must be unique per table. Give the #[CompositeIndex] '
+                    . 'index names must be unique per table. Give the #[Index] '
                     . 'an explicit name, or drop the duplicate constraint.',
                     $model,
                     $index['name'],

@@ -36,8 +36,19 @@ final class ConnectorTest extends TestCase
     public function testSqliteRequiresDatabase(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('SQLite database must be a path string');
+        $this->expectExceptionMessage('SQLite database must be a non-empty path string');
         (new SqliteConnector())->validConfig(['driver' => 'sqlite']);
+    }
+
+    /**
+     * SQLite rejects an empty database path — DSN "sqlite:" would silently
+     * use a default temp store.
+     */
+    public function testSqliteRejectsEmptyDatabase(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('SQLite database must be a non-empty path string');
+        (new SqliteConnector())->validConfig(['driver' => 'sqlite', 'database' => '']);
     }
 
     /**
@@ -105,7 +116,48 @@ final class ConnectorTest extends TestCase
     public function testCsvRequiresPath(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('CSV requires a "path" string');
+        $this->expectExceptionMessage('CSV requires a non-empty "path" string');
         (new CsvConnector())->validConfig(['driver' => 'csv']);
+    }
+
+    /**
+     * CSV rejects an empty path — fopen('') fails with a confusing error.
+     */
+    public function testCsvRejectsEmptyPath(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('CSV requires a non-empty "path" string');
+        (new CsvConnector())->validConfig(['driver' => 'csv', 'path' => '']);
+    }
+
+    /**
+     * Postgres rejects a non-integer port — the type is checked at
+     * construction (fail-fast), matching MySQL's validation, instead of
+     * surfacing at connect time with the combined host/port/database message.
+     */
+    public function testPostgresRejectsNonIntegerPort(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Postgres "port" must be an integer');
+        (new PostgresConnector())->validConfig([
+            'driver' => 'pgsql',
+            'host' => 'localhost',
+            'database' => 'app',
+            'port' => '5432',
+        ]);
+    }
+
+    /**
+     * Postgres accepts a valid integer port.
+     */
+    public function testPostgresAcceptsIntegerPort(): void
+    {
+        (new PostgresConnector())->validConfig([
+            'driver' => 'pgsql',
+            'host' => 'localhost',
+            'database' => 'app',
+            'port' => 5433,
+        ]);
+        $this->addToAssertionCount(1);
     }
 }
