@@ -41,12 +41,12 @@ selects one, and `$manager->usingConnection('name', fn () => ...)`
 scopes a callback to one. Each connector validates its own config at
 construction and fails fast with a message naming the problem.
 
-| Driver | Key | Required config |
-| --- | --- | --- |
-| MySQL | `mysql` | `host`, `port` (integer), `database`; optional `username`, `password`, `charset` (allowlisted) and PDO `options` |
-| SQLite | `sqlite` | `database` (path string); optional PDO `options` |
-| Postgres | `pgsql` | `host`, `database`; optional `port` (default 5432), `username`, `password`, PDO `options` |
-| CSV | `csv` | `path`; optional `readonly` boolean |
+| Driver | Key | Required | Optional |
+| --- | --- | --- | --- |
+| MySQL | `mysql` | `host`, `port` (integer), `database` | `username`, `password`, `charset` (allowlisted), PDO `options` |
+| SQLite | `sqlite` | `database` (path string) | PDO `options` |
+| Postgres | `pgsql` | `host`, `database` | `port` (default 5432), `username`, `password`, PDO `options` |
+| CSV | `csv` | `path` | `readonly` boolean |
 
 ```php
 'sqlite' => ['driver' => 'sqlite', 'database' => __DIR__.'/app.sqlite'],

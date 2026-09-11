@@ -122,6 +122,15 @@ the same column is a build-time error, so constraints can't double-declare.
 `#[ForeignKey]`'s `references` also accepts a model class-string, resolved
 through that model's table.
 
+**Composite support.** A composite primary key is declared by setting
+`primaryKey: true` on multiple `#[Column]` properties. Every constraint
+location accepts a column list: `#[Unique]` and `#[CompositeIndex]` take
+`columns:` lists by shape, and a composite foreign key is the class-level
+`#[ForeignKey]` with a `columns:` list (its `referencesColumns` defaults
+to the target model's full primary key). The single-column `foreign:`
+flag rejects a composite-PK target — one column cannot reference a
+two-column key — so use the class-level attribute there.
+
 ## Soft deletes
 
 Opt in by applying the `SoftDeletes` trait — the delete column

@@ -62,6 +62,13 @@ model's primary key) and are overridable with explicit arguments. Every
 column a relation names is validated against the model's declared columns
 at construction — an unknown FK throws immediately.
 
+**Composite keys.** The FK and local-key arguments accept a column list —
+`hasMany(Shipment::class, ['region_id', 'country'])` — and both sides
+must agree in shape (a scalar on one side and a list on the other
+throws). A composite relation applies the key tuple as one AND-group, so
+a caller's `orWhere()` composes against the tuple as a unit, and eager
+loading matches parent and child rows positionally per column.
+
 ## Eager loading
 
 `with()` runs one extra `whereIn(fk, keys)` query per relation — no joins,

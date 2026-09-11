@@ -7,10 +7,6 @@ A **database + ORM package** for the BlueprintAU ecosystem — a fail-fast,
 explicit query builder, SQL connection layer, and attribute-driven ORM.
 Radiant is the database layer split out of the Lucent restructure.
 
-> **Status:** the `Database\` layer, the attribute-driven ORM (`Model`,
-> `#[Column]`, soft deletes), **Relations** (HasOne/HasMany/BelongsTo +
-> through), and **multi-table inheritance** are implemented and tested.
-
 ## Documentation
 
 | Guide | Contents |
