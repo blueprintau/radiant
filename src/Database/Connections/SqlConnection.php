@@ -610,9 +610,9 @@ abstract class SqlConnection implements ConnectionInterface
      * through {@see create()} so declared indexes are emitted too.
      *
      * NOTE: applying changes is NOT serialized across processes by itself.
-     * Wrap the whole `diff → apply` loop in a schema lock —
-     * {@see withSchemaLock()} or a
-     * {@see \BlueprintAU\Radiant\Database\Locks\Lock} adapter — when
+     * Wrap the whole `diff → apply` loop in a cross-process lock —
+     * {@see withLock()} (schema-sync convention: the name `'radiant:schema'`)
+     * or a {@see \BlueprintAU\Radiant\Database\Locks\Lock} adapter — when
      * more than one deployment instance can migrate concurrently.
      *
      * @param \BlueprintAU\Radiant\Database\Schema\SchemaChange $change The change to apply.
@@ -627,31 +627,37 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Run schema work while holding a cross-process schema lock, using the
-     * dialect's native advisory-lock mechanism. It is a thin schema-flavored
-     * wrapper over the general locking layer —
-     * {@see \BlueprintAU\Radiant\Database\Locks\Lock} — for anything else
-     * (cron overlap, cache warmups), instantiate an adapter directly.
+     * Run the callback while holding a cross-process lock taken on THIS
+     * connection — the general serialization gate for anything that must
+     * not run twice concurrently (the schema `diff → apply` loop, cron
+     * overlap, cache warmups).
      *
-     * MySQL uses `GET_LOCK`/`RELEASE_LOCK`, Postgres a session advisory
-     * lock, SQLite a `BEGIN IMMEDIATE` transaction. The lock is held on
-     * THIS connection, so the schema work (inspector reads + `apply()`)
-     * must run on this same connection — pass a closure that closes over
-     * `$this` (or use the facade while this connection is current).
+     * `$name` is the mutual-exclusion domain: one name is one lock, so
+     * distinct jobs use distinct names and never serialize each other. The
+     * schema-sync convention is `'radiant:schema'` — only code doing schema
+     * work should pass it.
+     *
+     * Each dialect takes the lock natively: MySQL `GET_LOCK`/`RELEASE_LOCK`,
+     * Postgres a session advisory lock, SQLite a `BEGIN IMMEDIATE` write
+     * transaction (which serializes ALL writes and refuses to run inside an
+     * already-open transaction). The lock is held on THIS connection, so
+     * the guarded work must run on this same connection — pass a closure
+     * that closes over `$this` (or use the facade while this connection is
+     * current).
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The schema work — the whole
-     *        `diff → apply` loop belongs inside it.
+     * @param callable(): TReturn $callback The work to run under lock.
+     * @param string $name The lock domain — distinct jobs, distinct names.
      * @return TReturn The callback's return value.
      * @throws UnsupportedFeatureException When the dialect has no native
      *         cross-process lock (overridable — supply a Lock adapter then).
      * @throws \Throwable Whatever the callback throws, after releasing the lock.
      */
-    public function withSchemaLock(callable $callback): mixed
+    public function withLock(callable $callback, string $name): mixed
     {
         throw new UnsupportedFeatureException(
-            'This dialect does not provide a native schema lock; supply a Lock adapter.',
+            'This dialect does not provide a native cross-process lock; supply a Lock adapter.',
         );
     }
 

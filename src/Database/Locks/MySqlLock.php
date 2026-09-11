@@ -31,7 +31,8 @@ final class MySqlLock extends SqlLock
     }
 
     /**
-     * The lock acquisition statement — blocks up to 30s, then fails.
+     * The lock acquisition statement — blocks up to 30s, then fails. The
+     * lock name is a bound parameter (position 1), not interpolated SQL.
      *
      * GET_LOCK returns 0 on timeout and NULL on error; making the failure
      * visible requires converting the result to an error. The SELECT wraps
@@ -39,27 +40,22 @@ final class MySqlLock extends SqlLock
      * by zero on a non-1 result — a portable SQL trick MySQL evaluates
      * deterministically here.
      *
-     * @param string $name The named lock to acquire.
-     * @return string The lock SQL.
+     * @return string The parameterized lock SQL.
      */
     #[\Override]
-    protected function lockStatement(string $name): string
+    protected function lockStatement(): string
     {
-        return sprintf(
-            "SELECT IF(GET_LOCK('%s', 30) = 1, 1, crc32('lock-timeout') DIV 0)",
-            $name,
-        );
+        return "SELECT IF(GET_LOCK(?, 30) = 1, 1, crc32('lock-timeout') DIV 0)";
     }
 
     /**
-     * The lock release statement.
+     * The lock release statement. The lock name is a bound parameter.
      *
-     * @param string $name The named lock to release.
-     * @return string The unlock SQL.
+     * @return string The parameterized unlock SQL.
      */
     #[\Override]
-    protected function unlockStatement(string $name): string
+    protected function unlockStatement(): string
     {
-        return sprintf("DO RELEASE_LOCK('%s')", $name);
+        return 'DO RELEASE_LOCK(?)';
     }
 }

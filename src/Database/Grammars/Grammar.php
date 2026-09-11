@@ -141,8 +141,7 @@ abstract class Grammar
      * un-wrapped: the aggregate regex admits `func(<anything>)` shapes,
      * and an unwrapped inner would splice arbitrary text into the SQL.
      * Today every public caller validates upstream, so this is
-     * defense-in-depth for future callers — the fail-open passthrough was
-     * the audit's one grammar hardening gap.
+     * defense-in-depth for future callers.
      *
      * @param string $inner The aggregate's inner content.
      * @return string The wrapped inner content.

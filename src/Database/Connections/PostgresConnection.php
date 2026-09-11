@@ -27,9 +27,6 @@ use Override;
  */
 final class PostgresConnection extends SqlConnection
 {
-    /** The lock domain `withSchemaLock()` serializes schema work under. */
-    private const SCHEMA_LOCK_NAME = 'radiant:schema';
-
     /**
      * The default query grammar for this connection.
      *
@@ -114,18 +111,20 @@ final class PostgresConnection extends SqlConnection
     }
 
     /**
-     * Run schema work under a Postgres session advisory lock.
+     * Run the callback under a Postgres session advisory lock on the given
+     * lock domain.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The schema work.
+     * @param callable(): TReturn $callback The work to run under lock.
+     * @param string $name The lock domain.
      * @return TReturn The callback's return value.
      * @throws \Throwable Whatever the callback throws, after releasing the lock.
      */
     #[Override]
-    public function withSchemaLock(callable $callback): mixed
+    public function withLock(callable $callback, string $name): mixed
     {
         return (new \BlueprintAU\Radiant\Database\Locks\PostgresLock($this))
-            ->withLock($callback, self::SCHEMA_LOCK_NAME);
+            ->withLock($callback, $name);
     }
 }

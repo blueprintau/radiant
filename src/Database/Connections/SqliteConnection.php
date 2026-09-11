@@ -23,9 +23,6 @@ use Override;
  */
 final class SqliteConnection extends SqlConnection
 {
-    /** The lock domain `withSchemaLock()` serializes schema work under. */
-    private const SCHEMA_LOCK_NAME = 'radiant:schema';
-
     /**
      * The default query grammar for this connection.
      *
@@ -97,19 +94,22 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
-     * Run schema work inside a `BEGIN IMMEDIATE` transaction — SQLite's
-     * native cross-process serialization.
+     * Run the callback inside a `BEGIN IMMEDIATE` write transaction —
+     * SQLite's native cross-process serialization. The name is accepted
+     * for signature parity and ignored: a database-wide write transaction
+     * has nothing to name.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The schema work.
+     * @param callable(): TReturn $callback The work to run under lock.
+     * @param string $name The lock domain (ignored on SQLite).
      * @return TReturn The callback's return value.
      * @throws \Throwable Whatever the callback throws, after rolling back.
      */
     #[Override]
-    public function withSchemaLock(callable $callback): mixed
+    public function withLock(callable $callback, string $name): mixed
     {
         return (new \BlueprintAU\Radiant\Database\Locks\SqliteLock($this))
-            ->withLock($callback, self::SCHEMA_LOCK_NAME);
+            ->withLock($callback, $name);
     }
 }

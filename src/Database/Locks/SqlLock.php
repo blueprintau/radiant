@@ -28,23 +28,28 @@ abstract class SqlLock implements Lock
 
     /**
      * The SQL that acquires the dialect's lock. It must BLOCK until
-     * acquired (or throw).
+     * acquired (or throw). The lock name never appears in this SQL — it is
+     * bound as a parameter by {@see withLock()}, riding the connection's
+     * guarded bind path rather than being interpolated.
      *
-     * @param string $name The lock domain to acquire.
-     * @return string The lock SQL.
+     * @return string The parameterized lock SQL.
      */
-    abstract protected function lockStatement(string $name): string;
+    abstract protected function lockStatement(): string;
 
     /**
-     * The SQL that releases the dialect's lock.
+     * The SQL that releases the dialect's lock. Parameterized like
+     * {@see lockStatement()} — the name is bound, never interpolated.
      *
-     * @param string $name The lock domain to release.
-     * @return string The unlock SQL.
+     * @return string The parameterized unlock SQL.
      */
-    abstract protected function unlockStatement(string $name): string;
+    abstract protected function unlockStatement(): string;
 
     /**
      * Run the callback while holding the named session-level lock.
+     *
+     * The name is bound as a statement parameter (never interpolated into
+     * the SQL TEXT), so a caller-supplied name — however hostile — rides
+     * the connection's guarded bind path like any other value.
      *
      * @template TReturn
      *
@@ -56,13 +61,14 @@ abstract class SqlLock implements Lock
     #[\Override]
     final public function withLock(callable $callback, string $name): mixed
     {
-        // The lock statement runs raw (no bindings); a failure to acquire
-        // must surface as an exception, not a silent no-lock run.
-        $this->connection->statement($this->lockStatement($name));
+        // The lock statement runs with the name bound (no interpolation); a
+        // failure to acquire must surface as an exception, not a silent
+        // no-lock run.
+        $this->connection->statement($this->lockStatement(), [$name]);
         try {
             return $callback();
         } finally {
-            $this->connection->statement($this->unlockStatement($name));
+            $this->connection->statement($this->unlockStatement(), [$name]);
         }
     }
 }

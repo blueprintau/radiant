@@ -25,9 +25,6 @@ use Override;
  */
 final class MySqlConnection extends SqlConnection
 {
-    /** The lock domain `withSchemaLock()` serializes schema work under. */
-    private const SCHEMA_LOCK_NAME = 'radiant:schema';
-
     /**
      * The default query grammar for this connection.
      *
@@ -106,18 +103,20 @@ final class MySqlConnection extends SqlConnection
     }
 
     /**
-     * Run schema work under MySQL's `GET_LOCK` advisory lock.
+     * Run the callback under MySQL's `GET_LOCK` advisory lock on the given
+     * lock domain.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The schema work.
+     * @param callable(): TReturn $callback The work to run under lock.
+     * @param string $name The lock domain.
      * @return TReturn The callback's return value.
      * @throws \Throwable Whatever the callback throws, after releasing the lock.
      */
     #[Override]
-    public function withSchemaLock(callable $callback): mixed
+    public function withLock(callable $callback, string $name): mixed
     {
         return (new \BlueprintAU\Radiant\Database\Locks\MySqlLock($this))
-            ->withLock($callback, self::SCHEMA_LOCK_NAME);
+            ->withLock($callback, $name);
     }
 }

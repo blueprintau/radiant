@@ -441,30 +441,30 @@ Any work that must not run twice concurrently needs a cross-process lock —
 the schema `diff → apply` loop is the prime case: it reads the live schema,
 then executes DDL including `DROP TABLE`, and two overlapping instances race
 on stale snapshots (duplicated CREATEs, half-applied ALTERs, a DROP landing
-on a renamed table). Every SQL dialect ships a native adapter in
-`BlueprintAU\Radiant\Database\Locks`:
+on a renamed table). `SqlConnection::withLock()` takes the dialect's native
+lock — MySQL `GET_LOCK` · Postgres advisory lock · SQLite `BEGIN IMMEDIATE`
+— with the mutual-exclusion *name* supplied at call time: one name is one
+lock domain, so distinct jobs use distinct names and never serialize each
+other. The schema-sync convention is the name `'radiant:schema'`:
 
 ```php
-$conn->withSchemaLock(function () use ($differ, $desired, $conn): void {
+$conn->withLock(function () use ($differ, $desired, $conn): void {
     foreach ($differ->diff($desired) as $change) {
-        $conn->apply($change); // MySQL: GET_LOCK · Postgres: advisory lock · SQLite: BEGIN IMMEDIATE
+        $conn->apply($change);
     }
-});
+}, 'radiant:schema');
 ```
 
-The locks are general-purpose, not schema-specific. The lock *name* is
-supplied at call time — one name is one mutual-exclusion domain, so
-distinct jobs use distinct names and never serialize each other:
+The same gate covers any other serialized work — cron jobs that must not
+overlap, cache warmups:
 
 ```php
-use BlueprintAU\Radiant\Database\Locks\PostgresLock;
-
-(new PostgresLock($conn))
-    ->withLock(fn () => $this->buildNightlyReport(), 'report:nightly');
+$conn->withLock(fn () => $this->buildNightlyReport(), 'report:nightly');
 ```
 
-MySQL and Postgres take a session-level advisory lock on the given name.
-SQLite has no advisory locks: its adapter runs the callback inside a
+MySQL and Postgres take a session-level advisory lock on the given name;
+the name is bound as a statement parameter, never interpolated into the
+SQL. SQLite has no advisory locks: `withLock()` runs the callback inside a
 `BEGIN IMMEDIATE` write transaction, which serializes *all* writes for the
 duration and therefore refuses to run inside an already-open transaction
 (the name is accepted for signature parity but ignored — a database-wide
@@ -472,8 +472,8 @@ transaction has nothing to name).
 
 For custom locking (a locker service, file locks across machines), implement
 `BlueprintAU\Radiant\Database\Locks\Lock` and call
-`->withLock(fn () => ...)` around the critical section. Without any lock,
-schema sync is safe only for single-instance deployments.
+`->withLock($callback, $name)` around the critical section. Without any
+lock, schema sync is safe only for single-instance deployments.
 
 ## SQL-only features
 

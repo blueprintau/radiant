@@ -29,26 +29,25 @@ final class PostgresLock extends SqlLock
     }
 
     /**
-     * The lock acquisition statement — blocks until acquired.
+     * The lock acquisition statement — blocks until acquired. The lock
+     * name is a bound parameter (position 1), not interpolated SQL.
      *
-     * @param string $name The named lock key.
-     * @return string The lock SQL.
+     * @return string The parameterized lock SQL.
      */
     #[\Override]
-    protected function lockStatement(string $name): string
+    protected function lockStatement(): string
     {
-        return sprintf("SELECT pg_advisory_lock(hashtext('%s'))", $name);
+        return 'SELECT pg_advisory_lock(hashtext(?))';
     }
 
     /**
-     * The lock release statement.
+     * The lock release statement. The lock name is a bound parameter.
      *
-     * @param string $name The named lock key.
-     * @return string The unlock SQL.
+     * @return string The parameterized unlock SQL.
      */
     #[\Override]
-    protected function unlockStatement(string $name): string
+    protected function unlockStatement(): string
     {
-        return sprintf("SELECT pg_advisory_unlock(hashtext('%s'))", $name);
+        return 'SELECT pg_advisory_unlock(hashtext(?))';
     }
 }

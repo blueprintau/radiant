@@ -69,7 +69,7 @@ final class MetadataFactory
      * The canonical table inventory: every table-owning model class mapped
      * to its resolved table name.
      *
-     * The single audit source for "where tables are created" — the host
+     * The single authoritative source for "where tables are created" — the host
      * migrator consumes it to build its schema, and an inventory test
      * asserts the full model→table map so an accidental table creation
      * shows up in CI immediately. Computed FROM the metadata rather than

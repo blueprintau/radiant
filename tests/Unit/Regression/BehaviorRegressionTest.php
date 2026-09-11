@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace BlueprintAU\Radiant\Tests\Unit\Audit;
+namespace BlueprintAU\Radiant\Tests\Unit\Regression;
 
 use BlueprintAU\Radiant\Database\Connections\CsvConnection;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
@@ -12,12 +12,13 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Regression tests for the 2026-09-09 audit remediation (AUDIT-SUMMARY).
+ * Regression tests locking in hard-won behavioral guarantees.
  *
- * One suite per fixed finding family; each test names the finding ID it
- * locks in.
+ * One test per behavior that must never quietly regress: atomic CSV
+ * writes, filter parity with SQL semantics, log-safe exceptions, DSN
+ * validation, forced server-side prepares, and fail-closed SQL parsing.
  */
-final class AuditRegressionTest extends TestCase
+final class BehaviorRegressionTest extends TestCase
 {
     /**
      * The temp CSV file used by a test.
@@ -41,7 +42,7 @@ final class AuditRegressionTest extends TestCase
      */
     private function makeCsv(array $rows): CsvConnection
     {
-        $this->path = tempnam(sys_get_temp_dir(), 'radiant_audit_') ?: throw new \RuntimeException('no tempnam');
+        $this->path = tempnam(sys_get_temp_dir(), 'radiant_regression_') ?: throw new \RuntimeException('no tempnam');
         $this->paths[] = $this->path;
         $handle = fopen($this->path, 'w');
         \assert($handle !== false);
@@ -72,10 +73,10 @@ final class AuditRegressionTest extends TestCase
         parent::tearDown();
     }
 
-    // ---- Chain 1: CSV data loss family ----
+    // ---- CSV write atomicity ----
 
     /**
-     * AUD-CNC-001 / AUD-RES-001: a mid-write failure must not orphan a
+     * A mid-write failure must not orphan a
      * `.radiant-*.tmp` file, and no fixed temp path exists for a second
      * writer to clobber. Non-scalar write values fail before any file I/O.
      */
@@ -103,7 +104,7 @@ final class AuditRegressionTest extends TestCase
     }
 
     /**
-     * AUD-CNC-001: the temp path is unique per write — two sequential
+     * The temp path is unique per write — two sequential
      * writes never reuse a name, so a concurrent writer cannot truncate
      * an in-flight temp.
      */
@@ -120,11 +121,11 @@ final class AuditRegressionTest extends TestCase
         self::assertSame(['1', '2', '3'], $ids);
     }
 
-    // ---- COR: CSV filter parity family ----
+    // ---- CSV filter parity with SQL semantics ----
 
     /**
-     * AUD-COR-002: `a%b` matches `ab` (the old quote-before-translate
-     * order required a literal dot) and `_` matches exactly one char.
+     * `a%b` matches `ab` (quote-before-translate
+     * order would require a literal dot) and `_` matches exactly one char.
      */
     public function testCsvLikePatternTranslation(): void
     {
@@ -153,7 +154,7 @@ final class AuditRegressionTest extends TestCase
     }
 
     /**
-     * AUD-COR-003: `In` and `Eq` share one canonical comparator — a typed
+     * `In` and `Eq` share one canonical comparator — a typed
      * int `IN` matches the CSV's string cells exactly as `=` does.
      */
     public function testCsvInMatchesEqSemantics(): void
@@ -175,7 +176,7 @@ final class AuditRegressionTest extends TestCase
     }
 
     /**
-     * AUD-COR-001: an empty where list matches everything (update with no
+     * An empty where list matches everything (update with no
      * constraints affects all rows) and never dereferences `$wheres[0]`.
      */
     public function testCsvUpdateWithNoWheresAffectsAllRows(): void
@@ -194,7 +195,7 @@ final class AuditRegressionTest extends TestCase
     }
 
     /**
-     * AUD-COR-007: numeric columns sort numerically — '10' after '9'.
+     * Numeric columns sort numerically — '10' after '9'.
      */
     public function testCsvSortIsNumericForNumericCells(): void
     {
@@ -212,7 +213,7 @@ final class AuditRegressionTest extends TestCase
     }
 
     /**
-     * AUD-SEC-005: whitespace- and Unicode-prefixed formula payloads are
+     * Whitespace- and Unicode-prefixed formula payloads are
      * neutralized, and header cells are neutralized too.
      */
     public function testCsvFormulaNeutralizationCoversBypasses(): void
@@ -235,7 +236,7 @@ final class AuditRegressionTest extends TestCase
         self::assertStringContainsString("'|calc", $bytes, 'A DDE pipe payload must be quoted.');
     }
 
-    // ---- AUD-SEC-001: exception redaction ----
+    // ---- Log-safe exception messages ----
 
     /**
      * The QueryException message is log-safe: no SQL text, no bound values.
@@ -262,7 +263,7 @@ final class AuditRegressionTest extends TestCase
         }
     }
 
-    // ---- AUD-SEC-002: DSN field validation ----
+    // ---- DSN field validation ----
 
     /**
      * DSN metacharacters in host/database are rejected at validation.
@@ -296,9 +297,7 @@ final class AuditRegressionTest extends TestCase
         }
     }
 
-    /**
-     * AUD-SEC-003: emulation forced off ----
-     */
+    // ---- Forced server-side prepares ----
 
     /**
      * No connector can re-enable client-side emulation through user options
@@ -327,7 +326,7 @@ final class AuditRegressionTest extends TestCase
         );
     }
 
-    // ---- AUD-SEC-007: fail-closed aggregate parsing ----
+    // ---- Fail-closed aggregate parsing ----
 
     /**
      * An aggregate over a nested expression fails closed instead of
