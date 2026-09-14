@@ -72,10 +72,14 @@ final class SchemaDiffer
                 continue;
             }
 
-            $change = $this->diffTable($table, $blueprint);
-
-            if ($change !== null) {
-                $alters[] = $change;
+            // BOTH diff passes run — a table can need a column alter AND an
+            // index rebuild at once; a `??` short-circuit would hide index
+            // drift whenever columns also drift. Column alters come first
+            // (an index rebuild may reference a just-added column).
+            foreach ([$this->diffTable($table, $blueprint), $this->diffIndexes($table, $blueprint)] as $change) {
+                if ($change !== null) {
+                    $alters[] = $change;
+                }
             }
         }
 
@@ -312,5 +316,79 @@ final class SchemaDiffer
         }
 
         return new SchemaChange($table, $operation, $alter, $destructive, $description, $possibleRename);
+    }
+
+    /**
+     * Diff one table's declared indexes against the live ones — option
+     * drift only, because the live inspector cannot see a DESIRED index
+     * that was never created (a declared index absent from the live table
+     * is a broken deployment, not a differ job — the differ never creates
+     * indexes outside the whole-table create path).
+     *
+     * A named index present on BOTH sides with a changed `where` predicate
+     * or `NULLS NOT DISTINCT` option is reported: rebuilding the index is
+     * non-destructive (no rows touched), but the drift means the live
+     * constraint is WEAKER than declared (e.g. `NULLS DISTINCT` accepting
+     * duplicate NULLs, or no partial filter matching rows it should
+     * exclude) — a silent semantic hole if not surfaced.
+     *
+     * Indexes live in the ALTER vocabulary as a whole-table rebuild: the
+     * change carries a blueprint holding the table's FULL desired index
+     * list; `apply()` drops the drifted live indexes (by live name — the
+     * drift is per-option, names match) and re-runs every `CREATE INDEX`.
+     * Unnamed live indexes (inline UNIQUE constraints, `sqlite_autoindex_*`)
+     * are skipped — they ride the columns' `unique` flag, not this path.
+     *
+     * @param string $table The table name.
+     * @param Blueprint $blueprint The desired state.
+     * @return SchemaChange|null The rebuild change, or null when in sync.
+     */
+    private function diffIndexes(string $table, Blueprint $blueprint): ?SchemaChange
+    {
+        $live = $this->inspector->table($table);
+
+        // Live indexes by name (named ones only — unnamed ride the
+        // columns' unique flag).
+        $liveIndexes = [];
+
+        foreach ($live->indexes as $index) {
+            if ($index['name'] !== null) {
+                $liveIndexes[$index['name']] = $index;
+            }
+        }
+
+        $rebuild = new Blueprint($table);
+        $drifted = [];
+
+        foreach ($blueprint->getIndexes() as $index) {
+            $name = $index['name'];
+            $liveIndex = $liveIndexes[$name] ?? null;
+
+            if ($liveIndex === null) {
+                continue; // absent live = deployment gap, not option drift.
+            }
+
+            $whereMatches = ($index['where'] ?? null) === ($liveIndex['where'] ?? null);
+            $nullsMatch = $index['nullsNotDistinct'] === $liveIndex['nullsNotDistinct'];
+
+            if ($whereMatches && $nullsMatch) {
+                continue;
+            }
+
+            $rebuild->index($name, $index['columns'], unique: $index['unique'], where: $index['where'], nullsNotDistinct: $index['nullsNotDistinct']);
+            $drifted[] = $name;
+        }
+
+        if ($drifted === []) {
+            return null;
+        }
+
+        $description = sprintf(
+            'alter indexes on [%s]: rebuild [%s] — index options drifted (partial predicate / NULLS NOT DISTINCT)',
+            $table,
+            implode(', ', $drifted),
+        );
+
+        return new SchemaChange($table, SchemaOperation::AlterIndexes, $rebuild, false, $description);
     }
 }

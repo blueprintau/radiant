@@ -60,6 +60,28 @@ class MySqlSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * MySQL has NO partial (filtered) indexes, NO NULLS NOT DISTINCT, and
+     * NO DEFERRABLE foreign keys — the base clause hooks throw, and MySQL
+     * overrides none of them, so declaring any of those options fails
+     * fast at compile time (Postgres — and for partial indexes SQLite —
+     * render them).
+     */
+
+    /**
+     * MySQL drops an index relative to its table: `ALTER TABLE … DROP INDEX`.
+     *
+     * @param string $name The index name.
+     * @param string $table The table the index is on.
+     * @return string The compiled SQL.
+     */
+    public function compileDropIndex(string $name, string $table): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' DROP INDEX ' . $this->wrap($name);
+    }
+
+    /**
      * Compile an `ALTER TABLE ... DROP COLUMN` statement.
      *
      * @param Blueprint $blueprint The table and columns to drop.

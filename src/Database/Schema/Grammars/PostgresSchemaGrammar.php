@@ -61,6 +61,60 @@ class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * Postgres 15+ renders the NULLS clause EXPLICITLY in both directions:
+     * `NULLS DISTINCT` pins the SQL default (multiple NULLs allowed) in
+     * the DDL, `NULLS NOT DISTINCT` upgrades to at-most-one-NULL semantics.
+     *
+     * @param bool $nullsNotDistinct The declared option value.
+     * @return string The clause text.
+     */
+    protected function compileNullsNotDistinctClause(bool $nullsNotDistinct): string
+    {
+        return $nullsNotDistinct ? 'NULLS NOT DISTINCT' : 'NULLS DISTINCT';
+    }
+
+    /**
+     * Postgres renders partial (filtered) indexes — `CREATE INDEX ... WHERE
+     * predicate`.
+     *
+     * @param string $predicate The declared predicate, spliced verbatim.
+     * @return string The clause text.
+     */
+    protected function compilePartialIndexClause(string $predicate): string
+    {
+        return 'WHERE ' . $predicate;
+    }
+
+    /**
+     * Postgres renders `DEFERRABLE [INITIALLY DEFERRED]` on foreign keys —
+     * the option circular-FK seeding within one transaction depends on.
+     *
+     * @param bool $initiallyDeferred Whether the constraint starts
+     *        INITIALLY DEFERRED.
+     * @return string The clause text.
+     */
+    protected function compileDeferrableClause(bool $initiallyDeferred): string
+    {
+        return $initiallyDeferred ? 'DEFERRABLE INITIALLY DEFERRED' : 'DEFERRABLE';
+    }
+
+    /**
+     * Postgres drops an index by name alone: `DROP INDEX name`.
+     *
+     * @param string $name The index name.
+     * @param string $table The table the index is on (unused — Postgres
+     *        indexes live in their own namespace).
+     * @return string The compiled SQL.
+     */
+    public function compileDropIndex(string $name, string $table): string
+    {
+        unset($table);
+        $this->assertValidIdentifier($name);
+
+        return 'DROP INDEX ' . $this->wrap($name);
+    }
+
+    /**
      * Compile an `ALTER TABLE ... DROP COLUMN` statement.
      *
      * @param Blueprint $blueprint The table and columns to drop.

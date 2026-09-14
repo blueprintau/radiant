@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Metadata;
 
+use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
@@ -126,7 +127,7 @@ final class MetadataFactory
         $softDeleteColumn = self::applySoftDeletes($reflection, $class, $properties);
         [$tableName, $parentModel] = self::resolveTableName($reflection, $class, $properties);
 
-        [$uniques, $indexes, $foreignKeys] = self::collectConstraints($reflection, $class, $properties);
+        [$uniques, $indexes, $foreignKeys, $checks] = self::collectConstraints($reflection, $class, $properties);
 
         if ($parentModel !== null) {
             $properties = self::deriveMtiChildKey($reflection, $class, $properties, $parentModel);
@@ -142,6 +143,7 @@ final class MetadataFactory
             uniques: $uniques,
             indexes: $indexes,
             foreignKeys: $foreignKeys,
+            checks: $checks,
             softDeleteColumn: $softDeleteColumn,
             parentModel: $parentModel,
         );
@@ -476,10 +478,12 @@ final class MetadataFactory
      * @param \ReflectionClass<Model> $reflection The leaf class.
      * @param class-string<Model> $class The leaf class name.
      * @param PropertyMapping[] $properties The merged mappings.
-     * @return array{list<Unique>, list<Index>, list<ForeignKey>}
-     *         The uniques, indexes, and foreign keys, most-derived first.
+     * @return array{list<Unique>, list<Index>, list<ForeignKey>, list<Check>}
+     *         The uniques, indexes, foreign keys, and checks, most-derived
+     *         first.
      * @throws \InvalidArgumentException On unknown columns, arity
-     *         mismatches, or duplicate declarations.
+     *         mismatches, duplicate declarations, or empty CHECK
+     *         expressions.
      */
     private static function collectConstraints(
         \ReflectionClass $reflection,
@@ -489,6 +493,7 @@ final class MetadataFactory
         $uniques = [];
         $indexes = [];
         $foreignKeys = [];
+        $checks = [];
 
         for ($current = $class; $current !== false; $current = get_parent_class($current)) {
             $level = new \ReflectionClass($current);
@@ -551,9 +556,23 @@ final class MetadataFactory
                 $foreignKey->resolvedReferences(); // resolves + validates model-class references
                 $foreignKeys[] = $foreignKey;
             }
+
+            foreach ($level->getAttributes(Check::class) as $attribute) {
+                /** @var Check $check */
+                $check = $attribute->newInstance();
+
+                if (trim($check->expression) === '') {
+                    throw new \InvalidArgumentException(
+                        "Model [{$class}] declares a #[Check] with an empty expression; "
+                        . 'a CHECK constraint requires a non-empty predicate.'
+                    );
+                }
+
+                $checks[] = $check;
+            }
         }
 
-        return [$uniques, $indexes, $foreignKeys];
+        return [$uniques, $indexes, $foreignKeys, $checks];
     }
 
     /**

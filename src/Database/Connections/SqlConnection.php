@@ -623,7 +623,30 @@ abstract class SqlConnection implements ConnectionInterface
             SchemaOperation::CreateTable => $this->create($change->blueprint),
             SchemaOperation::AddColumn, SchemaOperation::DropColumn => $this->alter($change->operation, $change->blueprint),
             SchemaOperation::DropTable => $this->drop($change->table),
+            SchemaOperation::AlterIndexes => $this->rebuildIndexes($change->blueprint),
         };
+    }
+
+    /**
+     * Rebuild a table's indexes — drop each index named on the blueprint
+     * (a differ-produced `AlterIndexes` change carries exactly the drifted
+     * indexes), then re-create it from the blueprint's declaration, options
+     * included (`WHERE` predicate, `NULLS NOT DISTINCT`).
+     *
+     * Drops run before creates so a re-created index never collides with
+     * its stale self. Non-destructive: index rebuilds never touch rows.
+     *
+     * @param Blueprint $blueprint The indexes to rebuild (table-bound).
+     */
+    final public function rebuildIndexes(Blueprint $blueprint): void
+    {
+        foreach ($blueprint->getIndexes() as $index) {
+            $this->statement($this->schemaGrammar->compileDropIndex($index['name'], $blueprint->getTable()));
+        }
+
+        foreach ($this->schemaGrammar->compileIndexes($blueprint) as $indexSql) {
+            $this->statement($indexSql);
+        }
     }
 
     /**

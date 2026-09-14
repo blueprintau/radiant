@@ -46,6 +46,12 @@ final class ForeignKey
      *        validated via {@see ForeignKeyAction::fromChecked()} at the DDL
      *        boundary.
      * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
+     * @param bool $deferrable Whether the constraint is DEFERRABLE
+     *        (Postgres only — MySQL and SQLite fail fast at compile time).
+     *        Required for circular-FK seeding within one transaction.
+     * @param bool $initiallyDeferred Whether the constraint starts
+     *        INITIALLY DEFERRED (implies `$deferrable`; fails fast when
+     *        set without it).
      */
     public function __construct(
         public array $columns,
@@ -53,6 +59,8 @@ final class ForeignKey
         public array|null $referencesColumns = null,
         public ForeignKeyAction|string|null $onDelete = null,
         public ForeignKeyAction|string|null $onUpdate = null,
+        public bool $deferrable = false,
+        public bool $initiallyDeferred = false,
     ) {
     }
 

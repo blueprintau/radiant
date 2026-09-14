@@ -106,8 +106,12 @@ final class PostgresSchemaInspector extends SchemaInspector
      * The live indexes, from `pg_indexes` (excluding PK-constraint indexes
      * and unique constraints backing UNIQUE — those ride the constraints).
      *
+     * The partial-index `WHERE` predicate and the `NULLS NOT DISTINCT`
+     * option are parsed out of `pg_get_indexdef`'s definition text — the
+     * same text the grammar renders, so round-tripping is exact.
+     *
      * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool}> The indexes.
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
      */
     private function indexes(string $name): array
     {
@@ -131,13 +135,20 @@ final class PostgresSchemaInspector extends SchemaInspector
                 continue; // PK rides the columns' primaryKey flag.
             }
 
+            $indexdef = (string) $row['indexdef'];
+
             $indexes[] = [
                 'name' => (string) $row['index_name'],
                 // Parse the column list out of the index definition —
                 // pg_get_indexdef renders "CREATE [UNIQUE] INDEX name ON
                 // table USING btree (col1, col2)".
-                'columns' => $this->parseIndexColumns((string) $row['indexdef']),
+                'columns' => $this->parseIndexColumns($indexdef),
                 'unique' => ((int) $row['indisunique']) === 1,
+                // pg_get_indexdef normalizes the predicate but preserves
+                // its semantics — the differ compares it against the
+                // declared text only when both are in sync.
+                'where' => $this->parseIndexWhere($indexdef),
+                'nullsNotDistinct' => str_contains($indexdef, 'NULLS NOT DISTINCT'),
             ];
         }
 
@@ -167,17 +178,36 @@ final class PostgresSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live foreign keys, from `information_schema` constraint views.
+     * Extract the partial-index predicate from a `pg_get_indexdef`
+     * definition — the text after the top-level ` WHERE `, or null.
+     *
+     * @param string $indexdef The index definition text.
+     * @return string|null The predicate text, or null for a full index.
+     */
+    private function parseIndexWhere(string $indexdef): ?string
+    {
+        $where = strripos($indexdef, ' WHERE ');
+
+        if ($where === false) {
+            return null;
+        }
+
+        return trim(substr($indexdef, $where + 7));
+    }
+
+    /**
+     * The live foreign keys, from `information_schema` constraint views
+     * (deferrability from `pg_constraint`).
      *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
         $statement = $this->pdo->prepare(
             'SELECT tc.constraint_name, kcu.column_name, ccu.table_name AS referenced_table, '
             . 'ccu.column_name AS referenced_column, kcu.ordinal_position, '
-            . 'rc.delete_rule, rc.update_rule '
+            . 'rc.delete_rule, rc.update_rule, pc.condeferrable '
             . 'FROM information_schema.table_constraints tc '
             . 'JOIN information_schema.key_column_usage kcu '
             . '  ON kcu.constraint_name = tc.constraint_name '
@@ -188,6 +218,10 @@ final class PostgresSchemaInspector extends SchemaInspector
             . 'JOIN information_schema.referential_constraints rc '
             . '  ON rc.constraint_name = tc.constraint_name '
             . ' AND rc.table_schema = tc.table_schema '
+            . 'JOIN pg_catalog.pg_constraint pc '
+            . '  ON pc.conname = tc.constraint_name '
+            . ' AND pc.connamespace = (SELECT oid FROM pg_catalog.pg_namespace '
+            . '     WHERE nspname = current_schema()) '
             . 'WHERE tc.table_schema = current_schema() '
             . 'AND tc.table_name = ? AND tc.constraint_type = \'FOREIGN KEY\' '
             . 'ORDER BY tc.constraint_name, kcu.ordinal_position',
@@ -206,6 +240,7 @@ final class PostgresSchemaInspector extends SchemaInspector
             $groups[$constraintName]['referencesColumns'][(int) $row['ordinal_position']] = (string) $row['referenced_column'];
             $groups[$constraintName]['onDelete'] = $row['delete_rule'];
             $groups[$constraintName]['onUpdate'] = $row['update_rule'];
+            $groups[$constraintName]['deferrable'] = $row['condeferrable'];
         }
 
         $constraints = [];
@@ -217,6 +252,7 @@ final class PostgresSchemaInspector extends SchemaInspector
                 'referencesColumns' => array_values($group['referencesColumns']),
                 'onDelete' => $this->normalizeAction($group['onDelete']),
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
+                'deferrable' => ((int) $group['deferrable']) === 1,
             ];
         }
 

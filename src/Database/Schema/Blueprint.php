@@ -100,7 +100,13 @@ final class Blueprint
      * it makes NO naming decisions, so the differ and the collision checks
      * read the same final names.
      *
-     * @var list<array{name: string, columns: list<string>, unique: bool}>
+     * `where` is the partial-index predicate (spliced verbatim — the raw
+     * escape hatch, same trust model as an {@see \BlueprintAU\Radiant\Database\Query\Expression}
+     * default); `nullsNotDistinct` upgrades a UNIQUE index to `NULLS NOT
+     * DISTINCT` semantics (Postgres 15+ — dialects that cannot render it
+     * fail fast at compile time).
+     *
+     * @var list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     private array $indexes = [];
 
@@ -204,19 +210,46 @@ final class Blueprint
      * @param string|null $name The final index name, or null to derive.
      * @param list<string> $columns The columns to index.
      * @param bool $unique Whether the index is unique.
+     * @param string|null $where The partial-index predicate, spliced
+     *        verbatim after `WHERE` (e.g. `deleted_at IS NULL`). Postgres
+     *        and SQLite render it; MySQL fails fast at compile time.
+     * @param bool $nullsNotDistinct Whether a UNIQUE index uses `NULLS NOT
+     *        DISTINCT` semantics (Postgres 15+; other dialects fail fast
+     *        at compile time). Meaningless on a non-unique index — fails
+     *        fast at declaration.
      * @return $this
-     * @throws \InvalidArgumentException When no columns are given.
+     * @throws \InvalidArgumentException When no columns are given, the
+     *         `where` predicate is empty, or `nullsNotDistinct` is set on
+     *         a non-unique index.
      */
-    public function index(?string $name, array $columns, bool $unique = false): static
-    {
+    public function index(
+        ?string $name,
+        array $columns,
+        bool $unique = false,
+        ?string $where = null,
+        bool $nullsNotDistinct = false,
+    ): static {
         if ($columns === []) {
             throw new \InvalidArgumentException('An index requires at least one column.');
+        }
+
+        if ($where !== null && trim($where) === '') {
+            throw new \InvalidArgumentException('An index `where` predicate, when given, must be non-empty.');
+        }
+
+        if ($nullsNotDistinct && !$unique) {
+            throw new \InvalidArgumentException(
+                'An index declares nullsNotDistinct without unique: NULLS NOT DISTINCT '
+                . 'only applies to a UNIQUE index.'
+            );
         }
 
         $this->indexes[] = [
             'name' => $name ?? $this->deriveIndexName($columns, $unique),
             'columns' => $columns,
             'unique' => $unique,
+            'where' => $where,
+            'nullsNotDistinct' => $nullsNotDistinct,
         ];
         return $this;
     }
@@ -293,6 +326,8 @@ final class Blueprint
                 'name' => $this->deriveIndexName([$name], false),
                 'columns' => [$name],
                 'unique' => false,
+                'where' => null,
+                'nullsNotDistinct' => false,
             ];
         }
 
@@ -362,9 +397,26 @@ final class Blueprint
      * Foreign-key constraints — single-column via `foreignId()` are inline;
      * this holds table-level (composite) constraints.
      *
-     * @var list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null}>
+     * `deferrable`/`initiallyDeferred` are Postgres-only options (MySQL and
+     * SQLite fail fast at compile time when set).
+     *
+     * @var list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
     private array $foreignKeys = [];
+
+    /**
+     * Table-level CHECK constraints, in declaration order.
+     *
+     * A CHECK is portable across all three dialects. The expression is
+     * spliced verbatim — the raw escape hatch, same trust model as an
+     * {@see \BlueprintAU\Radiant\Database\Query\Expression} default. Named
+     * constraints get `{table}_{name}_check` as their FINAL name (the
+     * grammar renders it verbatim); unnamed constraints render dialect-
+     * default (MySQL/SQLite generate a name, Postgres too).
+     *
+     * @var list<array{name: string|null, expression: string}>
+     */
+    private array $checks = [];
 
     /**
      * Add a foreign-key constraint over one or more columns.
@@ -378,9 +430,15 @@ final class Blueprint
      * @param list<string> $referencesColumns The referenced columns.
      * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
      * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
+     * @param bool $deferrable Whether the constraint is DEFERRABLE
+     *        (Postgres only — other dialects fail fast at compile time).
+     * @param bool $initiallyDeferred Whether the constraint starts
+     *        INITIALLY DEFERRED (implies `$deferrable`; fails fast when
+     *        set without it).
      * @return $this
      * @throws \InvalidArgumentException When the column/reference arity
-     *         mismatches or either list is empty.
+     *         mismatches, either list is empty, or `initiallyDeferred` is
+     *         set without `deferrable`.
      */
     public function foreignKey(
         array $columns,
@@ -388,6 +446,8 @@ final class Blueprint
         array $referencesColumns,
         ForeignKeyAction|string|null $onDelete = null,
         ForeignKeyAction|string|null $onUpdate = null,
+        bool $deferrable = false,
+        bool $initiallyDeferred = false,
     ): static {
         if ($columns === [] || $referencesColumns === []) {
             throw new \InvalidArgumentException('A foreign key requires at least one column.');
@@ -398,14 +458,61 @@ final class Blueprint
                 . count($columns) . ' and ' . count($referencesColumns) . '.'
             );
         }
+        if ($initiallyDeferred && !$deferrable) {
+            throw new \InvalidArgumentException(
+                'A foreign key declares initiallyDeferred without deferrable: '
+                . 'INITIALLY DEFERRED implies DEFERRABLE.'
+            );
+        }
 
         $this->foreignKeys[] = [
             'columns' => $columns,
             'references' => [$referencesTable, ...$referencesColumns],
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
             'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
+            'deferrable' => $deferrable,
+            'initiallyDeferred' => $initiallyDeferred,
         ];
         return $this;
+    }
+
+    /**
+     * Add a table-level CHECK constraint.
+     *
+     * The expression is spliced verbatim after `CHECK` — the raw escape
+     * hatch for dialect functions and predicates (e.g. `price >= 0`,
+     * `status IN ('draft', 'published')`). A named constraint gets the
+     * FINAL name `{table}_{name}_check`; unnamed constraints render the
+     * dialect default.
+     *
+     * @param string $expression The CHECK predicate, spliced verbatim.
+     * @param string|null $name The constraint name; `{table}_{name}_check`
+     *        is derived when null.
+     * @return $this
+     * @throws \InvalidArgumentException When the expression is empty.
+     */
+    public function check(string $expression, ?string $name = null): static
+    {
+        if (trim($expression) === '') {
+            throw new \InvalidArgumentException('A CHECK constraint requires a non-empty expression.');
+        }
+
+        $this->checks[] = [
+            'name' => $name === null ? null : $this->table . '_' . $name . '_check',
+            'expression' => $expression,
+        ];
+        return $this;
+    }
+
+    /**
+     * The CHECK constraints — derived names are FINAL at declaration
+     * time; pure read.
+     *
+     * @return list<array{name: string|null, expression: string}>
+     */
+    public function getChecks(): array
+    {
+        return $this->checks;
     }
 
     /**
@@ -415,9 +522,13 @@ final class Blueprint
      * `table.column` reference was VALIDATED at {@see column()} time);
      * explicit {@see foreignKey()} declarations (single or composite) are
      * appended after. Each entry's `references` is `[table, ...columns]`.
-     * No derivation happens here — pure read.
+     * Every entry carries the full constraint shape — derived single-column
+     * FKs always render `deferrable: false`/`initiallyDeferred: false` (a
+     * column-level `foreign:` flag has no deferrability knobs; use the
+     * class-level `#[ForeignKey(deferrable: ...)]` for those). No derivation
+     * happens here — pure read.
      *
-     * @return list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null}>
+     * @return list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
     public function getForeignKeys(): array
     {
@@ -435,6 +546,11 @@ final class Blueprint
                 'references' => [$table, $referenced],
                 'onDelete' => $column['onDelete'],
                 'onUpdate' => $column['onUpdate'],
+                // A flag-derived single-column FK has no deferrability
+                // declaration site — the option only exists on the
+                // class-level #[ForeignKey] attribute / foreignKey().
+                'deferrable' => false,
+                'initiallyDeferred' => false,
             ];
         }
 
@@ -478,7 +594,7 @@ final class Blueprint
      * FINAL name (derived at declaration time from the bound table, or
      * user-set verbatim). Pure read: no derivation happens here.
      *
-     * @return list<array{name: string, columns: list<string>, unique: bool}>
+     * @return list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     public function getIndexes(): array
     {
@@ -583,7 +699,13 @@ final class Blueprint
             // null name → the blueprint derives the final
             // `{table}_{columns}_unique` name; a user-set name passes
             // through verbatim (it IS the whole name).
-            $blueprint->index($unique->name, $unique->columns, unique: true);
+            $blueprint->index(
+                $unique->name,
+                $unique->columns,
+                unique: true,
+                where: $unique->where,
+                nullsNotDistinct: $unique->nullsNotDistinct,
+            );
         }
 
         foreach ($metadata->indexes as $index) {
@@ -591,7 +713,7 @@ final class Blueprint
                 continue;
             }
 
-            $blueprint->index($index->name, $index->columns);
+            $blueprint->index($index->name, $index->columns, where: $index->where);
         }
 
         foreach ($metadata->foreignKeys as $foreignKey) {
@@ -605,7 +727,16 @@ final class Blueprint
                 $foreignKey->resolvedReferencesColumns(),
                 $foreignKey->onDelete,
                 $foreignKey->onUpdate,
+                $foreignKey->deferrable,
+                $foreignKey->initiallyDeferred,
             );
+        }
+
+        foreach ($metadata->checks as $check) {
+            // A CHECK is table-level — it always belongs on the model's own
+            // table, even for an MTI child (there are no column ownership
+            // semantics to filter on).
+            $blueprint->check($check->expression, $check->name);
         }
 
         // MTI children: the factory-emitted FK to the parent table. The

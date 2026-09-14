@@ -22,4 +22,13 @@ enum SchemaOperation: string
 
     /** Drop a whole table (differ output; `apply()` → `drop()`, destructive). */
     case DropTable = 'drop_table';
+
+    /**
+     * Rebuild the table's indexes (differ output; `apply()` re-runs every
+     * `CREATE INDEX` after dropping the drifted ones). Non-destructive:
+     * an index rebuild never touches rows — an option drift (partial
+     * predicate, NULLS NOT DISTINCT) is a constraint semantics change,
+     * but applying it cannot lose data.
+     */
+    case AlterIndexes = 'alter_indexes';
 }

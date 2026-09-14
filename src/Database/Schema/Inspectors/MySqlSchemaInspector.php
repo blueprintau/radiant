@@ -94,8 +94,12 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * The live indexes, from `information_schema.statistics`.
      *
+     * MySQL has no partial indexes or NULLS NOT DISTINCT — the extra
+     * shape fields are always null/false (the grammar refuses to render
+     * them, so a live table can never carry them).
+     *
      * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool}> The indexes.
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
      */
     private function indexes(string $name): array
     {
@@ -131,6 +135,8 @@ final class MySqlSchemaInspector extends SchemaInspector
                 'name' => $indexName,
                 'columns' => array_values($group['columns']),
                 'unique' => $group['unique'],
+                'where' => null,
+                'nullsNotDistinct' => false,
             ];
         }
 
@@ -141,8 +147,10 @@ final class MySqlSchemaInspector extends SchemaInspector
      * The live foreign keys, from `information_schema.key_column_usage` +
      * `referential_constraints` (for the actions).
      *
+     * MySQL has no DEFERRABLE — the field is always false.
+     *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
@@ -183,6 +191,8 @@ final class MySqlSchemaInspector extends SchemaInspector
                 'referencesColumns' => array_values($group['referencesColumns']),
                 'onDelete' => $this->normalizeAction($group['onDelete']),
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
+                // MySQL has no DEFERRABLE — always false.
+                'deferrable' => false,
             ];
         }
 

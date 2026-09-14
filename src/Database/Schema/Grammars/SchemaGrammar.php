@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema\Grammars;
 
+use BlueprintAU\Radiant\Database\Concerns\ConcatenatesStatements;
 use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -35,6 +36,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 abstract class SchemaGrammar
 {
     use QuotesLiterals;
+    use ConcatenatesStatements;
 
     /**
      * Wrap an identifier in the dialect's quote character.
@@ -93,13 +95,40 @@ abstract class SchemaGrammar
             $definitions[] = $this->compileForeignKeyConstraint($foreignKey);
         }
 
+        foreach ($blueprint->getChecks() as $check) {
+            $definitions[] = $this->compileCheckConstraint($check);
+        }
+
         return 'CREATE TABLE ' . $this->wrap($table) . ' (' . implode(', ', $definitions) . ')';
+    }
+
+    /**
+     * Compile a table-level CHECK constraint.
+     *
+     * CHECK is standard SQL and portable across MySQL, Postgres, and
+     * SQLite — the base renders it and no dialect override is needed. A
+     * named constraint renders `CONSTRAINT name CHECK (expr)`; unnamed
+     * constraints render the bare `CHECK (expr)` and the dialect assigns
+     * its own name.
+     *
+     * @param array{name: string|null, expression: string} $check The
+     *        constraint — the name is FINAL (derived at declaration time).
+     * @return string The compiled constraint.
+     */
+    protected function compileCheckConstraint(array $check): string
+    {
+        if ($check['name'] !== null) {
+            $this->assertValidIdentifier($check['name']);
+            return 'CONSTRAINT ' . $this->wrap($check['name']) . ' CHECK (' . $check['expression'] . ')';
+        }
+
+        return 'CHECK (' . $check['expression'] . ')';
     }
 
     /**
      * Compile a table-level foreign-key constraint.
      *
-     * @param array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null} $foreignKey
+     * @param array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
      *        The constraint — the first references element is the table, the
      *        rest are the referenced columns.
      * @return string The compiled constraint.
@@ -111,29 +140,62 @@ abstract class SchemaGrammar
             throw new \InvalidArgumentException('A foreign key constraint requires a referenced table.');
         }
 
-        $sql = 'FOREIGN KEY (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $foreignKey['columns'])) . ') '
-            . 'REFERENCES ' . $this->wrap($table) . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $foreignKey['references'])) . ')';
+        // Statement assembly: the constraint body plus optional clauses —
+        // the concatenate() join (absent clause = '' segment, dropped),
+        // NOT a list join. Column lists inside the parens stay list-joins.
+        return $this->concatenate([
+            'FOREIGN KEY (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $foreignKey['columns'])) . ')',
+            'REFERENCES ' . $this->wrap($table) . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $foreignKey['references'])) . ')',
+            $foreignKey['onDelete'] === null ? '' : 'ON DELETE ' . $foreignKey['onDelete']->value,
+            $foreignKey['onUpdate'] === null ? '' : 'ON UPDATE ' . $foreignKey['onUpdate']->value,
+            $foreignKey['initiallyDeferred'] || $foreignKey['deferrable']
+                ? $this->compileDeferrableClause($foreignKey['initiallyDeferred'])
+                : '',
+        ]);
+    }
 
-        if ($foreignKey['onDelete'] !== null) {
-            $sql .= ' ON DELETE ' . $foreignKey['onDelete']->value;
-        }
-        if ($foreignKey['onUpdate'] !== null) {
-            $sql .= ' ON UPDATE ' . $foreignKey['onUpdate']->value;
-        }
-
-        return $sql;
+    /**
+     * The dialect's `DEFERRABLE` clause for a foreign key.
+     *
+     * The BASE DIALECT cannot defer constraints — the fail-fast lives
+     * here so a dialect must OPT IN; the option degrades to a loud error
+     * at compile time instead of silently weaker enforcement. This hook
+     * OWNS the clause TEXT (the same split as {@see autoIncrement()}):
+     * the base decides WHEN the clause is needed (the constraint declares
+     * deferrability), the dialect supplies WHAT it renders — so the base
+     * grammar contains no dialect SQL.
+     *
+     * @param bool $initiallyDeferred Whether the constraint starts
+     *        INITIALLY DEFERRED (the dialect decides the rendering of the
+     *        two levels).
+     * @return string The clause, rendered after the constraint body.
+     * @throws UnsupportedFeatureException Always in the base dialect.
+     */
+    protected function compileDeferrableClause(bool $initiallyDeferred): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support DEFERRABLE foreign keys.'
+        );
     }
 
     /**
      * Compile an `ALTER TABLE` statement — or, for the whole-table
      * operations the differ emits, the equivalent `CREATE TABLE` /
-     * `DROP TABLE`. Routing the four {@see SchemaOperation} cases through
+     * `DROP TABLE`. Routing the {@see SchemaOperation} cases through
      * one entry point keeps {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::apply()}
-     * a trivial dispatch.
+     * a trivial dispatch. `AlterIndexes` has NO single-statement form —
+     * index rebuilds need a drop per drifted index plus a CREATE per
+     * desired one, so it routes through
+     * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::rebuildIndexes()}
+     * (which sequences {@see compileDropIndex()} + {@see compileIndexes()})
+     * and throws here.
      *
      * @param SchemaOperation $operation The operation to perform.
      * @param Blueprint $blueprint The table and columns involved.
      * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException When the operation is
+     *         {@see SchemaOperation::AlterIndexes} (no single-statement
+     *         form — the connection sequences it).
      */
     public function compileAlter(SchemaOperation $operation, Blueprint $blueprint): string
     {
@@ -142,6 +204,10 @@ abstract class SchemaGrammar
             SchemaOperation::DropColumn => $this->compileDropColumn($blueprint),
             SchemaOperation::CreateTable => $this->compileCreate($blueprint),
             SchemaOperation::DropTable => $this->compileDrop($blueprint->getTable()),
+            SchemaOperation::AlterIndexes => throw new UnsupportedFeatureException(
+                'AlterIndexes is a sequenced operation (DROP INDEX + CREATE INDEX per index); '
+                . 'it cannot compile to a single statement.'
+            ),
         };
     }
 
@@ -157,6 +223,24 @@ abstract class SchemaGrammar
     }
 
     /**
+     * Compile a `DROP INDEX` statement for an existing index name.
+     *
+     * The differ's `AlterIndexes` path needs to drop a drifted live index
+     * before re-creating it — and the drop SYNTAX is dialect-split: MySQL
+     * drops indexes relative to their table (`ALTER TABLE … DROP INDEX`),
+     * while Postgres and SQLite drop by name alone (`DROP INDEX …`), so
+     * the base leaves the ABSTRACT shape to each dialect — same policy as
+     * {@see assertValidIdentifier()}: every dialect DECIDES its syntax
+     * explicitly, never a silent no-op base.
+     *
+     * @param string $name The index name (already final — it was built at
+     *        declaration time and is the name the database sees).
+     * @param string $table The table the index is on (MySQL needs it).
+     * @return string The compiled SQL.
+     */
+    abstract public function compileDropIndex(string $name, string $table): string;
+
+    /**
      * Compile the `CREATE INDEX` statements for the blueprint's indexes.
      *
      * Each {@see Blueprint::getIndexes()} entry — derived single-column
@@ -165,6 +249,18 @@ abstract class SchemaGrammar
      * (c1, c2, …)` statement. `CREATE INDEX name ON table (col)` is portable
      * across MySQL, SQLite, and Postgres, so the base implementation needs
      * no dialect override.
+     *
+     * Dialect-gated options ride CLAUSE hooks so the dialect-specific SQL
+     * lives with the dialect that renders it (the same split as
+     * {@see autoIncrement()}): the base decides WHEN an option needs a
+     * clause and calls the hook; the hook returns the clause text or — in
+     * the base implementation — throws, so a dialect must OPT IN by
+     * overriding. `$index['where']` (partial index) goes through
+     * {@see compilePartialIndexClause()}, the NULLS semantics through
+     * {@see compileNullsNotDistinctClause()} — tiered: the DEFAULT
+     * unique-index semantics compile with no clause on every dialect,
+     * while the `nullsNotDistinct` UPGRADE throws in the base and renders
+     * explicitly (both directions) on Postgres.
      *
      * @param Blueprint $blueprint The blueprint.
      * @return list<string> One `CREATE INDEX` statement per index.
@@ -181,12 +277,81 @@ abstract class SchemaGrammar
                 // as-is; its only job is quoting + dialect validation.
                 $this->assertValidIdentifier($index['name']);
 
-                return ($index['unique'] ? 'CREATE UNIQUE INDEX ' : 'CREATE INDEX ')
+                $sql = ($index['unique'] ? 'CREATE UNIQUE INDEX ' : 'CREATE INDEX ')
                     . $this->wrap($index['name'])
                     . ' ON ' . $this->wrap($table)
                     . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $index['columns'])) . ')';
+
+                // The option clauses are optional segments of the one
+                // statement — statement assembly, not a list join. The
+                // NULLS clause rides EVERY unique index (the base carries
+                // the default semantics implicitly as ''; Postgres pins
+                // them explicitly); a plain index renders neither.
+                return $this->concatenate([
+                    $sql,
+                    $index['unique']
+                        ? $this->compileNullsNotDistinctClause($index['nullsNotDistinct'])
+                        : '',
+                    $index['where'] === null ? '' : $this->compilePartialIndexClause($index['where']),
+                ]);
             },
             $blueprint->getIndexes(),
+        );
+    }
+
+    /**
+     * The dialect's `NULLS [NOT] DISTINCT` clause for a UNIQUE index.
+     *
+     * Tiering matters here: the DEFAULT unique-index semantics (NULLS
+     * DISTINCT — multiple NULLs allowed) are universal SQL every dialect
+     * carries implicitly, so the base returns `''` for `$nullsNotDistinct
+     * === false` and the statement compiles with no clause on MySQL and
+     * SQLite. Only the UPGRADE (`NULLS NOT DISTINCT`, Postgres 15+) is
+     * dialect knowledge — the base throws for `$nullsNotDistinct ===
+     * true` so the option fails fast instead of silently weakening the
+     * constraint. Dialects that HAVE the clause (Postgres) override to
+     * render it EXPLICITLY in both directions — `NULLS DISTINCT` pinned
+     * in the DDL makes dumps self-documenting and immune to a future
+     * default flip. Owns the clause TEXT, same split as
+     * {@see compileDeferrableClause()}.
+     *
+     * @param bool $nullsNotDistinct The declared option value.
+     * @return string The clause, rendered after the column list ('' when
+     *         the dialect carries the default semantics implicitly).
+     * @throws UnsupportedFeatureException When `$nullsNotDistinct` is
+     *         true and the dialect has no `NULLS NOT DISTINCT`.
+     */
+    protected function compileNullsNotDistinctClause(bool $nullsNotDistinct): string
+    {
+        if ($nullsNotDistinct) {
+            throw new UnsupportedFeatureException(
+                'This dialect does not support NULLS NOT DISTINCT on a unique index.'
+            );
+        }
+
+        return '';
+    }
+
+    /**
+     * The dialect's partial (filtered) index clause for the given
+     * predicate.
+     *
+     * The base dialect cannot — Postgres and SQLite support `CREATE INDEX
+     * ... WHERE`, MySQL does not. Same clause-hook split as
+     * {@see compileNullsNotDistinctClause()}; the predicate is spliced
+     * verbatim (the raw escape hatch, same trust model as an Expression
+     * default) — the dialect formats the clause AROUND it.
+     *
+     * @param string $predicate The declared predicate (never empty —
+     *        validated at declaration time).
+     * @return string The clause, rendered after the column list (and any
+     *         NULLS NOT DISTINCT clause).
+     * @throws UnsupportedFeatureException Always in the base dialect.
+     */
+    protected function compilePartialIndexClause(string $predicate): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support partial (filtered) indexes.'
         );
     }
 
@@ -259,20 +424,6 @@ abstract class SchemaGrammar
         $name = $this->wrap($column['name']);
         $type = $this->type($column['type'], $column['length']);
 
-        $segments = [$name, $type];
-
-        if ($column['nullable'] !== true) {
-            $segments[] = 'NOT NULL';
-        }
-
-        if ($column['default'] !== null) {
-            $segments[] = 'DEFAULT ' . $this->compileDefault($column['default']);
-        }
-
-        if ($column['unique'] === true) {
-            $segments[] = 'UNIQUE';
-        }
-
         // A composite PK has no generated id in the ORM's contract (the
         // caller assigns every key part — insertGetId is a single-column
         // concept), so the auto-increment clause is suppressed on its
@@ -284,23 +435,25 @@ abstract class SchemaGrammar
         // while SQLite requires it after (`INTEGER PRIMARY KEY
         // AUTOINCREMENT`).
         $autoIncrement = $column['autoIncrement'] === true && !$composite;
+        $beforeKey = $autoIncrement && $this->autoIncrementBeforePrimaryKey();
+        $afterKey = $autoIncrement && !$this->autoIncrementBeforePrimaryKey();
 
-        if ($autoIncrement && $this->autoIncrementBeforePrimaryKey()) {
-            $segments[] = $this->autoIncrement();
-        }
-
-        // A single-column PK is declared inline; a composite PK is declared
-        // table-level (see compileCreate), so a column that is part of a
-        // composite PK must not also get an inline PRIMARY KEY.
-        if ($column['primaryKey'] === true && !$composite) {
-            $segments[] = 'PRIMARY KEY';
-        }
-
-        if ($autoIncrement && !$this->autoIncrementBeforePrimaryKey()) {
-            $segments[] = $this->autoIncrement();
-        }
-
-        return implode(' ', $segments);
+        // Statement assembly: the optional clauses are concatenate()
+        // segments — NOT NULL / DEFAULT / UNIQUE / the auto-increment and
+        // PRIMARY KEY clauses each may be absent. No list items here.
+        return $this->concatenate([
+            $name,
+            $type,
+            $column['nullable'] !== true ? 'NOT NULL' : '',
+            $column['default'] !== null ? 'DEFAULT ' . $this->compileDefault($column['default']) : '',
+            $column['unique'] === true ? 'UNIQUE' : '',
+            $beforeKey ? $this->autoIncrement() : '',
+            // A single-column PK is declared inline; a composite PK is
+            // declared table-level (see compileCreate), so a column that is
+            // part of a composite PK must not also get an inline PRIMARY KEY.
+            $column['primaryKey'] === true && !$composite ? 'PRIMARY KEY' : '',
+            $afterKey ? $this->autoIncrement() : '',
+        ]);
     }
 
     /**

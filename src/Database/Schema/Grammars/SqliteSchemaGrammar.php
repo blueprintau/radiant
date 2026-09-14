@@ -81,6 +81,19 @@ class SqliteSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * SQLite renders partial (filtered) indexes — `CREATE INDEX ... WHERE
+     * predicate`. It has no NULLS NOT DISTINCT and no DEFERRABLE — the
+     * base hooks throw for those.
+     *
+     * @param string $predicate The declared predicate, spliced verbatim.
+     * @return string The clause text.
+     */
+    protected function compilePartialIndexClause(string $predicate): string
+    {
+        return 'WHERE ' . $predicate;
+    }
+
+    /**
      * SQLite has no practical identifier length cap (the limit is a byte
      * count in the millions) — anything the user writes is valid.
      *
@@ -89,5 +102,20 @@ class SqliteSchemaGrammar extends SchemaGrammar
      */
     public function assertValidIdentifier(string $name): void
     {
+    }
+
+    /**
+     * SQLite drops an index by name alone: `DROP INDEX name`.
+     *
+     * @param string $name The index name.
+     * @param string $table The table the index is on (unused — SQLite
+     *        indexes live in their own namespace).
+     * @return string The compiled SQL.
+     */
+    public function compileDropIndex(string $name, string $table): string
+    {
+        unset($table);
+
+        return 'DROP INDEX ' . $this->wrap($name);
     }
 }

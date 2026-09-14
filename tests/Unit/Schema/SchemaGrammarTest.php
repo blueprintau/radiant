@@ -241,6 +241,253 @@ final class SchemaGrammarTest extends TestCase
         (new Blueprint('users'))->index('empty', []);
     }
 
+    // ---- Dialect-gated index options ----
+
+    /**
+     * Postgres renders the NULLS clause EXPLICITLY on a unique index —
+     * `NULLS NOT DISTINCT` when declared, `NULLS DISTINCT` (pinning the
+     * SQL default) when not, so the DDL is self-documenting either way.
+     */
+    public function testNullsNotDistinctPostgres(): void
+    {
+        $blueprint = (new Blueprint('subscriptions'))
+            ->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
+        $indexes = (new PostgresSchemaGrammar())->compileIndexes($blueprint);
+        self::assertSame(
+            ['CREATE UNIQUE INDEX "subscriptions_user_id_unique" ON "subscriptions" ("user_id") NULLS NOT DISTINCT'],
+            $indexes,
+        );
+
+        // The default direction is pinned explicitly too.
+        $default = (new Blueprint('subscriptions'))
+            ->index(null, ['user_id'], unique: true);
+        self::assertSame(
+            ['CREATE UNIQUE INDEX "subscriptions_user_id_unique" ON "subscriptions" ("user_id") NULLS DISTINCT'],
+            (new PostgresSchemaGrammar())->compileIndexes($default),
+        );
+    }
+
+    /**
+     * NULLS NOT DISTINCT fails fast on MySQL — the constraint would
+     * silently be weaker (NULLS DISTINCT) if rendered without the option.
+     */
+    public function testNullsNotDistinctMySqlThrows(): void
+    {
+        $blueprint = (new Blueprint('subscriptions'))
+            ->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('NULLS NOT DISTINCT');
+        (new MySqlSchemaGrammar())->compileIndexes($blueprint);
+    }
+
+    /**
+     * NULLS NOT DISTINCT fails fast on SQLite too.
+     */
+    public function testNullsNotDistinctSqliteThrows(): void
+    {
+        $blueprint = (new Blueprint('subscriptions'))
+            ->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('NULLS NOT DISTINCT');
+        (new SqliteSchemaGrammar())->compileIndexes($blueprint);
+    }
+
+    /**
+     * Declaring nullsNotDistinct without unique fails at the blueprint —
+     * the option is meaningless on a plain index.
+     */
+    public function testNullsNotDistinctWithoutUniqueThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('only applies to a UNIQUE index');
+        (new Blueprint('users'))->index(null, ['user_id'], nullsNotDistinct: true);
+    }
+
+    /**
+     * Postgres renders a partial (filtered) index.
+     */
+    public function testPartialIndexPostgres(): void
+    {
+        $blueprint = (new Blueprint('invitations'))
+            ->index(null, ['email'], unique: true, where: 'accepted_at IS NULL');
+        $indexes = (new PostgresSchemaGrammar())->compileIndexes($blueprint);
+        self::assertSame(
+            ['CREATE UNIQUE INDEX "invitations_email_unique" ON "invitations" ("email") NULLS DISTINCT WHERE accepted_at IS NULL'],
+            $indexes,
+        );
+    }
+
+    /**
+     * SQLite renders a partial (filtered) index too.
+     */
+    public function testPartialIndexSqlite(): void
+    {
+        $blueprint = (new Blueprint('invitations'))
+            ->index(null, ['email'], unique: true, where: 'accepted_at IS NULL');
+        $indexes = (new SqliteSchemaGrammar())->compileIndexes($blueprint);
+        self::assertSame(
+            ['CREATE UNIQUE INDEX "invitations_email_unique" ON "invitations" ("email") WHERE accepted_at IS NULL'],
+            $indexes,
+        );
+    }
+
+    /**
+     * MySQL has no partial indexes — fail fast rather than silently
+     * indexing rows the predicate was supposed to exclude.
+     */
+    public function testPartialIndexMySqlThrows(): void
+    {
+        $blueprint = (new Blueprint('invitations'))
+            ->index(null, ['email'], where: 'accepted_at IS NULL');
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('partial (filtered) indexes');
+        (new MySqlSchemaGrammar())->compileIndexes($blueprint);
+    }
+
+    /**
+     * An empty `where` predicate fails at the blueprint.
+     */
+    public function testPartialIndexEmptyPredicateThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('must be non-empty');
+        (new Blueprint('users'))->index(null, ['user_id'], where: '   ');
+    }
+
+    /**
+     * Both options compose on the supporting dialect.
+     */
+    public function testPartialIndexWithNullsNotDistinctPostgres(): void
+    {
+        $blueprint = (new Blueprint('invitations'))
+            ->index(null, ['email'], unique: true, where: 'accepted_at IS NULL', nullsNotDistinct: true);
+        $indexes = (new PostgresSchemaGrammar())->compileIndexes($blueprint);
+        self::assertSame(
+            ['CREATE UNIQUE INDEX "invitations_email_unique" ON "invitations" ("email") NULLS NOT DISTINCT WHERE accepted_at IS NULL'],
+            $indexes,
+        );
+    }
+
+    /**
+     * A PLAIN (non-unique) index renders no NULLS clause — the semantics
+     * only exist for unique indexes.
+     */
+    public function testPlainIndexHasNoNullsClause(): void
+    {
+        $blueprint = (new Blueprint('posts'))->column(ColumnType::BigInt, 'user_id', index: true);
+        $indexes = (new PostgresSchemaGrammar())->compileIndexes($blueprint);
+        self::assertSame(
+            ['CREATE INDEX "posts_user_id_index" ON "posts" ("user_id")'],
+            $indexes,
+        );
+    }
+
+    // ---- CHECK constraints ----
+
+    /**
+     * A named CHECK constraint renders with its final name, portably.
+     */
+    public function testNamedCheckConstraint(): void
+    {
+        $blueprint = (new Blueprint('products'))
+            ->column(ColumnType::Float, 'price')
+            ->check('price >= 0', 'price_positive');
+        $sql = (new MySqlSchemaGrammar())->compileCreate($blueprint);
+        self::assertSame(
+            'CREATE TABLE `products` (`price` double NOT NULL, CONSTRAINT `products_price_positive_check` CHECK (price >= 0))',
+            $sql,
+        );
+    }
+
+    /**
+     * An unnamed CHECK renders the dialect default (bare CHECK).
+     */
+    public function testUnnamedCheckConstraint(): void
+    {
+        $blueprint = (new Blueprint('products'))
+            ->column(ColumnType::String, 'status', length: 20)
+            ->check("status IN ('draft', 'published')");
+        $sql = (new PostgresSchemaGrammar())->compileCreate($blueprint);
+        self::assertSame(
+            "CREATE TABLE \"products\" (\"status\" varchar(20) NOT NULL, CHECK (status IN ('draft', 'published')))",
+            $sql,
+        );
+    }
+
+    /**
+     * A CHECK constraint with an empty expression fails at the blueprint.
+     */
+    public function testEmptyCheckThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('non-empty expression');
+        (new Blueprint('products'))->check('  ');
+    }
+
+    // ---- DEFERRABLE foreign keys ----
+
+    /**
+     * Postgres renders DEFERRABLE INITIALLY DEFERRED on a foreign key.
+     */
+    public function testDeferrableForeignKeyPostgres(): void
+    {
+        $blueprint = (new Blueprint('transfers'))
+            ->column(ColumnType::BigInt, 'account_id')
+            ->foreignKey(['account_id'], 'accounts', ['id'], deferrable: true, initiallyDeferred: true);
+        $sql = (new PostgresSchemaGrammar())->compileCreate($blueprint);
+        self::assertSame(
+            'CREATE TABLE "transfers" ("account_id" bigint NOT NULL, '
+            . 'FOREIGN KEY ("account_id") REFERENCES "accounts" ("id") DEFERRABLE INITIALLY DEFERRED)',
+            $sql,
+        );
+    }
+
+    /**
+     * MySQL refuses DEFERRABLE foreign keys — fail fast, not silently
+     * immediate enforcement.
+     */
+    public function testDeferrableForeignKeyMySqlThrows(): void
+    {
+        $blueprint = (new Blueprint('transfers'))
+            ->column(ColumnType::BigInt, 'account_id')
+            ->foreignKey(['account_id'], 'accounts', ['id'], deferrable: true);
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessage('DEFERRABLE foreign keys');
+        (new MySqlSchemaGrammar())->compileCreate($blueprint);
+    }
+
+    /**
+     * initiallyDeferred without deferrable fails at the blueprint —
+     * INITIALLY DEFERRED implies DEFERRABLE in the SQL standard.
+     */
+    public function testInitiallyDeferredWithoutDeferrableThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('implies DEFERRABLE');
+        (new Blueprint('transfers'))->foreignKey(['account_id'], 'accounts', ['id'], initiallyDeferred: true);
+    }
+
+    // ---- DROP INDEX ----
+
+    /**
+     * Each dialect compiles its own DROP INDEX syntax.
+     */
+    public function testCompileDropIndexPerDialect(): void
+    {
+        self::assertSame(
+            'ALTER TABLE `users` DROP INDEX `users_email_unique`',
+            (new MySqlSchemaGrammar())->compileDropIndex('users_email_unique', 'users'),
+        );
+        self::assertSame(
+            'DROP INDEX "users_email_unique"',
+            (new PostgresSchemaGrammar())->compileDropIndex('users_email_unique', 'users'),
+        );
+        self::assertSame(
+            'DROP INDEX "users_email_unique"',
+            (new SqliteSchemaGrammar())->compileDropIndex('users_email_unique', 'users'),
+        );
+    }
+
     /**
      * An Expression default is spliced verbatim.
      */

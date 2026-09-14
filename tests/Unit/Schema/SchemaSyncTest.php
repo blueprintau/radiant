@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
+use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
+use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Attributes\Unique;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -227,6 +229,101 @@ class NamedUnique extends \BlueprintAU\Radiant\Model
      */
     #[Column(type: ColumnType::String, length: 2)]
     public string $country;
+}
+
+/**
+ * A model whose #[Unique] carries OPTIONS — nullsNotDistinct (the classic
+ * "one active row per user" constraint) and a partial predicate on the
+ * #[Index]. Both flow through fromMetadata() into the index shapes.
+ */
+#[Unique(columns: ['userId'], nullsNotDistinct: true, name: 'sync_options_active_unique')]
+#[Index(columns: ['country'], where: 'regionId IS NOT NULL', name: 'sync_options_country_index')]
+#[Table(name: 'sync_options')]
+class OptionsUnique extends \BlueprintAU\Radiant\Model
+{
+    /**
+     * The primary key.
+     *
+     * @var int
+     */
+    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
+
+    /**
+     * The user column — nullable so NULLS NOT DISTINCT has meaning.
+     *
+     * @var int|null
+     */
+    #[Column(type: ColumnType::BigInt, nullable: true)]
+    public int|null $userId;
+
+    /**
+     * The country column — carries the partial index.
+     *
+     * @var string
+     */
+    #[Column(type: ColumnType::String, length: 2)]
+    public string $country;
+
+    /**
+     * The region column — referenced by the partial predicate.
+     *
+     * @var int|null
+     */
+    #[Column(type: ColumnType::BigInt, nullable: true)]
+    public int|null $regionId;
+}
+
+/**
+ * A model whose #[ForeignKey] declares DEFERRABLE INITIALLY DEFERRED —
+ * the Postgres circular-seed option flows through fromMetadata() into
+ * the FK shape (compiled only by the Postgres grammar).
+ */
+#[ForeignKey(columns: ['ownerId'], references: 'sync_options', deferrable: true, initiallyDeferred: true)]
+#[Table(name: 'sync_deferrable')]
+class DeferrableFk extends \BlueprintAU\Radiant\Model
+{
+    /**
+     * The primary key.
+     *
+     * @var int
+     */
+    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
+
+    /**
+     * The FK column.
+     *
+     * @var int
+     */
+    #[Column(type: ColumnType::BigInt)]
+    public int $ownerId;
+}
+
+/**
+ * A model with a class-level #[Check] — the portable predicate flows
+ * through fromMetadata() into the checks shape and compiles on every
+ * dialect.
+ */
+#[Check(expression: 'price >= 0', name: 'price_positive')]
+#[Table(name: 'sync_meta_check')]
+class CheckedModel extends \BlueprintAU\Radiant\Model
+{
+    /**
+     * The primary key.
+     *
+     * @var int
+     */
+    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
+
+    /**
+     * The checked column.
+     *
+     * @var float
+     */
+    #[Column(type: ColumnType::Float)]
+    public float $price;
 }
 
 /**
@@ -626,6 +723,90 @@ final class SchemaSyncTest extends TestCase
     }
 
     /**
+     * #[Unique(nullsNotDistinct: ...)] and #[Index(where: ...)] flow through
+     * fromMetadata() into the index shapes — and the DDL round-trips on
+     * SQLite (partial predicate enforced; NULLS NOT DISTINCT is
+     * Postgres-only so it is NOT compiled here).
+     */
+    public function testUniqueAndIndexAttributesCarryOptions(): void
+    {
+        $blueprint = Blueprint::fromMetadata(OptionsUnique::class);
+
+        $indexes = $blueprint->getIndexes();
+
+        $unique = array_values(array_filter($indexes, fn (array $i) => $i['name'] === 'sync_options_active_unique'))[0];
+        self::assertTrue($unique['unique']);
+        self::assertTrue($unique['nullsNotDistinct']);
+        self::assertNull($unique['where']);
+
+        $partial = array_values(array_filter($indexes, fn (array $i) => $i['name'] === 'sync_options_country_index'))[0];
+        self::assertFalse($partial['unique']);
+        self::assertSame('regionId IS NOT NULL', $partial['where']);
+        self::assertFalse($partial['nullsNotDistinct']);
+
+        // Live DDL: the partial predicate compiles on SQLite and the
+        // inspector reads it back. The unique carries nullsNotDistinct —
+        // creating it on SQLite would fail fast (UnsupportedFeature), so
+        // drop that option for the live half of the round-trip.
+        $this->connection->create(
+            (new Blueprint('sync_options'))
+                ->id()
+                ->column(ColumnType::BigInt, 'userId', nullable: true)
+                ->column(ColumnType::String, 'country', length: 2)
+                ->column(ColumnType::BigInt, 'regionId', nullable: true)
+                ->index('sync_options_active_unique', ['userId'], unique: true)
+                ->index('sync_options_country_index', ['country'], where: 'regionId IS NOT NULL'),
+        );
+
+        $live = $this->connection->schemaInspector->table('sync_options');
+        $country = array_values(array_filter($live->indexes, fn (array $i) => $i['name'] === 'sync_options_country_index'))[0];
+        self::assertSame('regionId IS NOT NULL', $country['where']);
+    }
+
+    /**
+     * #[ForeignKey(deferrable: true, initiallyDeferred: true)] flows through
+     * fromMetadata() into the FK shape. SQLite refuses DEFERRABLE — the
+     * live assertion is Postgres-grammar compile-only.
+     */
+    public function testForeignKeyAttributeCarriesDeferrable(): void
+    {
+        $blueprint = Blueprint::fromMetadata(DeferrableFk::class);
+
+        $foreignKeys = $blueprint->getForeignKeys();
+
+        self::assertCount(1, $foreignKeys);
+        self::assertTrue($foreignKeys[0]['deferrable']);
+        self::assertTrue($foreignKeys[0]['initiallyDeferred']);
+
+        // The Postgres grammar renders it; SQLite would fail fast.
+        $sql = (new \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar())
+            ->compileCreate($blueprint);
+        self::assertStringContainsString('DEFERRABLE INITIALLY DEFERRED', $sql);
+    }
+
+    /**
+     * A class-level #[Check] flows through fromMetadata() with its FINAL
+     * name ({table}_{name}_check) and compiles into the CREATE TABLE.
+     */
+    public function testCheckAttributeFlowsThroughFromMetadata(): void
+    {
+        $blueprint = Blueprint::fromMetadata(CheckedModel::class);
+
+        $checks = $blueprint->getChecks();
+
+        self::assertCount(1, $checks);
+        self::assertSame('sync_meta_check_price_positive_check', $checks[0]['name']);
+        self::assertSame('price >= 0', $checks[0]['expression']);
+
+        // Live: created, inspected, enforced.
+        $this->connection->create($blueprint);
+        $this->connection->table('sync_meta_check')->insert(['price' => 5.0]);
+
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $this->connection->table('sync_meta_check')->insert(['price' => -5.0]);
+    }
+
+    /**
      * Two class-level #[Unique] attributes compile DISTINCT unique-index
      * names (derived from the covered columns with a `_unique` suffix —
      * the suffix says WHAT the index is and cannot collide with a
@@ -728,5 +909,172 @@ final class SchemaSyncTest extends TestCase
             'ownerId',
             foreign: SyncCompositePk::class,
         );
+    }
+
+    // ---- Index-option drift (differ) ----
+
+    /**
+     * A live index missing the declared partial predicate drifts — the
+     * differ reports a non-destructive AlterIndexes rebuild carrying ONLY
+     * the drifted index, and applying it converges.
+     */
+    public function testDiffDetectsPartialPredicateDrift(): void
+    {
+        // Live: full unique index.
+        $this->connection->create(
+            (new Blueprint('sync_drift'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->index('sync_drift_email_unique', ['email'], unique: true),
+        );
+
+        // Desired: same index with a partial predicate.
+        $desired = (new Blueprint('sync_drift'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->index('sync_drift_email_unique', ['email'], unique: true, where: 'email IS NOT NULL');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::AlterIndexes, $changes[0]->operation);
+        self::assertFalse($changes[0]->destructive);
+        self::assertStringContainsString('sync_drift_email_unique', $changes[0]->description);
+
+        // Applying the rebuild makes the drift disappear (converged).
+        $this->connection->apply($changes[0]);
+        self::assertSame([], $differ->diff([$desired]));
+
+        // The live index now carries the predicate.
+        $live = $this->connection->schemaInspector->table('sync_drift');
+        $index = array_values(array_filter($live->indexes, fn (array $i) => $i['name'] === 'sync_drift_email_unique'))[0];
+        self::assertSame('email IS NOT NULL', $index['where']);
+    }
+
+    /**
+     * Indexes already in sync produce no change — the differ does not
+     * churn.
+     */
+    public function testDiffIndexesInSyncProducesNoChange(): void
+    {
+        $blueprint = (new Blueprint('sync_stable'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->index('sync_stable_email_unique', ['email'], unique: true);
+
+        $this->connection->create($blueprint);
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$blueprint]);
+        self::assertSame([], $changes);
+    }
+
+    /**
+     * A declared index absent from the live table is NOT option drift —
+     * the differ reports no AlterIndexes for it (creating declared indexes
+     * on a live table is a deployment concern, not a v2 differ job).
+     */
+    public function testDiffIgnoresDeclaredIndexesAbsentLive(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_gap'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255),
+        );
+
+        $desired = (new Blueprint('sync_gap'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->index('sync_gap_email_unique', ['email'], unique: true);
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+        self::assertSame([], $changes);
+    }
+
+    // ---- Live SQLite round-trips for the new options ----
+
+    /**
+     * A partial unique index round-trips on live SQLite — created, read
+     * back with its predicate, and enforced (duplicate emails among
+     * accepted rows violate; duplicates among rejected rows do not).
+     */
+    public function testLiveSqlitePartialUniqueIndexEnforced(): void
+    {
+        $connection = $this->connection;
+        $connection->create(
+            (new Blueprint('sync_partial'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->column(ColumnType::Boolean, 'accepted', default: false)
+                ->index('sync_partial_email_unique', ['email'], unique: true, where: 'accepted = 1'),
+        );
+
+        $connection->table('sync_partial')->insert(['email' => 'a@x.io', 'accepted' => 1]);
+        $connection->table('sync_partial')->insert(['email' => 'a@x.io', 'accepted' => 0]);
+
+        // Two accepted rows with the same email violate the partial index.
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $connection->table('sync_partial')->insert(['email' => 'a@x.io', 'accepted' => 1]);
+    }
+
+    /**
+     * A live SQLite round-trip proves the SQLite inspector parses the
+     * partial predicate out of sqlite_master.
+     */
+    public function testLiveSqliteInspectorParsesPartialPredicate(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_partial_read'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->index('sync_partial_read_email_unique', ['email'], unique: true, where: 'email IS NOT NULL'),
+        );
+
+        $live = $this->connection->schemaInspector->table('sync_partial_read');
+        $index = array_values(array_filter($live->indexes, fn (array $i) => $i['name'] === 'sync_partial_read_email_unique'))[0];
+
+        self::assertSame('email IS NOT NULL', $index['where']);
+        self::assertFalse($index['nullsNotDistinct']);
+    }
+
+    /**
+     * A named CHECK constraint round-trips on live SQLite and is enforced.
+     */
+    public function testLiveSqliteCheckConstraintEnforced(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_checked'))
+                ->id()
+                ->column(ColumnType::Float, 'price')
+                ->check('price >= 0', 'price_positive'),
+        );
+
+        $this->connection->table('sync_checked')->insert(['price' => 10.0]);
+
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $this->connection->table('sync_checked')->insert(['price' => -1.0]);
+    }
+
+    /**
+     * rebuildIndexes() drops and re-creates an index — exercised directly
+     * with a predicate change.
+     */
+    public function testRebuildIndexesChangesLivePredicate(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_rebuild'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->index('sync_rebuild_email_unique', ['email'], unique: true),
+        );
+
+        $this->connection->rebuildIndexes(
+            (new Blueprint('sync_rebuild'))
+                ->index('sync_rebuild_email_unique', ['email'], unique: true, where: 'email IS NOT NULL'),
+        );
+
+        $live = $this->connection->schemaInspector->table('sync_rebuild');
+        $index = array_values(array_filter($live->indexes, fn (array $i) => $i['name'] === 'sync_rebuild_email_unique'))[0];
+        self::assertSame('email IS NOT NULL', $index['where']);
     }
 }

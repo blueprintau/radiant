@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Metadata;
 
+use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\Index;
@@ -55,6 +56,7 @@ final class ClassMetadata
      *        Column names are validated against `$properties` at build.
      * @param list<Index> $indexes Every `#[Index]`.
      * @param list<ForeignKey> $foreignKeys Every `#[ForeignKey]`.
+     * @param list<Check> $checks Every `#[Check]` on the class hierarchy.
      * @param string|null $softDeleteColumn The resolved soft-delete column
      *        name when the class uses {@see SoftDeletes}, else null. Carried
      *        on the metadata so query building can apply the scope without
@@ -74,6 +76,7 @@ final class ClassMetadata
         public readonly array $uniques = [],
         public readonly array $indexes = [],
         public readonly array $foreignKeys = [],
+        public readonly array $checks = [],
         public readonly ?string $softDeleteColumn = null,
         public readonly string|null $parentModel = null,
     ) {

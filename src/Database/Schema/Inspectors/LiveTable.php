@@ -19,11 +19,15 @@ final class LiveTable
      * @param string $name The table name.
      * @param list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}> $columns
      *        The live columns — `type` is the dialect's native type text.
-     * @param list<array{name: string|null, columns: list<string>, unique: bool}> $indexes
+     * @param list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> $indexes
      *        The live indexes (unique constraints included; the PK is NOT
      *        an index here — it rides the columns' `primaryKey` flag).
-     * @param list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null}> $foreignKeys
-     *        The live foreign-key constraints.
+     *        `where` is the partial-index predicate (parsed from the
+     *        dialect's definition text); `nullsNotDistinct` mirrors the
+     *        declared option (Postgres only).
+     * @param list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> $foreignKeys
+     *        The live foreign-key constraints. `deferrable` mirrors the
+     *        declared option (Postgres only; others always false).
      */
     public function __construct(
         public readonly string $name,

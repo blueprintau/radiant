@@ -90,10 +90,11 @@ final class SqliteSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live indexes, from `PRAGMA index_list` + `index_info`.
+     * The live indexes, from `PRAGMA index_list` + `index_info` (the
+     * partial-index predicate parsed from the `sqlite_master` SQL).
      *
      * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool}> The indexes.
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
      */
     private function indexes(string $name): array
     {
@@ -130,6 +131,11 @@ final class SqliteSchemaInspector extends SchemaInspector
                 'name' => str_starts_with($indexName, 'sqlite_autoindex_') ? null : $indexName,
                 'columns' => $columns,
                 'unique' => ((int) $row['unique']) === 1,
+                // The partial-index predicate rides the CREATE INDEX SQL in
+                // sqlite_master — PRAGMA index_list does not expose it.
+                'where' => $this->parseIndexWhere($indexName),
+                // SQLite has no NULLS NOT DISTINCT — always false.
+                'nullsNotDistinct' => false,
             ];
         }
 
@@ -137,10 +143,40 @@ final class SqliteSchemaInspector extends SchemaInspector
     }
 
     /**
+     * Extract the partial-index predicate for a named index from the
+     * `sqlite_master` SQL — the text after the top-level ` WHERE `, or
+     * null for a full index.
+     *
+     * @param string $indexName The index name.
+     * @return string|null The predicate text, or null.
+     */
+    private function parseIndexWhere(string $indexName): ?string
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+        );
+        $statement->execute([$indexName]);
+
+        $sql = $statement->fetchColumn();
+
+        if ($sql === false || !is_string($sql)) {
+            return null;
+        }
+
+        $where = strripos($sql, ' WHERE ');
+
+        if ($where === false) {
+            return null;
+        }
+
+        return rtrim(trim(substr($sql, $where + 7)), ';');
+    }
+
+    /**
      * The live foreign keys, from `PRAGMA foreign_key_list`.
      *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
@@ -172,6 +208,8 @@ final class SqliteSchemaInspector extends SchemaInspector
                 'referencesColumns' => array_values($group['referencesColumns']),
                 'onDelete' => $this->normalizeAction($group['onDelete']),
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
+                // SQLite has no DEFERRABLE — always false.
+                'deferrable' => false,
             ];
         }
 

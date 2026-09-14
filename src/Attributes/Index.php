@@ -21,10 +21,15 @@ final class Index
      * @param list<string> $columns Column names, validated at build time.
      * @param string|null $name The index name; defaults to the dialect's
      *        derived name when null.
+     * @param string|null $where The partial-index predicate, spliced
+     *        verbatim after `WHERE` (e.g. `deleted_at IS NULL`) — renders
+     *        a partial index on Postgres and SQLite; MySQL fails fast at
+     *        compile time.
      */
     public function __construct(
         public array $columns,
         public ?string $name = null,
+        public ?string $where = null,
     ) {
     }
 }
