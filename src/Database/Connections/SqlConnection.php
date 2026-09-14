@@ -202,11 +202,22 @@ abstract class SqlConnection implements ConnectionInterface
     public function insertGetId(QueryBuilder $query, array $values): string|int|null
     {
         $pk = $query->getInsertIdColumn();
-        $sql = $this->grammar->compileInsert($query, $values, $pk);
+
+        if ($pk === null) {
+            // No key declared — compile the plain insert and report success.
+            $this->affectingStatement($this->grammar->compileInsert($query, $values), $this->flattenInsertValues($values));
+            return null;
+        }
+
+        // The compile-shaped capability contract: the grammar returns the
+        // statement PLUS whether that statement yields the key (a RETURNING
+        // dialect compiles the clause in; MySQL compiles without it). The
+        // connection never probes a boolean — it reads the compile result.
+        $compiled = $this->grammar->compileInsertForId($query, $values, $pk);
         $bindings = $this->flattenInsertValues($values);
 
-        if ($pk !== null && $this->grammar->usesReturning()) {
-            $row = $this->selectSql($sql, $bindings)->first();
+        if ($compiled['returnsKey']) {
+            $row = $this->selectSql($compiled['sql'], $bindings)->first();
             if ($row === null) {
                 return null;
             }
@@ -214,10 +225,7 @@ abstract class SqlConnection implements ConnectionInterface
             return is_int($id) || is_string($id) ? $id : null;
         }
 
-        $this->statement($sql, $bindings);
-        if ($pk === null) {
-            return null;
-        }
+        $this->statement($compiled['sql'], $bindings);
         // The lastInsertId() fallback is reachable ONLY on dialects without
         // RETURNING (MySQL, and old SQLite) — Postgres' grammar always uses
         // RETURNING, so its sequence-based lastval() hazards never apply
@@ -585,13 +593,22 @@ abstract class SqlConnection implements ConnectionInterface
      * Alter a table — add or drop columns.
      *
      * The table name comes from the blueprint itself — one source of truth.
+     * The operation picks the compile root (one public compiler per SQL
+     * statement — the grammar has no operation-enum dispatch).
      *
      * @param SchemaOperation $operation The operation to perform.
      * @param Blueprint $blueprint The table and columns involved.
      */
     final public function alter(SchemaOperation $operation, Blueprint $blueprint): void
     {
-        $this->statement($this->schemaGrammar->compileAlter($operation, $blueprint));
+        $this->statement(match ($operation) {
+            SchemaOperation::AddColumn => $this->schemaGrammar->compileAddColumns($blueprint),
+            SchemaOperation::DropColumn => $this->schemaGrammar->compileDropColumns($blueprint),
+            default => throw new \LogicException(
+                "Operation [{$operation->value}] is not a column alter; use the "
+                . 'dedicated create/drop/rebuildIndexes paths.'
+            ),
+        });
     }
 
     /**

@@ -264,21 +264,15 @@ abstract class Grammar
 
         // An EMPTY row (a model with no set properties, a DEFAULTS-only
         // insert) cannot compile to the degenerate `INSERT INTO t () VALUES
-        // ()` — invalid SQL on every dialect. The portable form is
-        // `INSERT INTO t DEFAULT VALUES` (SQLite, Postgres); MySQL 8 has
-        // no DEFAULT VALUES and gets the one-row `VALUES ()` form, which
-        // it accepts.
+        // ()` — invalid SQL on every dialect. The dialect owns the form via
+        // {@see compileEmptyInsert()} (the SQL-standard DEFAULT VALUES by
+        // default; MySQL overrides with the one-row `VALUES ()` it
+        // accepts).
         if (isset($rows[0]) && $rows[0] === []) {
-            $sql = "INSERT INTO {$this->wrapFromTable($builder)} DEFAULT VALUES";
-            if (!$this->supportsDefaultValues()) {
-                $sql = "INSERT INTO {$this->wrapFromTable($builder)} () VALUES ()";
-            }
-
-            if ($this->usesReturning() && $pk !== null) {
-                $sql .= ' RETURNING ' . $this->wrapSegments($pk);
-            }
-
-            return $sql;
+            return $this->withReturning(
+                $this->compileEmptyInsert($builder),
+                $pk,
+            );
         }
 
         $columns = implode(', ', array_map(fn ($column) => $this->wrapSegments($column), array_keys($rows[0])));
@@ -288,31 +282,87 @@ abstract class Grammar
         ));
         $sql = "INSERT INTO {$this->wrapFromTable($builder)} ({$columns}) VALUES {$placeholders}";
 
-        if ($this->usesReturning() && $pk !== null) {
-            $sql .= ' RETURNING ' . $this->wrapSegments($pk);
+        return $this->withReturning($sql, $pk);
+    }
+
+    /**
+     * Compile the empty-row insert — the statement body for a row with no
+     * columns.
+     *
+     * The SQL-standard form is `INSERT INTO t DEFAULT VALUES` (SQLite,
+     * Postgres); a dialect without it overrides with the form IT accepts
+     * (MySQL's one-row `VALUES ()`). This is the compile-function shape of
+     * the old `supportsDefaultValues()` boolean: the dialect does not
+     * ANSWER whether it supports the form — it RENDERS the form it
+     * supports.
+     *
+     * @param QueryBuilder $builder The query to compile.
+     * @return string The insert statement body (no RETURNING — the caller
+     *         appends it).
+     */
+    protected function compileEmptyInsert(QueryBuilder $builder): string
+    {
+        return "INSERT INTO {$this->wrapFromTable($builder)} DEFAULT VALUES";
+    }
+
+    /**
+     * Whether the dialect compiles `INSERT ... RETURNING`.
+     *
+     * PROTECTED on purpose — the connection never probes capabilities; it
+     * calls {@see compileInsertForId()} and gets the compiled statement
+     * with a `returnsKey` flag. This predicate exists only for the compile
+     * path to consult.
+     *
+     * @return bool True when the dialect supports RETURNING.
+     */
+    protected function usesReturning(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Append the `RETURNING` clause to a compiled statement when the
+     * dialect supports it and a PK was declared.
+     *
+     * @param string $sql The compiled statement body.
+     * @param string|null $pk The PK column to return, when known.
+     * @return string The statement, possibly with RETURNING appended.
+     */
+    protected function withReturning(string $sql, ?string $pk): string
+    {
+        if ($pk !== null && $this->usesReturning()) {
+            return $sql . ' RETURNING ' . $this->wrapSegments($pk);
         }
+
         return $sql;
     }
 
     /**
-     * Whether the dialect accepts the SQL-standard `INSERT INTO t DEFAULT
-     * VALUES` form.
+     * Compile an insert whose generated key the caller needs back — the
+     * compile-shaped replacement for the old public `usesReturning()`
+     * probe.
      *
-     * @return bool True when DEFAULT VALUES is supported (default).
-     */
-    protected function supportsDefaultValues(): bool
-    {
-        return true;
-    }
-
-    /**
-     * Whether the dialect supports `INSERT ... RETURNING`.
+     * The connection calls THIS instead of asking the grammar whether
+     * RETURNING exists: the result carries the compiled SQL plus whether
+     * THAT statement yields the key (a `RETURNING` dialect compiles the
+     * clause in; MySQL compiles without it and the connection falls back
+     * to `lastInsertId()`). Support is expressed AS a compile result, not
+     * a capability boolean — and the grammar stays a pure compiler: it
+     * never executes what it compiles.
      *
-     * @return bool True when the dialect supports RETURNING.
+     * @param QueryBuilder $builder The query to compile.
+     * @param array<string, mixed> $values The row to insert.
+     * @param string $pk The PK column whose generated value the caller needs.
+     * @return array{sql: string, returnsKey: bool} The compiled statement
+     *         and whether executing it yields the generated key (fetch the
+     *         row) or not (read `lastInsertId()` after execution).
      */
-    public function usesReturning(): bool
+    public function compileInsertForId(QueryBuilder $builder, array $values, string $pk): array
     {
-        return false;
+        return [
+            'sql' => $this->compileInsert($builder, $values, $pk),
+            'returnsKey' => $this->usesReturning(),
+        ];
     }
 
     // ---- Update root ----

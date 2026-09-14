@@ -12,7 +12,8 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  *
  * Identifiers are quoted with double quotes (embedded quotes doubled).
  * Postgres supports `INSERT ... RETURNING`, so {@see usesReturning()} returns
- * true. Row locks render as `for update` and `for share`; a bare offset is
+ * true and {@see compileInsertForId()} compiles the clause in. Row locks
+ * render as `for update` and `for share`; a bare offset is
  * valid without a limit.
  */
 class PostgresGrammar extends Grammar

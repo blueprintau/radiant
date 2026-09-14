@@ -10,7 +10,6 @@ use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
-use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /**
  * Compiles schema definitions into dialect DDL.
@@ -179,36 +178,33 @@ abstract class SchemaGrammar
     }
 
     /**
-     * Compile an `ALTER TABLE` statement — or, for the whole-table
-     * operations the differ emits, the equivalent `CREATE TABLE` /
-     * `DROP TABLE`. Routing the {@see SchemaOperation} cases through
-     * one entry point keeps {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::apply()}
-     * a trivial dispatch. `AlterIndexes` has NO single-statement form —
-     * index rebuilds need a drop per drifted index plus a CREATE per
-     * desired one, so it routes through
-     * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::rebuildIndexes()}
-     * (which sequences {@see compileDropIndex()} + {@see compileIndexes()})
-     * and throws here.
+     * Compile an `ALTER TABLE ... ADD COLUMN` statement — one public root
+     * per SQL statement (the compile-only surface rule): the caller picks
+     * the compiler for the statement it wants, no operation-enum dispatch
+     * in between.
      *
-     * @param SchemaOperation $operation The operation to perform.
-     * @param Blueprint $blueprint The table and columns involved.
+     * @param Blueprint $blueprint The table and columns to add.
      * @return string The compiled SQL.
-     * @throws UnsupportedFeatureException When the operation is
-     *         {@see SchemaOperation::AlterIndexes} (no single-statement
-     *         form — the connection sequences it).
+     * @throws \InvalidArgumentException When the blueprint declares no
+     *         columns to add.
      */
-    public function compileAlter(SchemaOperation $operation, Blueprint $blueprint): string
+    public function compileAddColumns(Blueprint $blueprint): string
     {
-        return match ($operation) {
-            SchemaOperation::AddColumn => $this->compileAddColumn($blueprint),
-            SchemaOperation::DropColumn => $this->compileDropColumn($blueprint),
-            SchemaOperation::CreateTable => $this->compileCreate($blueprint),
-            SchemaOperation::DropTable => $this->compileDrop($blueprint->getTable()),
-            SchemaOperation::AlterIndexes => throw new UnsupportedFeatureException(
-                'AlterIndexes is a sequenced operation (DROP INDEX + CREATE INDEX per index); '
-                . 'it cannot compile to a single statement.'
-            ),
-        };
+        return $this->compileAddColumn($blueprint);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... DROP COLUMN` statement — one public root
+     * per SQL statement (the compile-only surface rule).
+     *
+     * @param Blueprint $blueprint The table and columns to drop.
+     * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException When the dialect cannot drop
+     *         columns (the base dialect; MySQL and Postgres override).
+     */
+    public function compileDropColumns(Blueprint $blueprint): string
+    {
+        return $this->compileDropColumn($blueprint);
     }
 
     /**

@@ -12,7 +12,8 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  *
  * Identifiers are quoted with double quotes (embedded quotes doubled).
  * SQLite 3.35+ supports `INSERT ... RETURNING`, so {@see usesReturning()}
- * returns true. SQLite has no row-locking syntax, so {@see compileLock()}
+ * returns true and {@see compileInsertForId()} compiles the clause in.
+ * SQLite has no row-locking syntax, so {@see compileLock()}
  * inherits the base Grammar's {@see UnsupportedFeatureException} — a lock
  * request fails fast rather than silently dropping the lock.
  */

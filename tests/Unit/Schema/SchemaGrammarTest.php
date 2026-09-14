@@ -597,7 +597,7 @@ final class SchemaGrammarTest extends TestCase
     public function testAlterAddColumn(): void
     {
         $blueprint = (new Blueprint('users'))->string('nickname', 100);
-        $sql = (new SqliteSchemaGrammar())->compileAlter(SchemaOperation::AddColumn, $blueprint);
+        $sql = (new SqliteSchemaGrammar())->compileAddColumns($blueprint);
         self::assertSame('ALTER TABLE "users" ADD COLUMN "nickname" varchar(100) NOT NULL', $sql);
     }
 
@@ -607,7 +607,7 @@ final class SchemaGrammarTest extends TestCase
     public function testAlterDropColumnMySql(): void
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
-        $sql = (new MySqlSchemaGrammar())->compileAlter(SchemaOperation::DropColumn, $blueprint);
+        $sql = (new MySqlSchemaGrammar())->compileDropColumns($blueprint);
         self::assertSame('ALTER TABLE `users` DROP COLUMN `nickname`', $sql);
     }
 
@@ -617,7 +617,7 @@ final class SchemaGrammarTest extends TestCase
     public function testAlterDropColumnPostgres(): void
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
-        $sql = (new PostgresSchemaGrammar())->compileAlter(SchemaOperation::DropColumn, $blueprint);
+        $sql = (new PostgresSchemaGrammar())->compileDropColumns($blueprint);
         self::assertSame('ALTER TABLE "users" DROP COLUMN "nickname"', $sql);
     }
 
@@ -629,7 +629,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
         $this->expectException(UnsupportedFeatureException::class);
         $this->expectExceptionMessage('does not support dropping columns');
-        (new SqliteSchemaGrammar())->compileAlter(SchemaOperation::DropColumn, $blueprint);
+        (new SqliteSchemaGrammar())->compileDropColumns($blueprint);
     }
 
     // ---- Drop ----

@@ -14,7 +14,8 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  * supports `INSERT ... RETURNING` only from 8.0.19+ with a `RETURNING`
  * clause on `DELETE`/`UPDATE` — plain `INSERT ... RETURNING` is not
  * supported, so {@see usesReturning()} stays false and `insertGetId()` falls
- * back to `lastInsertId()`. Row locks render as `for update` and
+ * back to `lastInsertId()` via {@see compileInsertForId()}'s `returnsKey`
+ * flag. Row locks render as `for update` and
  * `lock in share mode`; an offset without a limit is padded with the
  * unsigned-bigint maximum so the offset is accepted.
  */
@@ -34,14 +35,17 @@ class MySqlGrammar extends Grammar
     /**
      * MySQL has no `INSERT ... DEFAULT VALUES` form — the one-row
      * `VALUES ()` fallback compiles instead (MySQL accepts it and applies
-     * the column defaults).
+     * the column defaults). The compile-function shape of the old
+     * `supportsDefaultValues()` boolean: the dialect RENDERS the form it
+     * supports rather than answering whether it supports the standard one.
      *
-     * @return bool False — MySQL uses the `VALUES ()` fallback.
+     * @param QueryBuilder $builder The query to compile.
+     * @return string The MySQL empty-insert form.
      */
     #[\Override]
-    protected function supportsDefaultValues(): bool
+    protected function compileEmptyInsert(QueryBuilder $builder): string
     {
-        return false;
+        return "INSERT INTO {$this->wrapFromTable($builder)} () VALUES ()";
     }
 
     /**
