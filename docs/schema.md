@@ -21,7 +21,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 
 /** @var SqlConnection $conn — schema is SQL-only */
 
-$blueprint = (new Blueprint())
+$blueprint = (new Blueprint('users'))
     ->id()
     ->column(ColumnType::String, 'email', length: 255, unique: true)
     ->column(ColumnType::String, 'country', length: 2, index: true)
@@ -33,17 +33,55 @@ Indexes: `Blueprint::index($name, $columns, $unique)` compiles to
 `CREATE INDEX` per dialect, and single-column indexes come from a
 column's `index:` flag.
 
+### Index options
+
+Two options upgrade an index's *semantics*, and each dialect compiles
+what it can — an option the active dialect cannot render fails fast with
+an `UnsupportedFeatureException` at compile time, never silently weaker:
+
+```php
+// NULLS NOT DISTINCT (Postgres 15+): at most one NULL in a unique index —
+// the classic "one active row per user" constraint. MySQL and SQLite
+// refuse it (their unique indexes always allow multiple NULLs).
+$blueprint->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
+
+// Partial (filtered) index (Postgres, SQLite): only rows matching the
+// predicate are indexed. MySQL has no partial indexes and refuses.
+$blueprint->index(null, ['email'], unique: true, where: 'accepted_at IS NULL');
+```
+
+On Postgres the NULLS clause is rendered **explicitly in both directions**
+— a unique index without the option compiles `NULLS DISTINCT`, pinning the
+SQL default in the DDL so dumps are self-documenting.
+
+Foreign keys take `deferrable:` / `initiallyDeferred:` (Postgres only —
+circular-FK seeding within one transaction), and tables take portable
+`CHECK` constraints:
+
+```php
+$blueprint->foreignKey(['account_id'], 'accounts', ['id'], deferrable: true, initiallyDeferred: true);
+$blueprint->check('price >= 0', 'price_positive'); // named → {table}_{name}_check
+```
+
 ## Creating, altering, dropping
 
 ```php
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /** @var SqlConnection $conn */
 
-$conn->create('users', $blueprint);
-$conn->alter($operation, $blueprint);
+$conn->create($blueprint);          // CREATE TABLE + every declared index
+$conn->alter(SchemaOperation::AddColumn, $blueprint);
+$conn->alter(SchemaOperation::DropColumn, $blueprint);
 $conn->drop('users');
 ```
+
+Under the hood each statement has its own compile function on the
+dialect's schema grammar (`compileCreate`, `compileAddColumns`,
+`compileDropColumns`, `compileDrop`, `compileIndexes`, `compileDropIndex`)
+— a feature the dialect cannot express throws
+`UnsupportedFeatureException` at compile time, never silently ignored.
 
 ## Schema sync
 
@@ -59,8 +97,8 @@ use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 /** @var SqlConnection $conn */
 
 $desired = [
-    'users' => Blueprint::fromMetadata(User::class),
-    'posts' => Blueprint::fromMetadata(Post::class),
+    Blueprint::fromMetadata(User::class),
+    Blueprint::fromMetadata(Post::class),
 ];
 
 $differ = new SchemaDiffer($conn->schemaInspector); // never construct an inspector yourself
@@ -75,10 +113,11 @@ foreach ($changes as $change) {
 ```
 
 Each returned `SchemaChange` carries the table, the operation
-(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`), a `destructive` flag
-(anything that can lose data), and a human-readable `description` for
-dry-run output. Changes are ordered **creates → alters → drops**, so a
-rename (drop + create) never destroys data before its replacement exists.
+(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`/`AlterIndexes`), a
+`destructive` flag (anything that can lose data), and a human-readable
+`description` for dry-run output. Changes are ordered **creates → alters
+→ drops**, so a rename (drop + create) never destroys data before its
+replacement exists.
 
 Rename-shaped diffs are **flagged, never rewritten**: a column add+drop
 pair on one table, or a create+drop table pair sharing at least half their
@@ -86,11 +125,15 @@ columns, is marked `possibleRename` / `renameOf` so the host can ask "is
 this a rename?" — a wrong guess executing `RENAME COLUMN` between
 unrelated columns would corrupt data.
 
-The v1 differ is **column-level only**: it detects whole-table
-creates/drops and column adds/drops. A changed column type, nullable
-flag, or default surfaces as a re-add (reported in the plan) — not an
-in-place modify — and index/FK changes are not diffed yet. Review the
-plan before applying.
+The differ is **column-level plus index-option drift**: it detects
+whole-table creates/drops, column adds/drops, and index *option* drift —
+a live index whose partial predicate or `NULLS NOT DISTINCT` no longer
+matches the declaration is reported as a non-destructive `AlterIndexes`
+rebuild (drop + re-create; rows are never touched). A changed column
+type, nullable flag, or default surfaces as a re-add (reported in the
+plan) — not an in-place modify — and a declared index absent from the
+live table is a deployment gap the differ does not create. FK and CHECK
+changes are not diffed yet. Review the plan before applying.
 
 ## Locking
 

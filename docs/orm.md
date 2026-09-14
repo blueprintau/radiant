@@ -122,6 +122,21 @@ the same column is a build-time error, so constraints can't double-declare.
 `#[ForeignKey]`'s `references` also accepts a model class-string, resolved
 through that model's table.
 
+**Constraint options.** The same dialect gating as the schema layer: an
+option the active dialect cannot render fails fast at DDL compile time.
+
+- `#[Unique(nullsNotDistinct: true)]` — `NULLS NOT DISTINCT` (Postgres 15+):
+  at most one NULL among duplicates. The classic "one active row per user"
+  constraint on a nullable column.
+- `#[Unique(where: ...)]` / `#[Index(where: ...)]` — partial (filtered)
+  index (Postgres, SQLite), e.g. `where: 'accepted_at IS NULL'` for a
+  unique-among-pending constraint.
+- `#[ForeignKey(deferrable: true, initiallyDeferred: true)]` — Postgres
+  only; lets circular foreign keys seed within one transaction.
+- `#[Check(expression: 'price >= 0', name: 'price_positive')]` — portable
+  table-level CHECK (MySQL 8.0.16+ enforces it; older MySQL parses and
+  ignores).
+
 **Composite support.** A composite primary key is declared by setting
 `primaryKey: true` on multiple `#[Column]` properties. Every constraint
 location accepts a column list: `#[Unique]` and `#[Index]` take
