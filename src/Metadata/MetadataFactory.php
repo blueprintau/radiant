@@ -67,6 +67,32 @@ final class MetadataFactory
     }
 
     /**
+     * Invalidate cached metadata.
+     *
+     * The lifecycle hook for processes that regenerate classes at runtime —
+     * dev servers with hot reload, codegen tools, test suites that redefine
+     * classes. Without eviction, the cache serves the OLD metadata forever:
+     * renamed columns, added #[Column]s, and changed table names stay
+     * invisible until process restart (and stale instances pin the old
+     * class definitions in memory).
+     *
+     * @param string|null $class The class to evict; null clears the whole
+     *        cache. Clearing one class does not clear its ancestors/descendants
+     *        (their metadata is independently built and cached) — clear(null)
+     *        is the safe choice when a family changes.
+     * @return void
+     */
+    public static function clear(?string $class = null): void
+    {
+        if ($class === null) {
+            self::$metadataCache = [];
+            return;
+        }
+
+        unset(self::$metadataCache[$class]);
+    }
+
+    /**
      * The canonical table inventory: every table-owning model class mapped
      * to its resolved table name.
      *
@@ -614,6 +640,15 @@ final class MetadataFactory
      * covering the same single column is a duplicate declaration — fail
      * fast rather than silently double-declaring the constraint.
      *
+     * The check walks the ANCESTOR chain: a child that redeclares a parent's
+     * column replaces the parent's slot in the merged mappings — including
+     * the parent's flag — so a child `#[Unique]` on the same column would
+     * never be cross-checked against the parent's `unique: true` flag if
+     * only the merged map were consulted. Both declarations are real
+     * (the parent's column carries the flag; the child carries the
+     * attribute), and the DDL would emit the constraint twice or in two
+     * shapes.
+     *
      * @param list<string> $columns The attribute's column names.
      * @param PropertyMapping[] $properties The merged mappings.
      * @param class-string<Model> $class The leaf class name (for the message).
@@ -641,6 +676,36 @@ final class MetadataFactory
                     . "Use one mechanism: the flag for the simple single-column case, or the "
                     . 'attribute when you need a name/composite/actions.'
                 );
+            }
+        }
+
+        // Ancestor flags: a redeclared column hides the ancestor's mapping
+        // in $properties, but the ancestor's `#[Column]` flag still declares
+        // the constraint at its level. Walk the chain and check the raw
+        // property attributes there too.
+        for ($ancestor = get_parent_class($class); $ancestor !== false; $ancestor = get_parent_class($ancestor)) {
+            if (!is_a($ancestor, Model::class, true)) {
+                continue;
+            }
+
+            $level = new \ReflectionClass($ancestor);
+
+            foreach ($level->getProperties() as $property) {
+                foreach ($property->getAttributes(Column::class) as $attribute) {
+                    /** @var Column $columnAttr */
+                    $columnAttr = $attribute->newInstance();
+
+                    $columnName = $columnAttr->name ?? $property->getName();
+
+                    if ($columnName === $columns[0] && $columnAttr->{$flag} === true) {
+                        throw new \InvalidArgumentException(
+                            "Model [{$class}] declares a class-level {$flag} constraint on column [{$columns[0]}], "
+                            . "but ancestor [{$ancestor}] already declares the same column with `{$flag}: true` — "
+                            . 'a duplicate declaration across the inheritance chain. Keep the flag on the '
+                            . 'declaring ancestor, or the attribute on the child, not both.'
+                        );
+                    }
+                }
             }
         }
     }

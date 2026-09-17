@@ -11,7 +11,8 @@ namespace BlueprintAU\Radiant\Database\Query\Enums;
  * validated through {@see SortDirection::fromChecked()} at the API boundary — a raw string
  * here is a SQL-injection sink, not a convenience.
  * Using an enum at the call site makes an invalid direction a static-analysis
- * error instead of a runtime throw.
+ * error instead of a runtime throw. Raw SQL fragments ride {@see \BlueprintAU\Radiant\Database\Query\Expression}
+ * through orderBy() — an explicit, greppable escape hatch.
  */
 enum SortDirection: string
 {
@@ -35,7 +36,7 @@ enum SortDirection: string
         return self::tryFrom(strtoupper($direction))
             ?? throw new \InvalidArgumentException(
                 "Order direction must be ASC or DESC; got [{$direction}]. "
-                . 'For anything else, use orderByRaw() with a pre-validated expression.'
+                . 'For anything else, pass a pre-validated Expression to orderBy().'
             );
     }
 }

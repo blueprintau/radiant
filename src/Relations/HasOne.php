@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
  * One-to-one: HasMany's first row, stably ordered by the related PK.
@@ -49,7 +50,16 @@ final class HasOne extends HasMany
             return;
         }
 
-        $this->query->where($this->getForeignKey(), '=', $this->parent->attribute($this->getLocalKey()));
+        $parentKey = $this->parent->attribute($this->getLocalKey());
+
+        if ($parentKey === null) {
+            // Null parent key → no results, without compiling a meaningless
+            // query (BelongsTo's convention; `fk = NULL` matches no rows).
+            $this->query->whereRaw('1 = 0', []);
+            return;
+        }
+
+        $this->query->where($this->getForeignKey(), '=', $parentKey);
     }
 
     /**
@@ -65,14 +75,39 @@ final class HasOne extends HasMany
     }
 
     /**
+     * Order the eager-load query stably, mirroring the lazy path.
+     *
+     * The lazy path orders by the related PK before taking the first row
+     * ({@see addConstraints()}); the eager path must apply the same order
+     * or the two paths can return different rows for the same parent when
+     * duplicate FK rows exist. Without the order, `match()` keeps whatever
+     * row the database happened to return first — non-deterministic across
+     * backends, plans, and page sizes.
+     *
+     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
+     * @return void
+     */
+    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    {
+        $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
+
+        if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
+            $query->orderBy($primaryKeys[0]->name);
+        }
+    }
+
+    /**
      * Distribute eager results onto parents — first match per FK value.
      *
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
+     *        Unused here — the FK lives on each related model (accepted for
+     *        signature parity with the through relations).
      * @return void
      */
-    public function match(array $parents, Collection $results, string $name): void
+    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
         $first = [];
 

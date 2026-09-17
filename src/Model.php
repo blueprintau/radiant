@@ -336,7 +336,14 @@ abstract class Model
     /**
      * Save the model — INSERT when new, UPDATE of the dirty columns when not.
      *
-     * @return bool Always true (failures throw).
+     * The branch is driven by in-memory state (`exists`), not a database
+     * check: a `new` model always INSERTs, so re-saving a caller-assigned
+     * (non-auto-increment) PK from a fresh instance is a duplicate-PK
+     * failure — re-save through a loaded instance instead. Concurrent
+     * saves are last-writer-wins (no optimistic locking); see docs/orm.md
+     * "Saving and primary keys" for the full contract.
+     *
+     * @return bool True on success (failures throw).
      */
     public function save(): bool
     {
@@ -356,7 +363,8 @@ abstract class Model
     /**
      * Delete the model (soft-delete when the trait is used).
      *
-     * @return bool Always true (failures throw).
+     * @return bool True when the delete affected the row; false when the
+     *         row no longer exists (a stale instance). Failures throw.
      */
     public function delete(): bool
     {
@@ -366,7 +374,14 @@ abstract class Model
     /**
      * The real DELETE by primary key.
      *
-     * @return bool Always true (failures throw).
+     * Reflects the affected-row count: a stale instance (the row was
+     * deleted by another connection while this one was alive) matches 0
+     * rows — `$this->exists` is cleared and false is returned instead of
+     * reporting a delete that did not happen. Mirrors the
+     * {@see SoftDeletes} trait's delete()/restore() contract.
+     *
+     * @return bool True when the row was deleted; false when it was
+     *         already gone.
      */
     protected function performDelete(): bool
     {
@@ -385,6 +400,8 @@ abstract class Model
             // the same column => value pairs. A single key keeps the
             // scalar form (one where, one binding).
             $composite = count($pks) > 1;
+
+            $anyDeleted = false;
 
             for ($class = static::class; $class !== false; $class = get_parent_class($class)) {
                 if (!is_a($class, Model::class, true)) {
@@ -410,18 +427,22 @@ abstract class Model
                     $query->where($pks[0]->name ?? 'id', '=', $key);
                 }
 
-                $query->delete();
+                $deleted = $query->delete();
+                $anyDeleted = $anyDeleted || $deleted > 0;
             }
 
             $this->exists = false;
 
-            return true;
+            // MTI reports success when at least one partition row went
+            // away — a cascade may legitimately remove some levels' rows
+            // first, so per-level zero counts are expected.
+            return $anyDeleted;
         }
 
-        $this->newQuery()->whereKey($this->getKeyForRefresh())->delete();
+        $deleted = $this->newQuery()->whereKey($this->getKeyForRefresh())->delete();
         $this->exists = false;
 
-        return true;
+        return $deleted > 0;
     }
 
     /**
@@ -607,7 +628,7 @@ abstract class Model
                     $builder = $connection->table($levelTable);
 
                     if (self::rootAutoIncrement($leafClass)) {
-                        $generatedId = $builder->insertIdColumn($pkName)->insertGetId($values);
+                        $generatedId = $builder->insertIdColumn($pkName, true)->insertGetId($values);
                     } elseif (isset($values[$pkName])) {
                         $generatedId = $values[$pkName]; // caller-assigned key
                     } else {

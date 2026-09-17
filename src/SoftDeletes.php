@@ -39,14 +39,33 @@ trait SoftDeletes
     /**
      * Soft-delete the model — set the delete timestamp.
      *
-     * @return bool Always true.
+     * Returns true when at least one row was updated. A stale model (the
+     * row was deleted — soft- or hard — by another connection while this
+     * instance was alive) matches 0 rows: the in-memory state is NOT
+     * mutated to look deleted, `$this->exists` is cleared, and false is
+     * returned — the caller's compensation logic (cascade cleanup, queue
+     * bookkeeping) must not fire for a row that is not there.
+     *
+     * Re-deleting an already-soft-deleted row DOES return true: the
+     * UPDATE matches the row (soft-deleted rows are invisible to the
+     * scoped builder but whereKey + update targets the row directly) and
+     * refreshing the timestamp is a legitimate, successful soft delete.
+     *
+     * @return bool True when the row was soft-deleted; false when the row
+     *         no longer exists.
      */
     public function delete(): bool
     {
         if ($this->exists) {
-            $this->newQuery()
+            $affected = $this->newQuery()
                 ->whereKey($this->getKeyForRefresh())
                 ->update([static::deletedAtColumn() => $this->freshTimestamp()]);
+
+            if ($affected === 0) {
+                // The row is gone (stale instance) — report honestly.
+                $this->exists = false;
+                return false;
+            }
 
             $this->setAttribute(static::deletedAtColumn(), $this->freshTimestamp());
             $this->original[static::deletedAtColumn()] = $this->freshTimestamp();
@@ -72,15 +91,25 @@ trait SoftDeletes
      * `whereNull` scope would exclude the very rows restore() targets
      * (they have `deleted_at` SET).
      *
-     * @return bool Always true.
+     * Like {@see delete()}, this reflects the affected-row count: restoring
+     * a stale instance (row hard-deleted elsewhere) touches 0 rows, clears
+     * `$this->exists`, and returns false instead of reporting success.
+     *
+     * @return bool True when the row was restored; false when the row no
+     *         longer exists.
      */
     public function restore(): bool
     {
         if ($this->exists) {
-            $this->newQuery()
+            $affected = $this->newQuery()
                 ->withTrashed()
                 ->whereKey($this->getKeyForRefresh())
                 ->update([static::deletedAtColumn() => null]);
+
+            if ($affected === 0) {
+                $this->exists = false;
+                return false;
+            }
 
             $this->setAttribute(static::deletedAtColumn(), null);
             $this->original[static::deletedAtColumn()] = null;

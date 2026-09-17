@@ -14,6 +14,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
+use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
@@ -84,6 +85,16 @@ class ModelQueryBuilder extends QueryBuilder
     protected array $partitions = [];
 
     /**
+     * Chunk size for key-list operations ({@see whereKey()} with a list).
+     *
+     * Matches the eager loader's bound ({@see \BlueprintAU\Radiant\Relations\Relation::EAGER_KEY_CHUNK}):
+     * drivers cap placeholder counts (SQLite's 999 variables, MySQL's
+     * max_allowed_packet), so an oversized key list must not build a single
+     * unbounded statement.
+     */
+    protected const KEY_CHUNK = 500;
+
+    /**
      * The MTI ancestor chain (nearest parent first), each as
      * [class, table]. Empty for non-MTI models.
      *
@@ -118,6 +129,34 @@ class ModelQueryBuilder extends QueryBuilder
      * @var array<string, Relations\Relation<Model>>
      */
     protected static array $relationCache = [];
+
+    /**
+     * Invalidate the memoized relation-resolution cache.
+     *
+     * The lifecycle hook for processes that regenerate model classes at
+     * runtime (hot reload, codegen): the cache is bounded by class count
+     * for a fixed class set, but unbounded for dynamically generated ones,
+     * and stale entries pin old class definitions in memory. Pairs with
+     * {@see \BlueprintAU\Radiant\Metadata\MetadataFactory::clear()} — call
+     * both when classes are redefined.
+     *
+     * @param string|null $class Clear only this class's relations
+     *        ("class::method" entries); null clears everything.
+     * @return void
+     */
+    public static function clearRelationCache(?string $class = null): void
+    {
+        if ($class === null) {
+            static::$relationCache = [];
+            return;
+        }
+
+        foreach (array_keys(static::$relationCache) as $key) {
+            if (str_starts_with($key, $class . '::')) {
+                unset(static::$relationCache[$key]);
+            }
+        }
+    }
 
     /**
      * Declared-column hash set for {@see validateColumn()} (lazy).
@@ -172,10 +211,14 @@ class ModelQueryBuilder extends QueryBuilder
         }
 
         // Tell the connection which column to return on insert (RETURNING /
-        // lastInsertId). Only a single auto-increment PK has a generated id.
+        // lastInsertId). A single auto-increment PK is server-generated; a
+        // single caller-assigned PK declares itself too — with the
+        // auto-increment flag false, so insertGetId()'s lastInsertId()
+        // fallback fails fast instead of returning a stale id (a composite
+        // PK declares nothing: no single column identifies the row).
         $primaryKeys = $metadata->primaryKeys;
-        if (count($primaryKeys) === 1 && $primaryKeys[0]->autoIncrement && $primaryKeys[0]->name !== null) {
-            $this->insertIdColumn($primaryKeys[0]->name);
+        if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
+            $this->insertIdColumn($primaryKeys[0]->name, $primaryKeys[0]->autoIncrement);
         }
 
         // Auto-apply the soft-delete scope (track its index so
@@ -447,9 +490,9 @@ class ModelQueryBuilder extends QueryBuilder
 
         $keyList = array_values($keyIndex);
 
-        $results = $relation->eagerLoad($keyList);
+        $result = $relation->eagerLoad($keyList);
 
-        $relation->match($parents, $results, $name);
+        $relation->match($parents, $result->models, $name, $result->parentKeys);
 
         if ($nested !== null) {
             // Recurse onto the freshly-loaded related models.
@@ -1085,6 +1128,52 @@ class ModelQueryBuilder extends QueryBuilder
     {
         $primaryKeys = MetadataFactory::for($this->modelClass)->primaryKeys;
 
+        // PK-selection guard: whereKey's results feed save()/delete()
+        // (getKeyForRefresh()), which need the PK hydrated. A caller-owned
+        // select that omits the PK column hydrates models whose key
+        // property is uninitialized — the key reads as null and the write
+        // silently targets `WHERE pk IS NULL` (matching nothing, or worse).
+        // Fail fast at the API boundary instead.
+        $selected = $this->getColumns();
+        if ($selected !== ['*']) {
+            $pkNames = array_filter(
+                array_map(fn ($pk) => $pk->name, $primaryKeys),
+                fn ($name) => $name !== null,
+            );
+
+            foreach ($selected as $column) {
+                if ($column instanceof Expression) {
+                    continue; // raw expressions carry no column contract.
+                }
+                $bare = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
+
+                if ($bare === $this->table . '.*') {
+                    $pkNames = [];
+                    break;
+                }
+
+                // Match the PK bare (`id`) or qualified (`table.id` — the
+                // MTI builder's own default select qualifies every column).
+                foreach ($pkNames as $pkName) {
+                    if ($bare === $pkName || $bare === $this->table . '.' . $pkName) {
+                        $pkNames = [];
+                        break 2;
+                    }
+                }
+            }
+
+            if ($pkNames !== []) {
+                throw new \InvalidArgumentException(
+                    'whereKey() requires the primary key in the select list — the result feeds '
+                    . 'save()/delete(), which need the key hydrated. Add the PK column '
+                    . '[' . implode(', ', array_map(
+                        fn ($name) => $this->table . '.' . $name,
+                        $pkNames,
+                    )) . '] to the select, or use select([table.*]).'
+                );
+            }
+        }
+
         // A LIST of key values (scalars or key maps) constrains to ANY of
         // them — the batching path used by Collection::fresh(). An
         // associative map (string keys) is a composite key; a list (int
@@ -1094,15 +1183,26 @@ class ModelQueryBuilder extends QueryBuilder
         // (mirroring the eager-load OR-of-groups shape): `pk = 1 OR
         // (a = ? AND b = ?) OR pk = 3`. Flattening would let one key's
         // parts AND against the NEXT key.
+        //
+        // The list is CHUNKED at the same 500-key bound eager loading uses:
+        // SQL text and placeholder count grow linearly with key count, and
+        // drivers enforce hard caps (SQLite's 999 variables, MySQL's
+        // max_allowed_packet). An oversized list used to raise a hard
+        // QueryException; it now compiles the same per-key OR-groups, just
+        // produced from bounded chunks of the list — same match-any
+        // semantics, linearly bounded memory during construction.
+        // (Composite keys multiply arity, so the bound stays conservative.)
         if (is_array($id) && array_is_list($id)) {
             if ($id === []) {
                 return $this->whereRaw('1 = 0');
             }
 
-            foreach ($id as $key) {
-                $this->orWhereNested(function (WhereBuilder $nested) use ($key): void {
-                    $this->applyWhereKeyOn($nested, $key);
-                });
+            foreach (array_chunk($id, self::KEY_CHUNK) as $chunk) {
+                foreach ($chunk as $key) {
+                    $this->orWhereNested(function (WhereBuilder $nested) use ($key): void {
+                        $this->applyWhereKeyOn($nested, $key);
+                    });
+                }
             }
 
             return $this;
@@ -1298,12 +1398,18 @@ class ModelQueryBuilder extends QueryBuilder
      * queries (GROUP BY) the PK must NOT be force-added — selecting a
      * non-grouped column would break the query.
      *
-     * @param array<int, string>|string $columns A column list, or a single column.
+     * An {@see Expression} bypasses validation — raw SQL by contract, the
+     * explicit raw-select path. Hydration note: an aliased raw select
+     * (`new Expression('count(*) as total')`) yields models whose typed
+     * properties are NOT set for the aggregate keys — read those off the
+     * raw row via {@see getRaw()}.
+     *
+     * @param array<int, string|Expression>|string|Expression $columns A column list, a single column, or a raw expression.
      * @return static The builder.
-     * @throws \InvalidArgumentException When an explicit column is not a
-     *         declared model column.
+     * @throws \InvalidArgumentException When an explicit string column is
+     *         not a declared model column.
      */
-    public function select(array|string $columns = ['*']): static
+    public function select(array|string|Expression $columns = ['*']): static
     {
         $columns = is_array($columns) ? array_values($columns) : [$columns];
 
@@ -1315,15 +1421,21 @@ class ModelQueryBuilder extends QueryBuilder
             )));
         } else {
             foreach ($columns as $column) {
-                $this->validateColumn($column);
+                if (!$column instanceof Expression) {
+                    $this->validateColumn($column);
+                }
             }
 
             // An explicit list containing QUALIFIED specs (or `table.*`)
             // is caller-owned — typically a joined read where a bare PK
-            // would be ambiguous. No forced-key merge.
+            // would be ambiguous. No forced-key merge. Every string spec has
+            // been allowlist-validated above (validateColumn's qualified
+            // branch checks the partition map / own table / joined tables),
+            // so a typo'd or attacker-influenced `table.column` fails fast
+            // here rather than compiling into the SQL quote-only.
             $callerOwned = (bool) array_filter(
                 $columns,
-                fn (string $column) => str_contains($column, '.'),
+                fn (string|Expression $column) => $column instanceof Expression ? false : str_contains($column, '.'),
             );
 
             if ($callerOwned) {
@@ -1336,7 +1448,16 @@ class ModelQueryBuilder extends QueryBuilder
         }
 
         // Merge forced keys (PK always selected), dedupe, preserve order.
-        $columns = array_values(array_unique(array_merge($this->forcedKeys, $columns)));
+        // At this point every entry is a validated string column (all
+        // Expression entries exited via the caller-owned branch above — and
+        // an aggregate query with an Expression select skips the merge too,
+        // since grouping changes the shape). Filter defensively for the
+        // type system: array_unique/array_merge need strings here.
+        $stringColumns = array_values(array_filter(
+            $columns,
+            fn (string|Expression $column) => is_string($column),
+        ));
+        $columns = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
 
         return parent::select($columns);
     }
@@ -1373,15 +1494,22 @@ class ModelQueryBuilder extends QueryBuilder
     /**
      * Add an order-by clause with model-aware column validation.
      *
-     * @param string $column The column to order by.
+     * An {@see Expression} bypasses validation — it is raw SQL by contract,
+     * the explicit escape hatch (never pass user-supplied content; see
+     * docs/safety.md's raw-SQL rules).
+     *
+     * @param string|Expression $column The column to order by — or a raw
+     *        SQL fragment wrapped in an Expression.
      * @param SortDirection|string $direction `ASC` or `DESC`.
      * @return static The builder.
-     * @throws \InvalidArgumentException When the column is not a declared
-     *         model column.
+     * @throws \InvalidArgumentException When a string column is not a
+     *         declared model column.
      */
-    public function orderBy(string $column, SortDirection|string $direction = SortDirection::Asc): static
+    public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
-        $this->validateColumn($column);
+        if (!$column instanceof Expression) {
+            $this->validateColumn($column);
+        }
 
         return parent::orderBy($column, $direction);
     }
@@ -1459,16 +1587,26 @@ class ModelQueryBuilder extends QueryBuilder
         // form names its table explicitly: the column must exist on the
         // NAMED table per the partition map (MTI), on a table this query
         // JOINs (the through-relation select spec), or on the builder's
-        // OWN table (`table.*` / `table.column` self-references).
+        // OWN table — and in the own-table case the COLUMN part must still
+        // be a declared model column (or `*`). Without that check a
+        // `table.bogus` spec slipped through where the plain `bogus` form
+        // would have failed fast — quoting prevents injection, but the
+        // model layer's allowlist contract was not uniformly applied.
         if (str_contains($source, '.')) {
             [$table, $rest] = explode('.', $source, 2);
 
-            if (
-                ($this->partitions !== [] && ($this->partitions[$rest] ?? null) === $table)
-                || $table === $this->table
+            if (($this->partitions !== [] && ($this->partitions[$rest] ?? null) === $table)
                 || in_array($table, array_column($this->joins, 'table'), true)
             ) {
                 return;
+            }
+
+            if ($table === $this->table) {
+                if ($rest === '*' || isset($columns[$rest]) || isset($forced[$rest])) {
+                    return;
+                }
+                // Own-table prefix but an unknown column — fall through to
+                // the throw below, same as the unqualified form would.
             }
         }
 

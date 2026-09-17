@@ -104,8 +104,8 @@ class QueryBuilder
     /**
      * The order-by clauses.
      *
-     * A raw `orderByRaw()` entry has `direction: null` — its expression is
-     * spliced verbatim with no direction appended.
+     * An {@see Expression} column is spliced verbatim; its direction is
+     * still validated and appended after it.
      *
      * @var list<array{column: string|Expression, direction: SortDirection|null}>
      */
@@ -147,6 +147,17 @@ class QueryBuilder
     protected ?string $insertIdColumn = null;
 
     /**
+     * Whether the {@see $insertIdColumn} is auto-increment (server-generated).
+     *
+     * Null when no id column is declared. Distinguishes "the database will
+     * generate this key" from "the caller supplies it" — insertGetId()'s
+     * lastInsertId() fallback is only meaningful for the former.
+     *
+     * @var bool|null
+     */
+    protected ?bool $insertIdAutoIncrement = null;
+
+    /**
      * Bindings grouped by the clause they belong to.
      *
      * @var array<string, list<BindingValue>>
@@ -181,27 +192,16 @@ class QueryBuilder
     /**
      * Set the columns to select.
      *
-     * @param array<int, string|Expression>|string $columns A column list, or a single column.
+     * A raw SQL fragment is expressed by passing an {@see Expression} — the
+     * only raw-select path, and a greppable one: every verbatim splice in
+     * an app is a visible `new Expression(...)`.
+     *
+     * @param array<int, string|Expression>|string|Expression $columns A column list, a single column, or a raw expression.
      * @return $this
      */
-    public function select(array|string $columns = ['*']): static
+    public function select(array|string|Expression $columns = ['*']): static
     {
         $this->columns = is_array($columns) ? array_values($columns) : func_get_args();
-        return $this;
-    }
-
-    /**
-     * Add a raw SQL expression to the select list.
-     *
-     * @param string $expression The raw SQL to select.
-     * @return $this
-     */
-    public function selectRaw(string $expression): static
-    {
-        if ($this->columns === ['*']) {
-            $this->columns = [];
-        }
-        $this->columns[] = new Expression($expression);
         return $this;
     }
 
@@ -401,6 +401,37 @@ class QueryBuilder
         return $this;
     }
 
+    /**
+     * Assert a list is homogeneous — all plain bindable values, or ALL raw
+     * (Expression/ToSqlValue). A mixed list desyncs placeholders from
+     * bindings on the IN/BETWEEN compile shapes: see the where() call sites.
+     *
+     * @param array<int, mixed> $value The candidate list.
+     * @param string $method The calling method name for the error message.
+     * @return void
+     * @throws \InvalidArgumentException When the list mixes kinds.
+     */
+    private function assertHomogeneousList(array $value, string $method): void
+    {
+        $hasRaw = false;
+        $hasPlain = false;
+        foreach ($value as $item) {
+            if ($item instanceof Expression || $item instanceof ToSqlValue) {
+                $hasRaw = true;
+            } else {
+                $hasPlain = true;
+            }
+
+            if ($hasRaw && $hasPlain) {
+                throw new \InvalidArgumentException(
+                    "{$method} require a list of ALL plain values or ALL raw SQL expressions "
+                    . '(Expression/ToSqlValue) — a mixed list desyncs placeholders from bindings. '
+                    . 'Split into separate clauses or normalize the list.'
+                );
+            }
+        }
+    }
+
     // ---- Wheres ----
 
     /**
@@ -428,6 +459,14 @@ class QueryBuilder
                     . 'an empty list compiles to invalid SQL. Filter in PHP or skip the clause instead.'
                 );
             }
+            // Every list element must be the SAME kind — a plain bindable
+            // value or a raw Expression/ToSqlValue. A MIXED list desyncs
+            // placeholders from bindings: the grammar renders one `?` per
+            // element, but the binding filter drops the raw ones, so the
+            // driver receives fewer values than placeholders (a hard
+            // QueryException on strict drivers, silent mis-binding on lax
+            // ones). Fail fast at declaration.
+            $this->assertHomogeneousList($value, 'whereIn()/whereNotIn()');
             $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
             array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
                 array_values($value),
@@ -437,6 +476,10 @@ class QueryBuilder
         }
 
         if ($operator === WhereOperator::Between || $operator === WhereOperator::NotBetween) {
+            // Same homogeneity contract as the IN lists above — a mixed
+            // scalar/Expression pair (e.g. [new Expression('NOW()'), $end])
+            // desyncs placeholders from bindings identically.
+            $this->assertHomogeneousList($value, 'whereBetween()/whereNotBetween()');
             $this->wheres[] = ['type' => WhereType::Between, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
             array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
                 array_values($value),
@@ -450,8 +493,20 @@ class QueryBuilder
             return $this;
         }
 
+        // A null value with a comparison operator can never match: SQL
+        // `col = NULL` (and every other comparison against NULL) is UNKNOWN,
+        // so the clause compiles to an unbound `= ?` and silently filters
+        // everything out. The intent is always IS NULL / IS NOT NULL — say
+        // so, fail fast, and name the correct method.
+        if ($value === null) {
+            throw new \InvalidArgumentException(
+                "where('{$column}', '{$operator->value}', null) can never match — SQL comparisons against NULL"
+                . ' are UNKNOWN. Use whereNull(\'' . $column . '\') or whereNotNull(\'' . $column . '\') instead.'
+            );
+        }
+
         $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
-        if ($value !== null && !$value instanceof Expression && !$value instanceof ToSqlValue) {
+        if (!$value instanceof Expression && !$value instanceof ToSqlValue) {
             $this->bindings[BindingCategory::Where->value][] = $value;
         }
         return $this;
@@ -694,29 +749,24 @@ class QueryBuilder
      * compiled SQL. Pass a {@see SortDirection} case for static-analysis
      * safety, or a string for convenience.
      *
-     * @param string $column The column to order by.
+     * A raw SQL fragment is expressed by passing an {@see Expression} as the
+     * column — the explicit `new Expression(...)` is the only raw-SQL
+     * ordering path, so every verbatim splice is greppable and the caller
+     * owns its safety (never pass user-supplied content).
+     *
+     * @param string|Expression $column The column to order by — or a raw
+     *        SQL fragment wrapped in an Expression (e.g.
+     *        `new Expression('FIELD(status, \'new\', \'done\')')`).
      * @param SortDirection|string $direction `ASC` or `DESC` (case-insensitive string).
      * @return $this
      * @throws \InvalidArgumentException When the direction is not `ASC` or `DESC`.
      */
-    public function orderBy(string $column, SortDirection|string $direction = SortDirection::Asc): static
+    public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
         $normalized = $direction instanceof SortDirection
             ? $direction
             : SortDirection::fromChecked($direction);
         $this->orders[] = ['column' => $column, 'direction' => $normalized];
-        return $this;
-    }
-
-    /**
-     * Add a raw SQL order-by expression.
-     *
-     * @param string $sql The raw SQL (e.g. `FIELD(status, 'new', 'done')`).
-     * @return $this
-     */
-    public function orderByRaw(string $sql): static
-    {
-        $this->orders[] = ['column' => new Expression($sql), 'direction' => null];
         return $this;
     }
 
@@ -1056,11 +1106,16 @@ class QueryBuilder
      * Declare the PK column so insertGetId() can return it (RETURNING / lastInsertId).
      *
      * @param string $column The primary key column.
+     * @param bool $autoIncrement Whether the key is server-generated. A
+     *        caller-assigned (non-auto-increment) key declares itself here:
+     *        the connection's lastInsertId() fallback is NOT meaningful for
+     *        it, and insertGetId() fails fast when one is attempted.
      * @return $this
      */
-    public function insertIdColumn(string $column): static
+    public function insertIdColumn(string $column, bool $autoIncrement = true): static
     {
         $this->insertIdColumn = $column;
+        $this->insertIdAutoIncrement = $autoIncrement;
         return $this;
     }
 
@@ -1168,7 +1223,8 @@ class QueryBuilder
      * Part of the contract consumed by both {@see \BlueprintAU\Radiant\Database\Grammars\Grammar}
      * (SQL compilation) and custom `ConnectionInterface` implementations
      * (non-SQL execution). `direction` is the {@see SortDirection} enum —
-     * never a bare string — or `null` for a raw `orderByRaw()` expression.
+     * never a bare string. An {@see Expression} column is spliced verbatim
+     * with its validated direction appended after it.
      *
      * @return list<array{column: string|Expression, direction: SortDirection|null}>
      */
@@ -1225,5 +1281,16 @@ class QueryBuilder
     public function getInsertIdColumn(): ?string
     {
         return $this->insertIdColumn;
+    }
+
+    /**
+     * Whether the declared insert-id column is auto-increment.
+     *
+     * @return bool True when the key is server-generated; false when a key
+     *         is declared but caller-supplied; false when none is declared.
+     */
+    public function isInsertIdAutoIncrement(): bool
+    {
+        return $this->insertIdAutoIncrement ?? false;
     }
 }

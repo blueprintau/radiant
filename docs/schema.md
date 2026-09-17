@@ -87,7 +87,10 @@ dialect's schema grammar (`compileCreate`, `compileAddColumns`,
 
 The schema layer ships a **differ**: desired state vs. live schema →
 ordered, classified changes. Radiant computes and reports; the host
-command (plan → show → apply) decides and acts.
+command (plan → show → apply) decides and acts. The apply loop executes
+DDL up to `DROP TABLE` — **always run it under a cross-process lock**
+(see [Locking](#locking)) unless your deployment is genuinely
+single-instance.
 
 ```php
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -102,14 +105,19 @@ $desired = [
 ];
 
 $differ = new SchemaDiffer($conn->schemaInspector); // never construct an inspector yourself
-$changes = $differ->diff($desired);                 // plan
 
-foreach ($changes as $change) {
-    echo $change->description, $change->destructive ? '  [DESTRUCTIVE]' : '', "\n";
-    if (!$change->destructive) {
-        $conn->apply($change); // show → apply; gate destructive changes behind a confirmation
+// The whole diff → apply loop runs under a cross-process lock: it reads
+// the live schema, then executes DDL including DROP TABLE — two
+// overlapping instances would race on stale snapshots. See "Locking"
+// below. Single-instance deployments may omit the lock.
+$conn->withLock(function () use ($differ, $desired, $conn): void {
+    foreach ($differ->diff($desired) as $change) {
+        echo $change->description, $change->destructive ? '  [DESTRUCTIVE]' : '', "\n";
+        if (!$change->destructive) {
+            $conn->apply($change); // show → apply; gate destructive changes behind a confirmation
+        }
     }
-}
+}, 'radiant:schema');
 ```
 
 Each returned `SchemaChange` carries the table, the operation
@@ -125,13 +133,17 @@ columns, is marked `possibleRename` / `renameOf` so the host can ask "is
 this a rename?" — a wrong guess executing `RENAME COLUMN` between
 unrelated columns would corrupt data.
 
-The differ is **column-level plus index-option drift**: it detects
+The differ is **presence-level plus index-option drift**: it detects
 whole-table creates/drops, column adds/drops, and index *option* drift —
 a live index whose partial predicate or `NULLS NOT DISTINCT` no longer
 matches the declaration is reported as a non-destructive `AlterIndexes`
-rebuild (drop + re-create; rows are never touched). A changed column
-type, nullable flag, or default surfaces as a re-add (reported in the
-plan) — not an in-place modify — and a declared index absent from the
+rebuild (drop + re-create; rows are never touched).
+
+**Content drift is NOT detected yet** (v1 scope): a column whose type,
+nullable flag, or default changed on the live table passes as "present" —
+no re-add is reported and no in-place modify is planned. Until signature
+comparison lands, review your schema with an inspector or manage content
+changes as explicit drop+add migrations. A declared index absent from the
 live table is a deployment gap the differ does not create. FK and CHECK
 changes are not diffed yet. Review the plan before applying.
 

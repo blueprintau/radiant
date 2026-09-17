@@ -97,15 +97,20 @@ final class BelongsTo extends Relation
      * per bounded key list.
      *
      * @param list<KeyValue> $parentKeys The parents' FK values.
-     * @return Collection<TRelated> The related models.
+     * @return EagerResult The related models — no per-row parent keys;
+     *         {@see match()} re-derives the key from each model's FK
+     *         attribute, which the select carries.
      */
     #[\Override]
-    protected function eagerLoadChunk(array $parentKeys): Collection
+    protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
         if (!$this->isComposite()) {
-            return $this->related::newQuery()
-                ->whereIn($this->getLocalKey(), $parentKeys)
-                ->get();
+            return EagerResult::fromModels(
+                $this->related::newQuery()
+                    ->whereIn($this->getLocalKey(), $parentKeys)
+                    ->get()
+                    ->all(),
+            );
         }
 
         $localKeys = $this->getLocalKeys();
@@ -128,7 +133,7 @@ final class BelongsTo extends Relation
             ));
         }
 
-        return $query->get();
+        return EagerResult::fromModels($query->get()->all());
     }
 
     /**
@@ -156,9 +161,13 @@ final class BelongsTo extends Relation
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
+     *        Unused here — the owner key lives on each related model, so the
+     *        key is re-derived from the model itself (accepted for signature
+     *        parity with the through relations, which need it).
      * @return void
      */
-    public function match(array $parents, Collection $results, string $name): void
+    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
         $byKey = [];
 

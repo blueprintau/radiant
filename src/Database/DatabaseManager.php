@@ -157,6 +157,84 @@ final class DatabaseManager
     }
 
     /**
+     * Evict resolved connection(s) from the cache.
+     *
+     * The lifecycle hook the staleness machinery cannot cover: a database
+     * restart that does not surface as a connection-loss error, a credential
+     * rotation, or a long-running worker that must not carry a connection
+     * across request/job boundaries. The next {@see connection()} call
+     * rebuilds from the (possibly new) config.
+     *
+     * Evicting rolls back any open transaction on the connection first —
+     * uncommitted work and its row locks must not survive eviction.
+     *
+     * @param string|null $name The connection to evict; null evicts all.
+     * @return void
+     * @throws \InvalidArgumentException When a named connection does not exist.
+     */
+    public function flush(?string $name = null): void
+    {
+        if ($name === null) {
+            foreach (array_keys($this->resolved) as $resolvedName) {
+                $this->flush($resolvedName);
+            }
+            return;
+        }
+
+        if (!isset($this->resolved[$name])) {
+            if (!isset($this->connections[$name])) {
+                throw new \InvalidArgumentException("Unknown connection [{$name}].");
+            }
+            return; // not resolved — nothing to evict
+        }
+
+        if ($this->resolved[$name] instanceof SqlConnection) {
+            $this->discardConnection($this->resolved[$name]);
+        }
+        unset($this->resolved[$name]);
+    }
+
+    /**
+     * Replace a named connection's configuration and evict its instance.
+     *
+     * The supported path for runtime credential rotation: the new config is
+     * validated exactly like boot-time config (same fail-fast contract),
+     * and the previously resolved connection — if any — is flushed, so the
+     * next {@see connection()} call builds with the new settings. Rebuilding
+     * a manager is NOT required.
+     *
+     * @param string $name The connection to reconfigure.
+     * @param array<string, mixed> $config The new settings.
+     * @return void
+     * @throws \InvalidArgumentException When the connection does not exist
+     *         or the new config is invalid.
+     */
+    public function setConnectionConfig(string $name, array $config): void
+    {
+        if (!isset($this->connections[$name])) {
+            throw new \InvalidArgumentException(
+                "Unknown connection [{$name}]; add it via addConnection() first."
+            );
+        }
+
+        $this->validConnectionConfig($config);
+
+        $this->connections[$name] = $config;
+        $this->flush($name);
+    }
+
+    /**
+     * Evict one connection — a readable alias for {@see flush($name)}.
+     *
+     * @param string $name The connection to disconnect.
+     * @return void
+     */
+    public function disconnect(string $name): void
+    {
+        $this->flush($name);
+    }
+
+    /**
      * Best-effort cleanup before a connection is evicted.
      *
      * An evicted connection may still hold an open transaction (uncommitted

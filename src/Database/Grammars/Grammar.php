@@ -426,6 +426,14 @@ abstract class Grammar
     /**
      * Compile the from clause — a table or a subquery.
      *
+     * When the from is a subquery, the sub-builder's bindings are pushed
+     * into the From category in the same pass as its SQL compilation —
+     * exactly the discipline compileUnions() uses. The sub-builder's `?`
+     * placeholders appear in this SQL, so its bindings must land in the
+     * outer builder's binding list in compiled order; without this, a
+     * filtered subquery compiles with placeholders whose values never
+     * reach the executed statement — a silently lost filter.
+     *
      * @param QueryBuilder $builder The query to compile.
      * @return string The from clause.
      */
@@ -434,7 +442,9 @@ abstract class Grammar
         $from = $builder->getFrom();
         if ($from instanceof QueryBuilder) {
             $alias = $builder->getFromAlias();
-            return '(' . $this->compileSelect($from) . ') AS ' . $this->wrapSegments($alias ?? '');
+            $subSql = $this->compileSelect($from);
+            $builder->pushBindings(BindingCategory::From, $from->getBindings());
+            return '(' . $subSql . ') AS ' . $this->wrapSegments($alias ?? '');
         }
         return $this->wrapTable($from);
     }

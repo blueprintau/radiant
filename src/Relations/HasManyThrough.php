@@ -142,10 +142,19 @@ class HasManyThrough extends Relation
         }
 
         if (!$this->isComposite()) {
+            $parentKey = $this->parent->attribute($this->getLocalKey());
+
+            if ($parentKey === null) {
+                // Null parent key → no results, without compiling a
+                // meaningless query (BelongsTo's convention).
+                $this->query->whereRaw('1 = 0', []);
+                return;
+            }
+
             $this->query->where(
                 self::qualify($throughTable, $firstKeys[0]),
                 '=',
-                $this->parent->attribute($this->getLocalKey()),
+                $parentKey,
             );
 
             return;
@@ -255,17 +264,6 @@ class HasManyThrough extends Relation
     }
 
     /**
-     * The parent key carried by each eagerly-loaded row, in row order —
-     * hydration preserves order, so index i of this list pairs with the
-     * i-th model of the eagerLoad() result. A composite first key records
-     * the full POSITIONAL value tuple (matching is position-based — see
-     * {@see Relation::tupleValues()}).
-     *
-     * @var list<int|string|null|list<int|string|null>>
-     */
-    protected array $eagerParentKeys = [];
-
-    /**
      * Run the eager query: join the intermediate table for ALL parents at
      * once, selecting the parent key alongside the related columns.
      *
@@ -276,26 +274,36 @@ class HasManyThrough extends Relation
      * standard `as` alias form — the Grammar's {@see Grammar::wrapColumn()}
      * owns quoting and the `AS` rendering; nothing raw is spliced here.
      *
+     * The per-row parent keys are returned IN the EagerResult rather than
+     * recorded on the relation: a relation object is cached and shared
+     * (ModelQueryBuilder::$relationCache), so instance state here would let
+     * two interleaved eager loads of the same through-relation — concurrent
+     * under Swoole/Fiber — read each other's keys and distribute children
+     * to the wrong parents.
+     *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
      *        scalars, or column => value maps for a composite key.
-     * @return Collection<TRelated> The related models.
+     * @return EagerResult The models plus the per-row parent keys.
      */
-    public function eagerLoad(array $parentKeys): Collection
+    public function eagerLoad(array $parentKeys): EagerResult
     {
         if ($parentKeys === []) {
-            return Collection::make([]);
+            return EagerResult::fromModels([]);
         }
 
         // Chunked: SQL size grows O(parents × arity); driver caps (SQLite
         // 999 placeholders, MySQL max_allowed_packet) turn an oversized
         // single query into a hard failure. One query per chunk, merged.
         $models = [];
+        $parentKeysOut = [];
 
         foreach (array_chunk($parentKeys, self::EAGER_KEY_CHUNK) as $chunk) {
-            array_push($models, ...$this->eagerLoadChunk($chunk)->all());
+            $chunkResult = $this->eagerLoadChunk($chunk);
+            array_push($models, ...$chunkResult->models->all());
+            array_push($parentKeysOut, ...($chunkResult->parentKeys ?? []));
         }
 
-        return Collection::make($models);
+        return new EagerResult(Collection::make($models), $parentKeysOut);
     }
 
     /**
@@ -303,10 +311,12 @@ class HasManyThrough extends Relation
      * synthetic-parent-key select for one bounded key list.
      *
      * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return Collection<TRelated> The related models for this chunk.
+     * @return EagerResult The models plus the per-row parent keys, positionally
+     *         paired (index i of parentKeys is the key of the parent that
+     *         models[i] belongs to).
      */
     #[\Override]
-    protected function eagerLoadChunk(array $parentKeys): Collection
+    protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
         $throughTable = $this->through::table();
         $relatedTable = $this->related::table();
@@ -323,6 +333,11 @@ class HasManyThrough extends Relation
                 '=',
                 self::qualify($throughTable, $intermediateKeys[0]),
             );
+
+        // Subclass ordering hook (HasOneThrough): applies the related-PK
+        // order so first-wins matching stays deterministic, exactly like
+        // the lazy path. No-op for the base many-row relation.
+        $this->applyEagerOrdering($builder);
 
         foreach (array_slice($secondKeys, 1) as $i => $secondKey) {
             $builder->on(
@@ -377,12 +392,12 @@ class HasManyThrough extends Relation
 
         $rows = $builder->getRaw();
 
-        $this->eagerParentKeys = [];
+        $keys = [];
         $models = [];
 
         foreach ($rows->all() as $row) {
             if (!$this->isComposite()) {
-                $this->eagerParentKeys[] = $row->{$parentFk} ?? null;
+                $keys[] = $row->{$parentFk} ?? null;
             } else {
                 $tuple = [];
 
@@ -391,13 +406,13 @@ class HasManyThrough extends Relation
                     $tuple[] = $row->{$column} ?? null;
                 }
 
-                $this->eagerParentKeys[] = $tuple;
+                $keys[] = $tuple;
             }
 
             $models[] = $this->related::fromRow($row);
         }
 
-        return Collection::make($models);
+        return new EagerResult(Collection::make($models), $keys);
     }
 
     /**
@@ -421,7 +436,8 @@ class HasManyThrough extends Relation
 
     /**
      * Distribute eager results onto parents, grouped by the parent key
-     * recorded during {@see HasManyThrough::eagerLoad()}.
+     * carried on the {@see EagerResult} (recorded per-call — the relation
+     * object is cached and shared, so per-call state never lands here).
      *
      * A composite first key groups by the full tuple, serialized to a
      * stable string key.
@@ -429,14 +445,27 @@ class HasManyThrough extends Relation
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
+     *        The per-row parent keys from eagerLoad(), positionally paired
+     *        with the results.
      * @return void
      */
-    public function match(array $parents, Collection $results, string $name): void
+    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
+        if ($eagerParentKeys === null) {
+            // A caller matched WITHOUT the eager-load context — the per-row
+            // keys are unavailable. Fail loudly: silently matching by
+            // re-querying (or matching nothing) would hide the contract.
+            throw new \LogicException(
+                static::class . '::match() requires the EagerResult parent keys; '
+                . 'call it with the array returned by eagerLoad(), not the models alone.'
+            );
+        }
+
         $grouped = [];
 
         foreach ($results->values()->toArray() as $i => $model) {
-            $parentKey = $this->eagerParentKeys[$i] ?? null;
+            $parentKey = $eagerParentKeys[$i] ?? null;
 
             if ($parentKey === null) {
                 continue;
@@ -444,8 +473,6 @@ class HasManyThrough extends Relation
 
             $grouped[self::serializeKey($parentKey)][] = $model;
         }
-
-        $this->eagerParentKeys = [];
 
         $localKeys = $this->isComposite() ? $this->getLocalKeys() : [$this->getLocalKey()];
 

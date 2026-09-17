@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Relations;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
  * One-to-one through an intermediate model.
@@ -51,19 +52,51 @@ final class HasOneThrough extends HasManyThrough
     }
 
     /**
+     * Order the eager-load query stably, mirroring the lazy path.
+     *
+     * Same rationale as {@see \BlueprintAU\Radiant\Relations\HasOne::applyEagerOrdering()}:
+     * the lazy path orders by the related PK before `first()`; the eager
+     * path must too, or `match()` keeps whichever duplicate row the
+     * database returned first.
+     *
+     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
+     * @return void
+     */
+    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    {
+        $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
+
+        if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
+            $query->orderBy($primaryKeys[0]->name);
+        }
+    }
+
+    /**
      * Distribute eager results — first match per parent key.
+     *
+     * The per-row parent keys come from the {@see EagerResult} (per-call
+     * state — the relation object is cached and shared, so nothing mutable
+     * lands on the instance).
      *
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys The per-row parent keys from eagerLoad().
      * @return void
      */
-    public function match(array $parents, Collection $results, string $name): void
+    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
+        if ($eagerParentKeys === null) {
+            throw new \LogicException(
+                static::class . '::match() requires the EagerResult parent keys; '
+                . 'call it with the array returned by eagerLoad(), not the models alone.'
+            );
+        }
+
         $first = [];
 
         foreach ($results->values()->toArray() as $i => $model) {
-            $parentKey = $this->eagerParentKeys[$i] ?? null;
+            $parentKey = $eagerParentKeys[$i] ?? null;
 
             if ($parentKey === null || isset($first[self::serializeKey($parentKey)])) {
                 continue;
@@ -71,8 +104,6 @@ final class HasOneThrough extends HasManyThrough
 
             $first[self::serializeKey($parentKey)] = $model;
         }
-
-        $this->eagerParentKeys = [];
 
         $localKeys = $this->isComposite() ? $this->getLocalKeys() : [$this->getLocalKey()];
 

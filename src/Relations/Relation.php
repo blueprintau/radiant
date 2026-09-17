@@ -87,7 +87,7 @@ abstract class Relation
         if (is_array($foreignKey) !== is_array($localKey)) {
             throw new \InvalidArgumentException(
                 "A relation's foreign key and local key must be BOTH single columns or BOTH "
-                . "composite column lists; got one of each on [{$related}]."
+                    . "composite column lists; got one of each on [{$related}]."
             );
         }
 
@@ -100,7 +100,7 @@ abstract class Relation
         if (is_array($foreignKey) && is_array($localKey) && count($foreignKey) !== count($localKey)) {
             throw new \InvalidArgumentException(
                 "A composite relation key's foreign and local columns must have matching "
-                . 'arity; got ' . count($foreignKey) . ' and ' . count($localKey) . '.'
+                    . 'arity; got ' . count($foreignKey) . ' and ' . count($localKey) . '.'
             );
         }
 
@@ -124,9 +124,14 @@ abstract class Relation
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key on the parents).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
+     *        The per-row parent keys from {@see eagerLoad()}, positionally
+     *        paired with $results. Only through relations consume it (their
+     *        models do not carry the parent key themselves); the others
+     *        ignore it.
      * @return void
      */
-    abstract public function match(array $parents, Collection $results, string $name): void;
+    abstract public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void;
 
     /**
      * Run the eager query for MANY parents at once.
@@ -146,32 +151,47 @@ abstract class Relation
      *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
      *        scalars, or column => value maps for a composite key.
-     * @return Collection<TRelated> The related models.
+     * @return EagerResult The related models, with (for through relations)
+     *         the per-row parent key that {@see match()} distributes by.
      */
-    public function eagerLoad(array $parentKeys): Collection
+    public function eagerLoad(array $parentKeys): EagerResult
     {
         if ($parentKeys === []) {
-            return Collection::make([]);
+            return EagerResult::fromModels([]);
         }
 
         $models = [];
+        $parentKeysOut = null;
 
         foreach (array_chunk($parentKeys, self::EAGER_KEY_CHUNK) as $chunk) {
-            array_push($models, ...$this->eagerLoadChunk($chunk)->all());
+            $chunkResult = $this->eagerLoadChunk($chunk);
+            array_push($models, ...$chunkResult->models->all());
+
+            if ($chunkResult->parentKeys !== null) {
+                $parentKeysOut ??= [];
+                array_push($parentKeysOut, ...$chunkResult->parentKeys);
+            }
         }
 
-        return Collection::make($models);
+        return new EagerResult(Collection::make($models), $parentKeysOut);
     }
 
     /**
      * Run one eager-load query for a CHUNK of parent keys.
      *
+     * Subclasses hook {@see applyEagerOrdering()} to keep the eager path's
+     * row selection deterministic (HasOne/HasOneThrough order by the
+     * related PK so `match()`'s first-wins keeps the same row the lazy
+     * path's `first()` would take).
+     *
      * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return Collection<TRelated> The related models for this chunk.
+     * @return EagerResult The related models for this chunk.
      */
-    protected function eagerLoadChunk(array $parentKeys): Collection
+    protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
         $query = $this->related::newQuery();
+
+        $this->applyEagerOrdering($query);
 
         if ($this->isComposite()) {
             $foreignKeys = $this->getForeignKeys();
@@ -181,11 +201,11 @@ abstract class Relation
                 if (!is_array($parentKey)) {
                     throw new \InvalidArgumentException(
                         'A composite relation key requires column => value key maps for eager loading; '
-                        . 'got ' . get_debug_type($parentKey) . '.'
+                            . 'got ' . get_debug_type($parentKey) . '.'
                     );
                 }
 
-                $query->orWhereNested(fn (WhereBuilder $nested) => self::applyKeyTuple(
+                $query->orWhereNested(fn(WhereBuilder $nested) => self::applyKeyTuple(
                     $nested,
                     $foreignKeys,
                     $localKeys,
@@ -193,10 +213,28 @@ abstract class Relation
                 ));
             }
 
-            return $query->get();
+            return EagerResult::fromModels($query->get()->all());
         }
 
-        return $query->whereIn($this->getForeignKey(), $parentKeys)->get();
+        return EagerResult::fromModels($query->whereIn($this->getForeignKey(), $parentKeys)->get()->all());
+    }
+
+    /**
+     * Apply this relation's eager-path ordering to the chunk query.
+     *
+     * Base relation: no ordering — the eager result set is whole (every
+     * matching row is distributed), so order is irrelevant. One-to-one
+     * subclasses override this to order by the related PK so first-wins
+     * matching stays deterministic. Kept as a separate hook (rather than
+     * ordering inside eagerLoadChunk) so composite-key subclass logic in
+     * the OR-group path gets the same ordering.
+     *
+     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
+     * @return void
+     */
+    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    {
+        // No default ordering.
     }
 
     /**

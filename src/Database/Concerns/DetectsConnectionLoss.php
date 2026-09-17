@@ -74,9 +74,10 @@ trait DetectsConnectionLoss
     protected function isConnectionLoss(\PDOException $e): bool
     {
         $sqlstate = (string) ($e->errorInfo[0] ?? $e->getCode());
-        if (in_array($sqlstate, ['08001', '08003', '08006', '08007', '08S01'], true)) {
+        if (in_array($sqlstate, ['08001', '08003', '08006', '08007', '08S01', '28000'], true)) {
             return true;
         }
+
         if ($sqlstate === 'HY000') {
             return str_contains($e->getMessage(), 'server has gone away')
                 || str_contains($e->getMessage(), 'Lost connection')
@@ -84,6 +85,7 @@ trait DetectsConnectionLoss
                 || str_contains($e->getMessage(), 'broken pipe')
                 || str_contains($e->getMessage(), 'connection closed');
         }
+
         return false;
     }
 }

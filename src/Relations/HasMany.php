@@ -44,7 +44,16 @@ class HasMany extends Relation
             return;
         }
 
-        $this->query->where($this->getForeignKey(), '=', $this->parent->attribute($this->getLocalKey()));
+        $parentKey = $this->parent->attribute($this->getLocalKey());
+
+        if ($parentKey === null) {
+            // Null parent key → no results, without compiling a meaningless
+            // query (BelongsTo's convention; `fk = NULL` matches no rows).
+            $this->query->whereRaw('1 = 0', []);
+            return;
+        }
+
+        $this->query->where($this->getForeignKey(), '=', $parentKey);
     }
 
     /**
@@ -67,9 +76,13 @@ class HasMany extends Relation
      * @param list<Model> $parents The parents to populate.
      * @param Collection<TRelated> $results The related models.
      * @param string $name The relation name (the cache key).
+     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
+     *        Unused here — the FK lives on each related model, so the key is
+     *        re-derived from the model itself (accepted for signature parity
+     *        with the through relations, which need it).
      * @return void
      */
-    public function match(array $parents, Collection $results, string $name): void
+    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
         $grouped = [];
 

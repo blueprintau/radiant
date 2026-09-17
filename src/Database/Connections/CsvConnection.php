@@ -30,19 +30,19 @@ use Override;
  * ## Concurrency guarantee boundary
  *
  * The advisory lock guarantees consistency **only between CsvConnection
- * instances of this library** cooperating through flock. Non-participating
- * writers (another process using file_put_contents, an editor save, any
- * code that does not take the lock) can tear or truncate the file a reader
- * is processing — the `readonly` flag gates *this* connection's writes, not
- * the file's. The blocking file I/O (fopen/flock/fputcsv/rename) is also
- * not coroutine-aware: under Swoole/Fiber runtimes it stalls the worker for
- * the I/O duration.
+ * instances of this library** cooperating through the sidecar lock file.
+ * Non-participating writers (another process using file_put_contents, an
+ * editor save, any code that does not take the lock) can tear or truncate
+ * the file a reader is processing — the `readonly` flag gates *this*
+ * connection's writes, not the file's. The blocking file I/O
+ * (fopen/flock/fputcsv/rename) is also not coroutine-aware: under
+ * Swoole/Fiber runtimes it stalls the worker for the I/O duration.
  */
 final class CsvConnection implements ConnectionInterface
 {
     use NormalizesInsertRows;
 
-    /** Lock mode for {@see openLocked()}: shared (reads). */
+    /** Lock mode for {@see acquireLock()}: shared (reads). */
     private const LOCK_SHARED = false;
 
     /**
@@ -130,6 +130,14 @@ final class CsvConnection implements ConnectionInterface
             }
             $out[] = $computed;
         }
+
+        // SQL orders AFTER grouping: the declared order-by must apply to
+        // the AGGREGATED rows (whose keys are group columns and aggregate
+        // aliases like `count(*)`), not be inherited from the pre-sort of
+        // the raw rows. applyOrders() handles aliases because the order
+        // column is looked up on the computed row, where the alias IS a key.
+        $out = $this->applyOrders($query, $out);
+
         return Collection::make(array_map(
             fn (array $row) => (object) $row,
             $this->applyLimit($query, $out),
@@ -170,15 +178,15 @@ final class CsvConnection implements ConnectionInterface
         $this->assertWritable();
         // One exclusive lock spans the whole read-modify-write: no other
         // process can read between our read and our write, so no lost
-        // updates. writeRows() reuses (and releases) the handle.
-        $handle = $this->openLocked();
+        // updates. writeRows() reuses (and releases) the lock.
+        $lock = $this->acquireLock();
         try {
-            $rows = $this->readRowsLocked($handle);
+            $rows = $this->readRowsUnlocked();
             $normalized = $this->normalizeInsertRows($values);
             array_push($rows, ...$normalized);
-            $this->writeRows($rows, $handle);
+            $this->writeRows($rows, $lock);
         } catch (\Throwable $e) {
-            $this->releaseIfOpen($handle);
+            $this->releaseIfHeld($lock);
             throw $e;
         }
         return count($normalized);
@@ -212,9 +220,9 @@ final class CsvConnection implements ConnectionInterface
     {
         $this->assertWritable();
         // Same read-modify-write lock discipline as insert().
-        $handle = $this->openLocked();
+        $lock = $this->acquireLock();
         try {
-            $rows = $this->readRowsLocked($handle);
+            $rows = $this->readRowsUnlocked();
             $affected = 0;
             foreach ($rows as &$row) {
                 if ($this->matchesAll($query, $row)) {
@@ -223,9 +231,9 @@ final class CsvConnection implements ConnectionInterface
                 }
             }
             unset($row);
-            $this->writeRows($rows, $handle);
+            $this->writeRows($rows, $lock);
         } catch (\Throwable $e) {
-            $this->releaseIfOpen($handle);
+            $this->releaseIfHeld($lock);
             throw $e;
         }
         return $affected;
@@ -242,14 +250,14 @@ final class CsvConnection implements ConnectionInterface
     {
         $this->assertWritable();
         // Same read-modify-write lock discipline as insert().
-        $handle = $this->openLocked();
+        $lock = $this->acquireLock();
         try {
-            $rows = $this->readRowsLocked($handle);
+            $rows = $this->readRowsUnlocked();
             $kept = array_filter($rows, fn (array $row) => !$this->matchesAll($query, $row));
             $affected = count($rows) - count($kept);
-            $this->writeRows(array_values($kept), $handle);
+            $this->writeRows(array_values($kept), $lock);
         } catch (\Throwable $e) {
-            $this->releaseIfOpen($handle);
+            $this->releaseIfHeld($lock);
             throw $e;
         }
         return $affected;
@@ -389,19 +397,59 @@ final class CsvConnection implements ConnectionInterface
      * The canonical CSV comparator.
      *
      * CSV cells are strings, but callers bind typed values (`where('id', 5)`,
-     * `where('id', 'IN', [5])`). PHP's loose `==` on numeric strings already
-     * compares numerically ('5' == 5), which matches SQL column-affinity
-     * semantics for the CSV's all-text storage. Using ONE comparator for
-     * equality and set membership keeps `=` and `IN` consistent with each
-     * other and with the SQL backend for the same query.
+     * `where('id', 'IN', [5])`), so `'5'` must match `5`. PHP's loose `==`
+     * did that — but over-matched: `'0e1' == 0`, `'1e3' == 1000`,
+     * `'abc' == 0` are all true under `==`, so a filter against a
+     * low-trust file (uploaded CSV, shared export) matched rows it should
+     * not. The comparator is now the same strict-after-int-normalization
+     * comparison the model layer uses ({@see \BlueprintAU\Radiant\Collection::keyMatches()}):
+     * numeric integer strings collapse to int on BOTH sides, everything
+     * else compares strictly — `'5'` still matches `5`, `'0e1'` no longer
+     * matches `0`. One comparator serves equality and set membership, so
+     * `=` and `IN` stay consistent with each other and with the SQL
+     * backend's affinity semantics for integer columns.
      *
      * @param mixed $value The row value.
      * @param mixed $operand The bound operand.
-     * @return bool True when the values are equal under SQL-ish semantics.
+     * @return bool True when the values are equal under the normalized
+     *         strict comparison.
      */
     private function valuesEqual(mixed $value, mixed $operand): bool
     {
-        return $value == $operand;
+        if ($value === null || $operand === null) {
+            return $value === $operand;
+        }
+
+        if (is_array($value) || is_array($operand)
+            || is_object($value) || is_object($operand)
+            || is_bool($value) || is_bool($operand)) {
+            // Non-scalar or boolean operands have no CSV-cell meaning; a
+            // strict identity check is the honest answer (and never the
+            // type-juggling match `==` would produce).
+            return $value === $operand;
+        }
+
+        return $this->normalizeCell($value) === $this->normalizeCell($operand);
+    }
+
+    /**
+     * Normalize a scalar for strict comparison — integer numeric strings
+     * collapse to int (canonical), everything else passes through.
+     *
+     * Mirrors {@see \BlueprintAU\Radiant\Collection}'s key normalization:
+     * only `/^-?\d+$/` strings normalize, so `'0e1'`, `'1e3'`, and `'0x1A'
+     * stay strings and never equal a bound int.
+     *
+     * @param mixed $value The scalar value.
+     * @return mixed The normalized value.
+     */
+    private function normalizeCell(mixed $value): mixed
+    {
+        if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) {
+            return (int) $value;
+        }
+
+        return $value;
     }
 
     /**
@@ -653,92 +701,118 @@ final class CsvConnection implements ConnectionInterface
      */
     private function readRows(): array
     {
-        $handle = $this->openLocked(self::LOCK_SHARED);
+        $lock = $this->acquireLock(self::LOCK_SHARED);
         try {
-            return $this->readRowsLocked($handle);
+            return $this->readRowsUnlocked();
         } finally {
-            $this->closeLocked($handle);
+            $this->releaseLock($lock);
         }
     }
 
     /**
-     * Read rows from an already-locked handle without releasing the lock.
+     * Read rows from the CSV file without taking any lock.
      *
-     * Used by the mutation path, which keeps the exclusive lock across the
-     * whole read-modify-write cycle and hands the handle to
-     * {@see writeRows()}.
+     * Used by the mutation path, which holds the sidecar lock across the
+     * whole read-modify-write cycle and hands the lock to
+     * {@see writeRows()}. The data handle is opened and closed here — it
+     * must never be confused with the lock handle, because the data file's
+     * inode is replaced by rename() on every write while the lock file's
+     * is stable.
      *
-     * @param resource $handle The locked handle from {@see openLocked()}.
      * @return list<array<string,mixed>> The rows.
      */
-    private function readRowsLocked($handle): array
+    private function readRowsUnlocked(): array
     {
-        rewind($handle);
-        $rows = [];
-        $header = fgetcsv($handle, escape: '');
-        if ($header === false) {
-            return [];
+        $handle = fopen($this->filePath, 'r');
+        if ($handle === false) {
+            throw new \RuntimeException("Could not open CSV file [{$this->filePath}].");
         }
-        $header = array_map(strval(...), $header);
-        while (($line = fgetcsv($handle, escape: '')) !== false) {
-            $rows[] = array_combine($header, array_map(strval(...), $line));
+        try {
+            $rows = [];
+            $header = fgetcsv($handle, escape: '');
+            if ($header === false) {
+                return [];
+            }
+            $header = array_map(strval(...), $header);
+            while (($line = fgetcsv($handle, escape: '')) !== false) {
+                $rows[] = array_combine($header, array_map(strval(...), $line));
+            }
+            return $rows;
+        } finally {
+            fclose($handle);
         }
-        return $rows;
     }
 
     /**
      * Best-effort lock release on a failure path.
      *
-     * After writeRows() succeeded it has already released the handle; this
+     * After writeRows() succeeded it has already released the lock; this
      * guard makes double-release harmless so the mutation methods can use
      * one catch block for every failure point.
      *
-     * @param resource $handle The handle to release, if still open.
+     * @param resource|null $lock The lock to release, if still held.
      */
-    private function releaseIfOpen($handle): void
+    private function releaseIfHeld($lock): void
     {
-        if (is_resource($handle)) {
-            $this->closeLocked($handle);
+        if (is_resource($lock)) {
+            $this->releaseLock($lock);
         }
     }
 
     /**
-     * Open the CSV file under an advisory lock.
+     * Acquire an advisory lock on the CSV file's **sidecar lock file**.
+     *
+     * The lock must NOT be taken on the CSV file itself: writes go through
+     * temp-file + rename(), which replaces the CSV's inode. A writer holding
+     * flock on the old inode would not exclude a second writer whose flock
+     * succeeds on the new inode — the lost-update race this sidecar exists
+     * to close. The sidecar's inode never changes, so every cooperating
+     * process serializes on the same object for the file's whole lifetime.
+     *
+     * The sidecar is created on demand and deliberately never deleted: a
+     * delete-then-recreate window would reintroduce the same inode race.
+     * It contains no data and is safe to leave in place.
      *
      * @param bool $exclusive True for LOCK_EX (writes — the read-modify-write
      *        cycle), false for LOCK_SH (reads — concurrent readers proceed).
-     * @return resource The locked file handle. Keep it; pass to
-     *         {@see closeLocked()} (or {@see writeRows()}, which takes
-     *         ownership of the handle).
-     * @throws \RuntimeException When the file cannot be opened or locked.
+     * @return resource The locked sidecar handle. Keep it; pass to
+     *         {@see releaseLock()} (or {@see writeRows()}, which takes
+     *         ownership of the lock).
+     * @throws \RuntimeException When the lock file cannot be opened or locked.
      */
-    private function openLocked(bool $exclusive = true)
+    private function acquireLock(bool $exclusive = true)
     {
-        $handle = fopen($this->filePath, 'r+');
-        if ($handle === false) {
-            // Read-only file (or missing) — fall back to a plain read handle,
-            // which still cooperates with the shared/exclusive lock scheme.
-            $handle = fopen($this->filePath, 'r');
-            if ($handle === false) {
-                throw new \RuntimeException("Could not open CSV file [{$this->filePath}].");
-            }
+        $lockPath = $this->lockPath();
+        $lock = fopen($lockPath, 'c');
+        if ($lock === false) {
+            throw new \RuntimeException("Could not open CSV lock file [{$lockPath}].");
         }
-        if (!flock($handle, $exclusive ? LOCK_EX : LOCK_SH)) {
-            fclose($handle);
+        if (!flock($lock, $exclusive ? LOCK_EX : LOCK_SH)) {
+            fclose($lock);
             throw new \RuntimeException("Could not lock CSV file [{$this->filePath}].");
         }
-        return $handle;
+        return $lock;
     }
 
     /**
-     * Release the lock and close the handle.
+     * The sidecar lock file path for the CSV file.
      *
-     * @param resource $handle The handle from {@see openLocked()}.
+     * @return string The lock file path.
      */
-    private function closeLocked($handle): void
+    private function lockPath(): string
     {
-        flock($handle, LOCK_UN);
-        fclose($handle);
+        return $this->filePath . '.lock';
+    }
+
+    /**
+     * Release the sidecar lock and close its handle.
+     *
+     * @param resource $lock The lock from {@see acquireLock()}.
+     */
+    private function releaseLock($lock): void
+    {
+        flock($lock, LOCK_UN);
+        fclose($lock);
     }
 
     /**
@@ -748,10 +822,14 @@ final class CsvConnection implements ConnectionInterface
      * The data goes to a sibling temp file which then `rename()`s over the
      * original — rename is atomic on POSIX, so a crash, OOM, or kill at any
      * point leaves either the complete old file or the complete new one,
-     * never a truncated half-dataset. Call with the handle from
-     * {@see openLocked()} to keep the exclusive lock across the whole
+     * never a truncated half-dataset. Call with the lock from
+     * {@see acquireLock()} to keep the exclusive lock across the whole
      * read-modify-write; call with null to take the lock for a write-only
      * cycle.
+     *
+     * The rename() replaces the CSV file's inode — harmless now that the
+     * lock lives on the stable sidecar file, which is exactly why the two
+     * handles must never be conflated.
      *
      * Every value is passed through {@see neutralizeFormula()} so a value
      * that begins with `=`, `+`, `-`, `@`, tab, or CR cannot execute as a
@@ -762,15 +840,15 @@ final class CsvConnection implements ConnectionInterface
      * column) cannot drift out of alignment with its neighbors.
      *
      * @param list<array<string,mixed>> $rows The rows to write.
-     * @param resource|null $handle An existing locked handle to reuse, or
-     *        null to open and lock for this write.
+     * @param resource|null $lock An existing locked sidecar handle to reuse,
+     *        or null to acquire the lock for this write.
      * @throws \RuntimeException When the file cannot be opened or written.
      */
-    private function writeRows(array $rows, $handle = null): void
+    private function writeRows(array $rows, $lock = null): void
     {
-        $ownsHandle = $handle === null;
-        if ($ownsHandle) {
-            $handle = $this->openLocked();
+        $ownsLock = $lock === null;
+        if ($ownsLock) {
+            $lock = $this->acquireLock();
         }
 
         // A UNIQUE temp path per write: a shared fixed temp name lets a
@@ -785,8 +863,8 @@ final class CsvConnection implements ConnectionInterface
         );
         $temp = fopen($tempPath, 'w');
         if ($temp === false) {
-            if ($ownsHandle) {
-                $this->closeLocked($handle);
+            if ($ownsLock) {
+                $this->releaseLock($lock);
             }
             throw new \RuntimeException("Could not write CSV file [{$tempPath}].");
         }
@@ -838,8 +916,8 @@ final class CsvConnection implements ConnectionInterface
             if (file_exists($tempPath)) {
                 @unlink($tempPath);
             }
-            if ($ownsHandle) {
-                $this->closeLocked($handle);
+            if ($ownsLock) {
+                $this->releaseLock($lock);
             }
         }
     }
@@ -872,11 +950,12 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Neutralize a value that a spreadsheet would evaluate as a formula.
      *
-     * Leading whitespace is stripped for the prefix TEST only (the value is
-     * still written unmodified apart from the quote) — spreadsheets trim
-     * before evaluating, so ` =cmd()` or an NBSP/ZWSP/BOM-prefixed payload
-     * would otherwise bypass the check. The prefix set covers `=`, `@`,
-     * `|` (LibreOffice DDE), tab, CR, and non-numeric `+`/`-`.
+     * Leading whitespace is stripped and the TRIMMED value is written with
+     * the quote prefix — spreadsheets trim before evaluating, so writing
+     * `'` + the original (space-prefixed) value would leave a cell that
+     * Excel/Sheets trims straight into a live formula. The prefix set
+     * covers `=`, `@`, `|` (LibreOffice DDE), tab, CR, and non-numeric
+     * `+`/`-`.
      *
      * @param string $value The raw value.
      * @return string The neutralized value.
@@ -886,10 +965,10 @@ final class CsvConnection implements ConnectionInterface
         $trimmed = ltrim($value, " \t\r\n\0\v\f\xC2\xA0\xE2\x80\x8B\xEF\xBB\xBF");
         $first = $trimmed === '' ? '' : $trimmed[0];
         if (in_array($first, ['=', '@', '|', "\t", "\r"], true)) {
-            return "'" . $value;
+            return "'" . $trimmed;
         }
         if (in_array($first, ['+', '-'], true) && !is_numeric($trimmed)) {
-            return "'" . $value;
+            return "'" . $trimmed;
         }
         return $value;
     }

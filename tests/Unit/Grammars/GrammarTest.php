@@ -112,7 +112,7 @@ final class GrammarTest extends TestCase
     public function testSelectRaw(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->selectRaw('lower(email) as email_lower'),
+            $this->builder()->select(new Expression('lower(email) as email_lower')),
         );
         self::assertSame('SELECT lower(email) as email_lower FROM "users"', $sql);
     }
@@ -348,9 +348,9 @@ final class GrammarTest extends TestCase
     public function testOrderByRaw(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->orderByRaw('FIELD(status, \'new\', \'done\')'),
+            $this->builder()->orderBy(new Expression("FIELD(status, 'new', 'done')")),
         );
-        self::assertSame("SELECT * FROM \"users\" ORDER BY FIELD(status, 'new', 'done')", $sql);
+        self::assertSame("SELECT * FROM \"users\" ORDER BY FIELD(status, 'new', 'done') ASC", $sql);
     }
 
     /**

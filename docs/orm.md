@@ -146,6 +146,26 @@ to the target model's full primary key). The single-column `foreign:`
 flag rejects a composite-PK target — one column cannot reference a
 two-column key — so use the class-level attribute there.
 
+## Saving and primary keys
+
+`save()` is shaped by the model's in-memory state: a model that has never
+been saved (`exists === false`) always **INSERTs**; a loaded model
+**UPDATEs** its dirty columns. The runtime does not re-check the database
+before choosing.
+
+**Caller-assigned keys.** With a non-auto-increment PK (UUID, char, or a
+PK you assign yourself), a re-`save()` of a model constructed in memory
+(with `new`) INSERTs again — a duplicate-PK failure if the row exists.
+Re-save a row through a loaded instance (`Model::find()` / a query) or
+set the key columns before the FIRST save and treat later `save()` calls
+on that instance as the update path. There is deliberately no upsert.
+
+**Concurrency.** `save()` is last-writer-wins: two workers that load the
+same row and both save produce a lost update, with no version column and
+no affected-rows guard on the update. There is no optimistic locking.
+For critical read-modify-write paths, use `lockForUpdate()` inside a
+transaction, or add your own version column and assert it in the update.
+
 ## Soft deletes
 
 Opt in by applying the `SoftDeletes` trait — the delete column

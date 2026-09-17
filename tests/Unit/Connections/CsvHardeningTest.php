@@ -99,32 +99,36 @@ final class CsvHardeningTest extends TestCase
     // ---- Locking ----
 
     /**
-     * While the connection holds its exclusive lock (as across a
-     * read-modify-write), a different handle cannot take a non-blocking
-     * exclusive lock — the guarantee that closes the lost-update window.
+     * While the connection holds its exclusive lock on the SIDECAR lock
+     * file (as across a read-modify-write), a different handle cannot take
+     * a non-blocking exclusive lock on that sidecar — the guarantee that
+     * closes the lost-update window. The sidecar (not the data file) is
+     * the lock domain: the data file's inode is replaced by every
+     * rename()-based write, so locking it never serialized writers.
      */
     public function testOpenLockedTakesExclusiveLockVisibleToOtherHandles(): void
     {
         $db = $this->makeConnection();
 
-        $openLocked = new \ReflectionMethod(CsvConnection::class, 'openLocked');
-        $closeLocked = new \ReflectionMethod(CsvConnection::class, 'closeLocked');
+        $acquireLock = new \ReflectionMethod(CsvConnection::class, 'acquireLock');
+        $releaseLock = new \ReflectionMethod(CsvConnection::class, 'releaseLock');
+        $lockPath = $this->path . '.lock';
 
-        $held = $openLocked->invoke($db);
+        $held = $acquireLock->invoke($db);
         \assert(is_resource($held));
 
-        $other = fopen($this->path, 'r');
+        $other = fopen($lockPath, 'r');
         \assert($other !== false);
         $this->assertFalse(
             flock($other, LOCK_EX | LOCK_NB),
-            'A second handle must be blocked while the connection lock is held.'
+            'A second handle on the sidecar lock file must be blocked while the connection lock is held.'
         );
         fclose($other);
 
-        $closeLocked->invoke($db, $held);
+        $releaseLock->invoke($db, $held);
 
         // After release, another handle can lock again.
-        $other = fopen($this->path, 'r');
+        $other = fopen($lockPath, 'r');
         \assert($other !== false);
         $this->assertTrue(flock($other, LOCK_EX | LOCK_NB));
         flock($other, LOCK_UN);

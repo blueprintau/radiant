@@ -11,6 +11,7 @@ use BlueprintAU\Radiant\Database\Exceptions\QueryException;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\Enums\LockType;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;
@@ -27,6 +28,21 @@ use Override;
  * rather than constructing it yourself. Subclasses provide the dialect
  * specifics (e.g. how savepoints work), so you don't have to think about
  * them.
+ *
+ * ## Coroutine contract
+ *
+ * A connection is **not** safe for concurrent use by multiple coroutines
+ * while a transaction is open. The transaction depth counter and savepoint
+ * registry are per-connection state, not per-coroutine state: two coroutines
+ * interleaving `beginTransaction()`/`commit()` frames on one shared
+ * connection cross-commit each other's work. The rule:
+ *
+ * - **Use one connection per coroutine when a transaction is open.**
+ * - As a backstop, the connection records the owning coroutine (fiber,
+ *   Swoole coroutine, or process) when a transaction opens and throws a
+ *   \LogicException if a *different* coroutine touches the transaction
+ *   while it is open — the failure becomes loud instead of silently
+ *   crossing commits. Queries on the same coroutine remain unrestricted.
  *
  * @see ConnectionInterface
  */
@@ -166,12 +182,29 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run the query and return the matching rows.
      *
+     * A query carrying a row lock (`lockForUpdate()` / `sharedLock()`) is
+     * rejected outside a transaction: row locks are released at transaction
+     * end, and in autocommit mode that is the END OF THE STATEMENT — the
+     * lock is acquired and immediately released, silently degrading the
+     * "lock the row, then update" pattern to an unlocked read-modify-write.
+     * The library's fail-fast contract (no silent fallbacks) applies: the
+     * caller must open the transaction the lock needs.
+     *
      * @param QueryBuilder $query The query to run, built via {@see table()}.
      * @return Collection<int,\stdClass> The matching rows, each as an object.
+     * @throws \LogicException When the query locks rows with no transaction open.
      */
     #[Override]
     public function select(QueryBuilder $query): Collection
     {
+        if ($query->getLock() !== null && $this->transactionLevel === 0) {
+            throw new \LogicException(
+                'Row locks (lockForUpdate/sharedLock) require an open transaction — '
+                . 'outside one, the lock is released at statement end and protects nothing. '
+                . 'Wrap the query in beginTransaction()/transaction().'
+            );
+        }
+
         $sql = $this->grammar->compileSelect($query);
         return $this->selectSql($sql, $query->getBindings());
     }
@@ -234,7 +267,25 @@ abstract class SqlConnection implements ConnectionInterface
         // string (or false when there is no generated id); the codec passes
         // strings through untouched, so no decode is needed.
         $id = $this->pdo->lastInsertId();
-        return $id === false ? null : $id;
+        if ($id === false) {
+            return null;
+        }
+
+        // lastInsertId() is only meaningful for an AUTO_INCREMENT/SERIAL
+        // column: a caller-declared non-auto-increment PK (UUID, char, or a
+        // PK the row value supplies) generates nothing server-side, so the
+        // value here is a stale id from an EARLIER insert on this connection
+        // (or '0'). Returning it would hand the caller a key that does not
+        // identify the row just written — fail fast instead.
+        if (!$query->isInsertIdAutoIncrement()) {
+            throw new \LogicException(
+                "insertGetId() declared key column [{$pk}] is not auto-increment — no id is generated"
+                . ' server-side, so lastInsertId() would return a stale value from an earlier insert.'
+                . ' Assign the key before inserting and use insert().'
+            );
+        }
+
+        return $id;
     }
 
     /**
@@ -739,6 +790,21 @@ abstract class SqlConnection implements ConnectionInterface
     private array $savepointsByLevel = [];
 
     /**
+     * The coroutine that opened the current transaction.
+     *
+     * Null when no transaction is open. When a transaction is open and a
+     * DIFFERENT coroutine calls begin/commit/rollback on this connection,
+     * the guard throws — see the class docblock's coroutine contract. The
+     * identifier is best-effort: a fiber's object id, a Swoole coroutine
+     * id, or the process id when no coroutine runtime is detected (in
+     * which case every caller matches and the guard is inert — classic
+     * FPM behavior is unchanged).
+     *
+     * @var string|null
+     */
+    private ?string $transactionOwner = null;
+
+    /**
      * The current transaction nesting depth.
      *
      * @return int Zero when no transaction is active, otherwise the depth.
@@ -778,12 +844,23 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Begin a transaction, nesting via savepoints when supported.
+     *
+     * When a transaction is already open on this connection and the caller
+     * is a different coroutine than the one that opened it, this throws —
+     * the level counter and savepoint registry are shared connection state,
+     * and interleaved frames would cross-commit each other's work. See the
+     * class docblock's coroutine contract.
+     *
+     * @throws \LogicException When a different coroutine touches an open
+     *         transaction on this connection.
      */
     final public function beginTransaction(): void
     {
+        $this->assertSameCoroutine('beginTransaction');
         $toLevel = $this->transactionLevel + 1;
         if ($toLevel === 1) {
             $this->pdo->beginTransaction();
+            $this->transactionOwner = $this->coroutineId();
         } elseif ($this->supportsSavepoints()) {
             // Unique per-frame name (depth + sequence): depth alone collides
             // when interleaved coroutine frames nest on one connection.
@@ -802,13 +879,29 @@ abstract class SqlConnection implements ConnectionInterface
      * consistent with the database — the transaction is over server-side
      * either way. Without this, one failed commit leaves the connection
      * permanently convinced it is in a transaction.
+     *
+     * A failed top-level commit is reconciled with a best-effort server
+     * rollback before the exception propagates: a deferred-constraint
+     * violation or a deadlock kill aborts the *transaction*, not the
+     * *connection* — the server still holds the aborted transaction, and
+     * the next `beginTransaction()` on it would fail (or silently nest)
+     * for the rest of the process on a long-running runtime. Clearing it
+     * makes the connection reusable; the original exception is what the
+     * caller sees.
      */
     final public function commit(): void
     {
+        $this->assertSameCoroutine('commit');
         $toLevel = $this->transactionLevel - 1;
         $this->transactionLevel = $toLevel;
         if ($toLevel === 0) {
-            $this->pdo->commit();
+            try {
+                $this->pdo->commit();
+            } catch (\PDOException $e) {
+                $this->reconcileFailedCommit();
+                throw $e;
+            }
+            $this->transactionOwner = null;
         } elseif ($this->supportsSavepoints()) {
             $this->releaseSavepoint($this->savepointNameFor($toLevel + 1));
         }
@@ -823,12 +916,94 @@ abstract class SqlConnection implements ConnectionInterface
      */
     final public function rollBack(): void
     {
+        $this->assertSameCoroutine('rollBack');
         $toLevel = $this->transactionLevel - 1;
         $this->transactionLevel = $toLevel;
         if ($toLevel === 0) {
-            $this->pdo->rollBack();
+            try {
+                $this->pdo->rollBack();
+            } catch (\PDOException $e) {
+                $this->reconcileFailedCommit();
+                throw $e;
+            }
+            $this->transactionOwner = null;
         } elseif ($this->supportsSavepoints()) {
             $this->rollbackToSavepoint($this->savepointNameFor($toLevel + 1));
+        }
+    }
+
+    /**
+     * Best-effort clear of a server-side transaction after a failed
+     * top-level commit/rollback.
+     *
+     * Both Postgres ("current transaction is aborted") and MySQL accept a
+     * rollback of an already-aborted transaction, so this succeeds in the
+     * deferred-constraint/deadlock cases and silently no-ops in the
+     * connection-drop case (where it throws — discarded: the original
+     * failure is the caller's problem, and a dead connection is evicted by
+     * the staleness machinery anyway).
+     */
+    private function reconcileFailedCommit(): void
+    {
+        try {
+            $this->pdo->rollBack();
+        } catch (\Throwable) {
+            // Nothing more can be done here — the connection is dead or the
+            // transaction is already gone; staleness handling takes over.
+        }
+    }
+
+    /**
+     * The current coroutine's identity, best-effort.
+     *
+     * Distinguishes fibers, Swoole coroutines, and (when neither is
+     * detected) collapses to the process id — under classic FPM every
+     * caller is the same "coroutine", so the ownership guard is inert and
+     * adds no overhead beyond the comparison.
+     *
+     * @return string A stable identifier for the current execution
+     *         context.
+     */
+    private function coroutineId(): string
+    {
+        if (\class_exists(\Fiber::class)) {
+            $fiber = \Fiber::getCurrent();
+            if ($fiber !== null) {
+                return 'fiber:' . (string) \spl_object_id($fiber);
+            }
+        }
+        if (\class_exists('Swoole\Coroutine')
+            && ($cid = \Swoole\Coroutine::getCid()) > 0
+        ) {
+            return 'swoole:' . (string) $cid;
+        }
+        $pid = getmypid();
+        return 'proc:' . ($pid === false ? 'unknown' : (string) $pid);
+    }
+
+    /**
+     * Fail fast when a different coroutine touches an open transaction.
+     *
+     * The guard converts the silent cross-commit/cross-rollback race into a
+     * loud contract violation. Only fires when a transaction is open AND
+     * the caller's coroutine identity differs from the owner's; under a
+     * non-coroutine runtime every caller resolves to the same process id,
+     * so the check always passes.
+     *
+     * @param string $operation The operation name for the error message.
+     * @throws \LogicException When the coroutine contract is violated.
+     */
+    private function assertSameCoroutine(string $operation): void
+    {
+        if ($this->transactionLevel > 0
+            && $this->transactionOwner !== null
+            && $this->transactionOwner !== $this->coroutineId()
+        ) {
+            throw new \LogicException(
+                "{$operation}() called from a different coroutine than the one that opened"
+                . ' the transaction. Connections are not coroutine-safe while a transaction'
+                . ' is open — use one connection per coroutine.'
+            );
         }
     }
 

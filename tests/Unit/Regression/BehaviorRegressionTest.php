@@ -228,11 +228,14 @@ final class BehaviorRegressionTest extends TestCase
         ]);
 
         $bytes = (string) file_get_contents($this->path);
-        // Each payload must be quote-prefixed (the neutralized form), not
-        // raw. The raw shapes checked are unambiguous: a cell STARTING with
-        // the payload is only ever written as `'payload`.
-        self::assertStringContainsString('\' =cmd', $bytes, 'A space-prefixed formula must be quoted.');
-        self::assertStringContainsString("'\xC2\xA0=HYPERLINK", $bytes, 'An NBSP-prefixed formula must be quoted.');
+        // Each payload must be quote-prefixed AND trimmed: the quote must
+        // be the FIRST byte of the cell — a quote after leading whitespace
+        // leaves a cell that Excel/Sheets trims straight into a live
+        // formula. (`' =cmd` with the space kept was the old, bypassable
+        // shape.)
+        self::assertStringContainsString("'=cmd", $bytes, 'A space-prefixed formula must be quoted AND trimmed.');
+        self::assertStringNotContainsString("' =cmd", $bytes, 'The quote must precede any whitespace — no space between quote and formula.');
+        self::assertStringContainsString("'=HYPERLINK", $bytes, 'An NBSP-prefixed formula must be quoted AND trimmed.');
         self::assertStringContainsString("'|calc", $bytes, 'A DDE pipe payload must be quoted.');
     }
 

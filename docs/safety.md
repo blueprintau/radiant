@@ -19,6 +19,14 @@ than interpolated raw. DSN metacharacters in `host`/`database` config are
 rejected at validation; MySQL forces native prepared statements (client-side
 emulation cannot be re-enabled via options).
 
+There is no string-based `*Raw()` API. Verbatim SQL is spliced only via an
+explicit `Expression` — `select(new Expression(...))`,
+`orderBy(new Expression(...))` — and `whereRaw()` (raw condition +
+positional bindings). Wrapping SQL in `new Expression(...)` makes every
+verbatim splice greppable in an app, and the `Expression` constructor
+docblock states the caller owns its safety: never pass user-supplied
+content.
+
 ## Log-safe failures
 
 `QueryException::getMessage()` carries no SQL and no bindings — hosts can
