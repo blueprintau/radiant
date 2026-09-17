@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Schema\Blueprint;
 
 /**
  * The result of one eager load: the related models plus, for through
@@ -24,7 +25,7 @@ final class EagerResult
     /**
      * The loaded related models, in query order.
      *
-     * @var Collection<Model>
+     * @var Collection<\BlueprintAU\Radiant\Model>
      */
     public readonly Collection $models;
 
@@ -41,7 +42,7 @@ final class EagerResult
     public readonly ?array $parentKeys;
 
     /**
-     * @param Collection<Model> $models The models.
+     * @param Collection<\BlueprintAU\Radiant\Model> $models The models.
      * @param list<int|string|null|list<int|string|null>>|null $parentKeys The per-row parent keys, or null.
      */
     public function __construct(Collection $models, ?array $parentKeys = null)
@@ -53,7 +54,7 @@ final class EagerResult
     /**
      * A models-only result — no per-row parent keys.
      *
-     * @param array<Model> $models The models (list or map — re-indexed by
+     * @param list<\BlueprintAU\Radiant\Model>|array<int,\BlueprintAU\Radiant\Model> $models The models (list or map — re-indexed by
      *        the collection constructor).
      * @return self The result.
      */
