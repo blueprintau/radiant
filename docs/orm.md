@@ -9,8 +9,10 @@ multi-table inheritance. Relations are covered in
 - [Table naming](#table-naming)
 - [Columns and types](#columns-and-types)
 - [Constraints](#constraints)
+- [Saving and primary keys](#saving-and-primary-keys)
 - [Soft deletes](#soft-deletes)
 - [Multi-table inheritance](#multi-table-inheritance)
+- [Metadata lifecycle](#metadata-lifecycle)
 
 ## Defining a model
 
@@ -92,6 +94,14 @@ The attribute is designed to grow other table-level settings later, so
 - `name:` — explicit DB column name when it differs from the property.
 - `unique:`, `index:`, `foreign:` — single-column flags (see below).
 - `default:` — a scalar or SQL expression default.
+
+**Synthetic columns.** A column may exist in the metadata without a
+property backing it — useful for columns the model reads and writes but
+doesn't want as a typed field. Read it with
+`$model->attribute('column_name')`; a value written with
+`$model->setAttribute('column_name', $value)` is held in a runtime store
+and survives hydration. A column backed by a typed property rejects
+`setAttribute()` — write the property directly.
 
 ## Constraints
 
@@ -184,7 +194,17 @@ on that instance as the update path. There is deliberately no upsert.
 same row and both save produce a lost update, with no version column and
 no affected-rows guard on the update. There is no optimistic locking.
 For critical read-modify-write paths, use `lockForUpdate()` inside a
-transaction, or add your own version column and assert it in the update.
+transaction (row locks require one — see
+[Transactions](database.md#transactions)), or add your own version column
+and assert it in the update.
+
+**Column defaults.** Properties left uninitialized are omitted from the
+INSERT so the database default fires; after the insert, the declared
+`default:` is materialized onto the uninitialized property (decoded
+through the column's own cast), so the in-memory model matches the row
+without a re-fetch. Expression defaults (e.g. `CURRENT_TIMESTAMP`) are
+skipped — their DB-computed value is unknowable client-side, and the
+property stays honestly uninitialized.
 
 ## Soft deletes
 
@@ -243,3 +263,24 @@ it; updates touch only the dirty partitions; deletes run leaf-first.
 Adding columns without `#[Table]` is still a build error (the columns have
 nowhere to go), and a behavior-only subclass still shares the ancestor's
 table — MTI is opt-in via `#[Table]`.
+
+## Metadata lifecycle
+
+Metadata is built once per class and cached — attribute validation,
+inheritance merging, and constraint checks run at first use, never per
+query. The classes involved are `MetadataFactory` (the cache and build
+entry point), `ClassMetadata` (a class's resolved table, columns, keys,
+and constraints), and `PropertyMapping` (one column ↔ property pair).
+
+Processes that regenerate classes at runtime — dev servers with hot
+reload, codegen tools, test suites that redefine classes — must evict the
+cache or it serves the old metadata forever:
+
+```php
+MetadataFactory::clear();            // evict everything
+MetadataFactory::clear(User::class); // evict one class
+```
+
+Clearing one class does not clear its ancestors or descendants (their
+metadata is cached independently) — prefer the full clear when a model
+family changes.

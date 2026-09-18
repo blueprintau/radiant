@@ -12,6 +12,8 @@ section says otherwise.
 - [Raw SQL](#raw-sql)
 - [Transactions](#transactions)
 - [Self-healing connections](#self-healing-connections)
+- [Value codecs](#value-codecs)
+- [The static facade](#the-static-facade)
 
 ## Connections and drivers
 
@@ -56,6 +58,13 @@ construction and fails fast with a message naming the problem.
 Custom backends register via `extendConnector('mydriver', MyConnector::class)`
 or `$manager->addConnection(...)`. The CSV backend is a first-class example —
 see [The CSV backend](csv-backend.md).
+
+A custom connection can pre-flight queries instead of discovering an
+unsupported shape at execution time: `SqlFeature::usedBy($query)` reports
+which features a builder's query uses (joins, having, aggregates, raw SQL,
+subquery-from, unions, row locks, distinct), and
+`$query->assertSupports(...)` fails fast with the named feature before any
+SQL is compiled.
 
 ## The portable core
 
@@ -223,6 +232,20 @@ $conn->commit();   // or $conn->rollBack();
 echo $conn->transactionLevel(); // nesting depth
 ```
 
+Two ownership rules are enforced rather than assumed:
+
+- **Row locks require a transaction.** A query carrying
+  `lockForUpdate()` or `sharedLock()` throws immediately when no
+  transaction is open — row locks only live as long as their transaction,
+  so holding one without one is meaningless. Wrap the query in
+  `transaction()` or `beginTransaction()` first.
+- **One connection per coroutine while a transaction is open.** The
+  connection records which coroutine (fiber, Swoole coroutine, or process)
+  opened the transaction and throws if a *different* coroutine calls
+  `beginTransaction()`/`commit()`/`rollBack()` on it. Queries on the same
+  coroutine are unrestricted; without a coroutine runtime every caller
+  resolves to the same process id and the guard is inert.
+
 ## Self-healing connections
 
 A connection whose query fails with a connection-loss error (server
@@ -230,6 +253,21 @@ restart, network blip) is marked stale and transparently rebuilt on the
 next use — under long-running runtimes a transient outage doesn't poison
 the worker. Eviction and garbage collection roll back any transaction the
 caller abandoned.
+
+## Value codecs
+
+Each connection adapts PHP values to driver bytes at the boundary through
+a codec (`encode()` on the write/bind path, `decode()` on the read path).
+The default codec passes scalars through and normalizes
+`DateTimeInterface` values to `Y-m-d H:i:s` in UTC; Postgres overrides it
+for microsecond precision (`Y-m-d H:i:s.u`).
+
+This is the driver boundary, not the field boundary: the property-level
+cast pipeline (a `?Carbon` property, an `int` Unix-timestamp cast) is the
+ORM's, described in
+[Columns and types](orm.md#columns-and-types). The
+codec runs beneath it, translating whatever the cast produced into the
+dialect's wire format.
 
 ## The static facade
 

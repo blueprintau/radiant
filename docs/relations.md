@@ -7,6 +7,7 @@ return relation objects; the method name is the relation's key.
 - [Filtering and composing](#filtering-and-composing)
 - [Key conventions](#key-conventions)
 - [Eager loading](#eager-loading)
+- [The model Collection](#the-model-collection)
 - [Through relations](#through-relations)
 - [Portability and semantics](#portability-and-semantics)
 
@@ -99,6 +100,31 @@ model or `null`; `HasMany` results are a `Collection`. Dot-notation nests
 to any depth (`'posts.comments.author'`), loading one extra query per path
 segment.
 
+## The model Collection
+
+Query results come back as `BlueprintAU\Radiant\Collection` — the base
+collection from `blueprintau/collections` (map, filter, pluck, … all
+inherited unchanged) plus model-shaped conveniences:
+
+```php
+$post = $posts->find(42);              // by primary key, or null
+$keys  = $posts->modelKeys();          // every model's PK value
+$posts->load('comments');              // eager-load on an existing collection
+$posts = $posts->fresh();              // re-query every model by key
+```
+
+- `find()` matches composite keys by **shape** — the same column set,
+  compared pair-wise, so map ordering never matters. Numeric strings
+  normalize to int before comparison (`42` matches `'42'`), but the
+  comparison is otherwise strict.
+- `load()` uses the same loader as `with()` — one `IN` query per relation
+  path, dot-notation nests — and is a no-op on an empty collection.
+- `fresh()` re-queries every model by key in **one** query and re-attaches
+  rows to their original positions. A row deleted externally leaves its
+  original model in place (the collection never silently shrinks while you
+  iterate it) — that staleness is the documented contract. Eager loads are
+  not re-applied; call `load()` again if you need relations.
+
 ## Through relations
 
 Through relations hop via an intermediate model and are SQL-only (they
@@ -106,6 +132,7 @@ need a join):
 
 ```php
 use BlueprintAU\Radiant\Relations\HasOneThrough;
+use BlueprintAU\Radiant\Relations\HasManyThrough;
 
 class Mechanic extends Model
 {
@@ -113,8 +140,18 @@ class Mechanic extends Model
     {
         return $this->hasOneThrough(Owner::class, Car::class);
     }
+
+    public function owners(): HasManyThrough
+    {
+        return $this->hasManyThrough(Owner::class, Car::class);
+    }
 }
 ```
+
+The join INNER JOINs the intermediate table — a parent with no
+intermediate row legitimately has no through-result. Composite keys are
+supported on both hops; the two hop keys must agree in shape (both scalar
+or both composite with matching arity), or construction throws.
 
 ## Portability and semantics
 

@@ -47,7 +47,10 @@ in progress — the `readonly` flag gates *this* connection's writes, not
 the file's.
 
 The blocking file I/O is also not coroutine-aware: under Swoole/Fiber
-runtimes it stalls the worker for the I/O duration.
+runtimes it stalls the worker for the I/O duration. SQL connections carry
+their own concurrency contract — one connection per coroutine while a
+transaction is open — described in
+[Transactions](database.md#transactions).
 
 ## When to use it
 
