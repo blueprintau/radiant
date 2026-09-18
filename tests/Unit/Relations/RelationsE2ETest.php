@@ -340,6 +340,55 @@ final class RelationsE2ETest extends DatabaseTestCase
     }
 
     /**
+     * Duplicate-FK rows resolve to the LOWEST-PK related model, identically
+     * on the lazy and eager paths (regression: the lazy path
+     * ordered by related PK, the eager path did not, so with duplicate FK
+     * rows the two paths could disagree on which row "wins").
+     *
+     * Rows are seeded so the LOWEST PK is NOT the first-attached row for
+     * the winning parent: the second user gets 'Second' (id 2) first, then
+     * 'First' (id 1) is re-pointed at them afterwards. An insertion/DB-order
+     * eager scan would pick id 2; a PK-ordered scan picks id 1. Both paths
+     * must pick id 1.
+     */
+    public function testEagerHasOnePicksLowestPkOnDuplicateFk(): void
+    {
+        ['user' => $user] = $this->seed();
+        $second = $this->seedSecondUser();
+
+        // Detach 'First' (id 1) from the first user and attach it to the
+        // second AFTER 'Second' (id 2) already pointed there: the second
+        // user's HasOne candidate set is now {First: id 1, Second: id 2},
+        // with id 1 attached last. Insertion order would pick id 2.
+        $first = RelPost::where('title', '=', 'First')->first();
+        self::assertNotNull($first);
+        $first->authorId = $second->id;
+        $first->save();
+
+        $lazy = $second->featuredPost()->getResults();
+        self::assertCount(1, $lazy);
+        self::assertSame(1, $lazy[0]->id, 'lazy HasOne picks the lowest-PK duplicate');
+
+        $eager = RelUser::with('featuredPost')->find($second->id);
+        self::assertNotNull($eager);
+        $featured = $eager->getRelation('featuredPost');
+        self::assertInstanceOf(RelPost::class, $featured);
+        self::assertSame(1, $featured->id, 'eager HasOne must agree with lazy: lowest PK wins');
+
+        // The first user still owns exactly one post ('Late' is not seeded;
+        // 'Second' id 2 remains theirs): their winner is id 2 on both paths.
+        $lazyFirst = $user->featuredPost()->getResults();
+        self::assertCount(1, $lazyFirst);
+        self::assertSame(2, $lazyFirst[0]->id);
+
+        $eagerFirst = RelUser::with('featuredPost')->find($user->id);
+        self::assertNotNull($eagerFirst);
+        $featuredFirst = $eagerFirst->getRelation('featuredPost');
+        self::assertInstanceOf(RelPost::class, $featuredFirst);
+        self::assertSame(2, $featuredFirst->id);
+    }
+
+    /**
      * Eager HasMany via with(): one extra query, children stitched per
      * parent by FK value.
      */

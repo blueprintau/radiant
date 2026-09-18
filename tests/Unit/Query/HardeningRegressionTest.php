@@ -55,6 +55,7 @@ final class HardeningRegressionTest extends TestCase
     public function testOrderByDirectionRejectsNonAscDesc(string $direction): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Order direction must be ASC or DESC');
         $this->builder()->orderBy('name', $direction);
     }
 
@@ -93,6 +94,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereColumnRejectsNonComparisonOperators(string $operator): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid column comparison operator');
         $this->builder()->whereColumn('a', $operator, 'b');
     }
 
@@ -105,6 +107,7 @@ final class HardeningRegressionTest extends TestCase
     public function testJoinsRejectNonComparisonOperators(string $operator): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid column comparison operator');
         $this->builder()->join('orders', 'users.id', $operator, 'orders.user_id');
     }
 
@@ -126,6 +129,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereInEmptyArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('require a non-empty array of values');
         $this->builder()->where('status', 'IN', []);
     }
 
@@ -135,6 +139,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereNotInEmptyArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('require a non-empty array of values');
         $this->builder()->where('status', 'NOT IN', []);
     }
 
@@ -144,6 +149,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereInNonArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('require an array of values');
         $this->builder()->where('status', 'IN', 'active');
     }
 

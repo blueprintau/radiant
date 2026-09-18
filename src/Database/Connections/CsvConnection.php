@@ -345,13 +345,19 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Evaluate an IS NULL / IS NOT NULL clause.
      *
+     * An EMPTY CELL counts as null: CSV has no null representation — a null
+     * written by update()/restore() lands as an empty cell and reads back
+     * as `''` — so treating `''` as null is the only way IS NULL semantics
+     * survive a write/read round trip (without it, a soft-deleted row that
+     * was restored stays invisible to the whereNull scope forever).
+     *
      * @param mixed $value The row value.
      * @param WhereOperator $operator The null operator.
      * @return bool True when the value is (or is not) null.
      */
     private function matchesNull(mixed $value, WhereOperator $operator): bool
     {
-        $isNull = $value === null;
+        $isNull = $value === null || $value === '';
         return $operator === WhereOperator::NotNull ? !$isNull : $isNull;
     }
 

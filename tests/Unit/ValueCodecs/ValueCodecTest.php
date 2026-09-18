@@ -38,15 +38,55 @@ final class ValueCodecTest extends TestCase
         yield 'null' => [null, null];
         yield 'datetime formatted UTC' => [new \DateTimeImmutable('2024-01-02 03:04:05', new \DateTimeZone('UTC')), '2024-01-02 03:04:05'];
         yield 'datetime normalized to UTC' => [new \DateTimeImmutable('2024-01-02 03:04:05', new \DateTimeZone('Europe/Berlin')), '2024-01-02 02:04:05'];
+        yield 'mutable DateTime accepted' => [new \DateTime('2024-06-07 08:09:10', new \DateTimeZone('UTC')), '2024-06-07 08:09:10'];
     }
 
     /**
-     * Postgres codec formats datetimes with microsecond precision.
+     * The caller's DateTime object is NEVER mutated by encode — the
+     * timezone normalization happens on a fresh immutable copy.
+     */
+    public function testEncodeDoesNotMutateInput(): void
+    {
+        $input = new \DateTimeImmutable('2024-01-02 03:04:05', new \DateTimeZone('Europe/Berlin'));
+        $before = $input->format('Y-m-d H:i:s e');
+
+        (new DefaultValueCodec())->encode($input);
+
+        self::assertSame($before, $input->format('Y-m-d H:i:s e'));
+    }
+
+    /**
+     * Constructor tuning: a custom format and timezone apply on encode.
+     */
+    public function testCodecConstructorTuning(): void
+    {
+        $codec = new DefaultValueCodec('d/m/Y H:i', 'America/New_York');
+        $value = new \DateTimeImmutable('2024-01-02 03:04:05', new \DateTimeZone('UTC'));
+
+        self::assertSame('01/01/2024 22:04', $codec->encode($value));
+    }
+
+    /**
+     * The Postgres codec formats datetimes with microsecond precision.
      */
     public function testPostgresMicroseconds(): void
     {
         $value = new \DateTimeImmutable('2024-01-02 03:04:05.123456', new \DateTimeZone('UTC'));
         self::assertSame('2024-01-02 03:04:05.123456', (new PostgresValueCodec())->encode($value));
+    }
+
+    /**
+     * The Postgres codec inherits scalar passthrough — only datetime
+     * formatting is overridden (regression context: boolean overrides were
+     * removed because a varchar holding literal 't' decoded as bool).
+     */
+    public function testPostgresCodecPassesScalarsThrough(): void
+    {
+        $codec = new PostgresValueCodec();
+
+        self::assertSame('t', $codec->decode('t'), 'a literal t-string must NOT decode to bool');
+        self::assertSame(42, $codec->decode(42));
+        self::assertSame(null, $codec->decode(null));
     }
 
     /**

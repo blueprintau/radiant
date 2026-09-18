@@ -199,6 +199,50 @@ final class GrammarTest extends TestCase
     }
 
     /**
+     * The from subquery's bindings are captured into the From category at
+     * compile time, in compiled order, so a filtered subquery actually
+     * filters when the statement executes (regression: subquery bindings
+     * were silently dropped, leaving an unbound `?`).
+     */
+    public function testFromSubBindingsAreCaptured(): void
+    {
+        $sub = $this->builder('orders')
+            ->select('user_id', 'total')
+            ->where('total', WhereOperator::Gt, 100)
+            ->where('status', WhereOperator::Eq, 'paid');
+        $outer = $this->builder()->fromSub($sub, 'o')->where('o.total', WhereOperator::Lt, 500);
+
+        $sql = (new SqliteGrammar())->compileSelect($outer);
+        self::assertSame(
+            'SELECT * FROM (SELECT "user_id", "total" FROM "orders" WHERE "total" > ? AND "status" = ?) AS "o" WHERE "o"."total" < ?',
+            $sql,
+        );
+        // Subquery bindings land in the From category; the outer where stays in Where.
+        self::assertSame([100, 'paid'], $outer->getBindings([BindingCategory::From]));
+        self::assertSame([500], $outer->getBindings([BindingCategory::Where]));
+        // Canonical order puts From bindings before Where bindings.
+        self::assertSame([100, 'paid', 500], $outer->getBindings());
+    }
+
+    /**
+     * Compile-time capture happens on EVERY compileSelect pass, and capture
+     * into the outer builder is IDEMPOTENT (binding accumulation would
+     * duplicate values on repeated compiles — e.g. re-running toSql()).
+     */
+    public function testFromSubBindingsAreNotDuplicatedOnRecompile(): void
+    {
+        $sub = $this->builder('orders')->select('user_id')->where('total', WhereOperator::Gt, 100);
+        $outer = $this->builder()->fromSub($sub, 'o');
+        $grammar = new SqliteGrammar();
+
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+
+        self::assertSame([100], $outer->getBindings([BindingCategory::From]));
+    }
+
+    /**
      * Joins render with their on conditions.
      */
     public function testJoins(): void
@@ -289,6 +333,7 @@ final class GrammarTest extends TestCase
     public function testOnRejectsNonColumnOperator(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid column comparison operator [IN]');
         $this->builder()
             ->join('posts', 'posts.user_id', '=', 'users.id')
             ->on('posts.user_id', 'IN', 'users.id');

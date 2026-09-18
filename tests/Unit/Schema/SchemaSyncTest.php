@@ -770,6 +770,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $this->connection->table('sync_meta_check')->insert(['price' => 5.0]);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $this->expectExceptionMessage('SQL error executing query');
         $this->connection->table('sync_meta_check')->insert(['price' => -5.0]);
     }
 
@@ -981,6 +982,7 @@ final class SchemaSyncTest extends DatabaseTestCase
 
         // Two accepted rows with the same email violate the partial index.
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $this->expectExceptionMessage('SQL error executing query');
         $connection->table('sync_partial')->insert(['email' => 'a@x.io', 'accepted' => 1]);
     }
 
@@ -1019,6 +1021,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $this->connection->table('sync_checked')->insert(['price' => 10.0]);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
+        $this->expectExceptionMessage('SQL error executing query');
         $this->connection->table('sync_checked')->insert(['price' => -1.0]);
     }
 

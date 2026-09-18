@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant;
 
 use Carbon\Carbon;
+use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
  * Opt-in soft-delete behaviour for a model.
@@ -46,10 +47,10 @@ trait SoftDeletes
      * returned — the caller's compensation logic (cascade cleanup, queue
      * bookkeeping) must not fire for a row that is not there.
      *
-     * Re-deleting an already-soft-deleted row DOES return true: the
-     * UPDATE matches the row (soft-deleted rows are invisible to the
-     * scoped builder but whereKey + update targets the row directly) and
-     * refreshing the timestamp is a legitimate, successful soft delete.
+     * Re-deleting an already-soft-deleted row DOES return true: the UPDATE
+     * runs under withTrashed() — the auto-applied whereNull scope would
+     * exclude the very row being targeted — and refreshing the timestamp
+     * is a legitimate, successful soft delete.
      *
      * @return bool True when the row was soft-deleted; false when the row
      *         no longer exists.
@@ -58,6 +59,7 @@ trait SoftDeletes
     {
         if ($this->exists) {
             $affected = $this->newQuery()
+                ->withTrashed()
                 ->whereKey($this->getKeyForRefresh())
                 ->update([static::deletedAtColumn() => $this->freshTimestamp()]);
 
@@ -67,7 +69,7 @@ trait SoftDeletes
                 return false;
             }
 
-            $this->setAttribute(static::deletedAtColumn(), $this->freshTimestamp());
+            $this->writeDeletedAtColumn($this->freshTimestamp());
             $this->original[static::deletedAtColumn()] = $this->freshTimestamp();
         }
 
@@ -111,7 +113,7 @@ trait SoftDeletes
                 return false;
             }
 
-            $this->setAttribute(static::deletedAtColumn(), null);
+            $this->writeDeletedAtColumn(null);
             $this->original[static::deletedAtColumn()] = null;
         }
 
@@ -139,5 +141,43 @@ trait SoftDeletes
     protected function freshTimestamp(): Carbon
     {
         return Carbon::now();
+    }
+
+    /**
+     * Write the delete column's value — through the typed property when the
+     * column is user-declared (a typed property MUST be written directly;
+     * {@see Model::setAttribute()} rejects it so the typed reads can never
+     * diverge from what was written), through the synthetic store otherwise.
+     *
+     * A Carbon value is re-based onto the property's declared datetime class
+     * when they differ (Carbon vs CarbonImmutable), mirroring hydration.
+     *
+     * @param mixed $value The value to write (Carbon or null).
+     * @return void
+     */
+    private function writeDeletedAtColumn(mixed $value): void
+    {
+        $mapping = MetadataFactory::for(static::class)->mappingFor(static::deletedAtColumn());
+
+        $property = $mapping->property;
+        if ($property === null) {
+            // Synthetic column — the runtime store is its only writable slot.
+            $this->setAttribute(static::deletedAtColumn(), $value);
+            return;
+        }
+
+        $propertyType = $mapping->column->propertyType;
+        if (
+            $value instanceof \DateTimeInterface
+            && is_string($propertyType)
+            && $value::class !== $propertyType
+            && is_a($propertyType, \DateTimeInterface::class, true)
+            && !$value instanceof $propertyType
+        ) {
+            $method = new \ReflectionMethod($propertyType, 'createFromInterface');
+            $value = $method->invoke(null, $value);
+        }
+
+        $property->setValue($this, $value);
     }
 }

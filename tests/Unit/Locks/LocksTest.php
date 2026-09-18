@@ -4,9 +4,14 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Locks;
 
+use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
+use BlueprintAU\Radiant\Database\Connections\PostgresConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
+use BlueprintAU\Radiant\Database\Locks\MySqlLock;
 use BlueprintAU\Radiant\Database\Locks\NoopLock;
+use BlueprintAU\Radiant\Database\Locks\PostgresLock;
+use BlueprintAU\Radiant\Database\Locks\SqlLock;
 use BlueprintAU\Radiant\Database\Locks\SqliteLock;
 use PHPUnit\Framework\TestCase;
 
@@ -117,5 +122,69 @@ final class LocksTest extends TestCase
         self::assertTrue($ran);
         self::assertSame(42, $result);
         self::assertSame(0, $this->connection->transactionLevel(), 'NoopLock must not open a transaction');
+    }
+
+    /**
+     * The MySQL adapter's statements are parameterized: the lock name is
+     * bound (a `?` placeholder), never interpolated — a hostile name cannot
+     * inject SQL. The acquisition SQL fails VISIBLY on timeout: the signal
+     * expression divides by zero for any non-1 GET_LOCK result.
+     */
+    public function testMySqlLockStatementsAreParameterized(): void
+    {
+        $lock = $this->lockFor(MySqlLock::class, new \PDO('sqlite::memory:'));
+
+        self::assertSame(
+            "SELECT IF(GET_LOCK(?, 30) = 1, 1, crc32('lock-timeout') DIV 0)",
+            $this->invokeLockStatement($lock, 'lockStatement'),
+            'GET_LOCK must be bound with ? and fail loudly on a non-1 result',
+        );
+        self::assertSame('DO RELEASE_LOCK(?)', $this->invokeLockStatement($lock, 'unlockStatement'));
+    }
+
+    /**
+     * The Postgres adapter's statements are parameterized advisory-lock
+     * calls — name bound as ?, never interpolated.
+     */
+    public function testPostgresLockStatementsAreParameterized(): void
+    {
+        $lock = $this->lockFor(PostgresLock::class, new \PDO('sqlite::memory:'));
+
+        self::assertSame('SELECT pg_advisory_lock(hashtext(?))', $this->invokeLockStatement($lock, 'lockStatement'));
+        self::assertSame('SELECT pg_advisory_unlock(hashtext(?))', $this->invokeLockStatement($lock, 'unlockStatement'));
+    }
+
+    /**
+     * Build a dialect lock over a REAL connection instance — the
+     * connections are final (not mockable), and the constructor only needs
+     * a PDO (in-memory SQLite works: no statements are executed, the
+     * statements themselves are compile-level contracts).
+     *
+     * @param string $lockClass The lock class.
+     * @param \PDO $pdo A throwaway PDO for the connection constructor.
+     * @return SqlLock The lock instance.
+     */
+    private function lockFor(string $lockClass, \PDO $pdo): SqlLock
+    {
+        return match ($lockClass) {
+            MySqlLock::class => new MySqlLock(new MySqlConnection($pdo)),
+            PostgresLock::class => new PostgresLock(new PostgresConnection($pdo)),
+            default => throw new \InvalidArgumentException("Unsupported lock [$lockClass]"),
+        };
+    }
+
+    /**
+     * Read a protected statement method off the lock.
+     *
+     * @param SqlLock $lock The lock.
+     * @param string $method The statement method name.
+     * @return string The statement SQL.
+     */
+    private function invokeLockStatement(SqlLock $lock, string $method): string
+    {
+        $reflection = new \ReflectionMethod($lock, $method);
+
+        /** @var string */
+        return $reflection->invoke($lock);
     }
 }

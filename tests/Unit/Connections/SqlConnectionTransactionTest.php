@@ -131,4 +131,104 @@ final class SqlConnectionTransactionTest extends TestCase
         self::assertSame(0, $this->connection->transactionLevel());
         self::assertSame(0, $this->connection->table('users')->count());
     }
+
+    /**
+     * A transaction opened inside a Fiber cannot be committed from outside
+     * it (regression lock: the level counter and savepoint
+     * registry are shared connection state; interleaved coroutine frames
+     * would cross-commit each other's work). The guard fires on commit()
+     * from a different coroutine; the fiber's own commit succeeds.
+     */
+    public function testCrossCoroutineCommitGuard(): void
+    {
+        $fiber = new \Fiber(function (): void {
+            $this->connection->beginTransaction();
+            $this->connection->table('users')->insert(['name' => 'Fiber']);
+            \Fiber::suspend();
+            // Resumed after the main coroutine verified the guard.
+            $this->connection->commit();
+            \Fiber::suspend('committed');
+        });
+
+        $fiber->start();
+        self::assertSame(1, $this->connection->transactionLevel());
+
+        try {
+            $this->connection->commit();
+            self::fail('Expected a LogicException for a cross-coroutine commit.');
+        } catch (\LogicException $e) {
+            self::assertStringContainsString('different coroutine', $e->getMessage());
+        }
+
+        // rollBack() is guarded the same way.
+        try {
+            $this->connection->rollBack();
+            self::fail('Expected a LogicException for a cross-coroutine rollback.');
+        } catch (\LogicException $e) {
+            self::assertStringContainsString('different coroutine', $e->getMessage());
+        }
+
+        // beginTransaction() from another coroutine is guarded too — a
+        // nested savepoint opened by the wrong frame would cross-commit.
+        try {
+            $this->connection->beginTransaction();
+            self::fail('Expected a LogicException for a cross-coroutine begin.');
+        } catch (\LogicException $e) {
+            self::assertStringContainsString('different coroutine', $e->getMessage());
+        }
+
+        // The guarded attempts changed nothing: level 1, row present but
+        // uncommitted.
+        self::assertSame(1, $this->connection->transactionLevel());
+
+        // Resuming past the fiber's second suspend() hands back the value
+        // it passed to Fiber::suspend('committed'); one more resume lets the
+        // fiber body return.
+        self::assertSame('committed', $fiber->resume());
+        $fiber->resume();
+        self::assertTrue($fiber->isTerminated());
+        self::assertSame(0, $this->connection->transactionLevel());
+        self::assertSame(1, $this->connection->table('users')->count());
+    }
+
+    /**
+     * Sequential fibers on the same connection are fine: once a transaction
+     * is closed, the owner record no longer gates anything (level 0).
+     */
+    public function testSequentialFibersMayUseConnection(): void
+    {
+        $first = new \Fiber(function (): void {
+            $this->connection->transaction(function (): void {
+                $this->connection->table('users')->insert(['name' => 'One']);
+            });
+        });
+        $first->start();
+        self::assertTrue($first->isTerminated());
+
+        $second = new \Fiber(function (): void {
+            $this->connection->transaction(function (): void {
+                $this->connection->table('users')->insert(['name' => 'Two']);
+            });
+        });
+        $second->start();
+        self::assertTrue($second->isTerminated());
+
+        self::assertSame(2, $this->connection->table('users')->count());
+    }
+
+    /**
+     * lockForUpdate() outside a transaction fails fast (regression lock:
+     * a FOR UPDATE lock with no surrounding transaction is
+     * released the instant the statement completes, i.e. it locks nothing).
+     */
+    public function testLockForUpdateOutsideTransactionThrows(): void
+    {
+        $this->connection->table('users')->insert(['name' => 'Alice']);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('transaction');
+        $this->connection->select(
+            $this->connection->table('users')->where('name', '=', 'Alice')->lockForUpdate(),
+        );
+    }
 }

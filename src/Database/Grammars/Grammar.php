@@ -454,7 +454,11 @@ abstract class Grammar
         if ($from instanceof QueryBuilder) {
             $alias = $builder->getFromAlias();
             $subSql = $this->compileSelect($from);
-            $builder->pushBindings(BindingCategory::From, $from->getBindings());
+            // REPLACE (not append): the from subquery is the single source
+            // of From-category bindings, so each compile pass rebuilds the
+            // captured list. Appending duplicated the bindings on every
+            // recompile while the SQL stayed identical.
+            $builder->replaceBindings(BindingCategory::From, $from->getBindings());
             return '(' . $subSql . ') AS ' . $this->wrapSegments($alias ?? '');
         }
         return $this->wrapTable($from);
@@ -702,6 +706,11 @@ abstract class Grammar
      */
     protected function compileUnions(QueryBuilder $builder, string $sql): string
     {
+        // Rebuild-from-scratch semantics: the Union category is cleared once
+        // per compile pass, then each union's sub-builder appends in
+        // compiled order. Appending across passes duplicated bindings on
+        // every recompile while the SQL stayed identical.
+        $builder->clearBindings(BindingCategory::Union);
         foreach ($builder->getUnions() as $union) {
             $keyword = $union['all'] ? 'UNION ALL' : 'UNION';
             $sub = $union['query'];

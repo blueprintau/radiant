@@ -1057,10 +1057,19 @@ class QueryBuilder
     /**
      * Append bindings to a category at compile time.
      *
-     * Internal: the Grammar calls this while compiling unions, so a
-     * sub-builder's bindings land in the Union category in exactly the
-     * order its SQL was compiled — placeholders and flattened bindings stay
-     * in lockstep even when clauses were added after union() was called.
+     * Internal: the Grammar calls this while compiling unions and from
+     * subqueries, so a sub-builder's bindings land in the right category
+     * in exactly the order its SQL was compiled — placeholders and
+     * flattened bindings stay in lockstep even when clauses were added
+     * after union()/fromSub() was called.
+     *
+     * Semantics: REPLACE for a single capture, APPEND for sequential
+     * captures within one compile pass. Callers capturing a SINGLE
+     * subquery (from) use replaceBindings(); callers capturing a SEQUENCE
+     * (each union, in order) call clearBindings(category) once up front,
+     * then pushBindings() per sub-builder. Compiling is a pure snapshot —
+     * recompiling the same builder yields the SAME binding list, never an
+     * accumulated one.
      *
      * @param BindingCategory $category The category to append to.
      * @param list<mixed> $bindings The values to append.
@@ -1069,6 +1078,41 @@ class QueryBuilder
     public function pushBindings(BindingCategory $category, array $bindings): void
     {
         array_push($this->bindings[$category->value], ...$bindings);
+    }
+
+    /**
+     * Replace a category's bindings at compile time (idempotent capture).
+     *
+     * Used by Grammar::compileFrom(): the from subquery is the single
+     * source of From-category bindings, so each compile pass REPLACES the
+     * captured list. Appending would duplicate the subquery's bindings on
+     * every recompile (toSql() twice, compileSelect + execution, etc.)
+     * while the SQL stayed identical — desynchronizing placeholders from
+     * values.
+     *
+     * @param BindingCategory $category The category to replace.
+     * @param list<mixed> $bindings The values to store.
+     * @return void
+     */
+    public function replaceBindings(BindingCategory $category, array $bindings): void
+    {
+        $this->bindings[$category->value] = $bindings;
+    }
+
+    /**
+     * Clear a category's bindings (start of a compile pass for a sequence
+     * of captures).
+     *
+     * Used by Grammar::compileUnions(): the Union category is rebuilt from
+     * scratch on each compile pass — cleared once, then each union's
+     * sub-builder appends in compiled order.
+     *
+     * @param BindingCategory $category The category to clear.
+     * @return void
+     */
+    public function clearBindings(BindingCategory $category): void
+    {
+        $this->bindings[$category->value] = [];
     }
 
     /**

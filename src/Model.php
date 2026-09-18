@@ -476,7 +476,11 @@ abstract class Model
             return $anyDeleted;
         }
 
-        $deleted = $this->newQuery()->whereKey($this->getKeyForRefresh())->delete();
+        // withTrashed(): forceDelete must reach soft-deleted rows too — the
+        // auto-applied whereNull(deleted_at) scope would exclude exactly the
+        // rows a hard delete after a soft delete needs to target, matching 0
+        // rows and reporting false.
+        $deleted = $this->newQuery()->withTrashed()->whereKey($this->getKeyForRefresh())->delete();
         $this->exists = false;
 
         return $deleted > 0;

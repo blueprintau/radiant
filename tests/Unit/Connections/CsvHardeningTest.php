@@ -199,6 +199,37 @@ final class CsvHardeningTest extends TestCase
         $this->assertSame('', $rows[1]->email ?? '');
     }
 
+    /**
+     * The lost-update scenario that motivated the sidecar lock (regression
+     * lock). Two SEPARATE connections over the same path: the
+     * sidecar lock (never renamed) is the serialization point, so both
+     * writers' mutations land in the final file. Locking the data file's
+     * inode — the pre-fix design — could not serialize them: the first
+     * rename() replaced the inode out from under the second writer's lock.
+     */
+    public function testConcurrentWritersBothLandInFinalFile(): void
+    {
+        $db = $this->makeConnection();
+
+        // Two independent connections over the same path, mimicking two
+        // processes. Each performs a read-modify-write.
+        $writerA = new CsvConnection($this->path);
+        $writerB = new CsvConnection($this->path);
+
+        $writerA->insert($writerA->table('t'), ['id' => 3, 'name' => 'A-Wrote']);
+        $writerB->table('t')->where('id', '=', 1)->update(['name' => 'B-Wrote']);
+
+        // A fresh reader sees BOTH mutations — neither was lost to the
+        // other's temp-file rename.
+        $reader = new CsvConnection($this->path);
+        $rows = $reader->table('t')->orderBy('id')->get();
+        $this->assertCount(3, $rows);
+        $this->assertSame('1', $rows[0]->id);
+        $this->assertSame('B-Wrote', $rows[0]->name, 'writer B\'s update must survive writer A\'s rename');
+        $this->assertSame('3', $rows[2]->id);
+        $this->assertSame('A-Wrote', $rows[2]->name, 'writer A\'s insert must survive writer B\'s rename');
+    }
+
     // ---- Formula injection ----
 
     /**
