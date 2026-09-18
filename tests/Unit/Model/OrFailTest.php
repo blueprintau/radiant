@@ -74,6 +74,15 @@ final class OrFailTest extends TestCase
         $orphan = new OfUser();
         $orphan->name = 'orphan';
         $orphan->save();
+
+        $solo = new OfUser();
+        $solo->name = 'solo';
+        $solo->save();
+
+        $soloPost = new OfPost();
+        $soloPost->authorId = $solo->id;
+        $soloPost->title = 'only';
+        $soloPost->save();
     }
 
     /**
@@ -232,6 +241,38 @@ final class OrFailTest extends TestCase
         );
     }
 
+    /**
+     * The fail-fast family is SIDE-EFFECT-FREE: the internal limit (and
+     * findOrFail's added wheres) run on a clone, so a shared builder keeps
+     * its full state — a later get() on the same builder is not limited
+     * or filtered by the fail-fast read.
+     */
+    public function testOrFailReadsDoNotMutateSharedBuilder(): void
+    {
+        $builder = OfUser::newQuery();
+
+        $builder->firstOrFail();
+        $builder->findOrFail(1);
+
+        // sole() THROWS on the multi-row table — but a mutating sole()
+        // would have already applied limit(2) to the SHARED builder before
+        // throwing, so this line is part of the regression probe too.
+        $this->runMultiple(fn () => $builder->sole());
+
+        // A mutated builder would carry limit(2)/limit(1) or findOrFail's
+        // added key wheres — all three users must still come back.
+        self::assertCount(3, $builder->get());
+
+        // The same contract through a relation's constrained query: ada
+        // has TWO posts. firstOrFail() would limit(1) a shared builder,
+        // hiding the second post from a later getResults().
+        $ada = OfUser::newQuery()->where('name', '=', 'ada')->firstOrFail();
+        $posts = $ada->posts();
+        $posts->firstOrFail();
+
+        self::assertCount(2, $posts->getResults());
+    }
+
     // ---- Static forwarders ----
 
     /**
@@ -305,6 +346,36 @@ final class OrFailTest extends TestCase
         $exception = $this->runMultiple(fn () => $ada->posts()->sole());
 
         self::assertSame(2, $exception->count);
+    }
+
+    /**
+     * A to-many relation's sole() returns the single related model when
+     * exactly one row matches — the success path through the relation
+     * delegate (hydrated, FK intact).
+     */
+    public function testRelationSoleReturnsSingleModel(): void
+    {
+        $solo = OfUser::newQuery()->where('name', '=', 'solo')->firstOrFail();
+
+        $post = $solo->posts()->sole();
+
+        self::assertInstanceOf(OfPost::class, $post);
+        self::assertSame('only', $post->title);
+        self::assertSame($solo->id, $post->authorId);
+    }
+
+    /**
+     * A one-to-one relation's sole() throws ModelNotFoundException when
+     * the relation matches no rows.
+     */
+    public function testRelationSoleThrowsOnZeroRows(): void
+    {
+        $orphan = OfUser::newQuery()->where('name', '=', 'orphan')->firstOrFail();
+
+        $exception = $this->runNotFound(fn () => $orphan->featuredPost()->sole());
+
+        self::assertSame(OfPost::class, $exception->model);
+        self::assertNull($exception->key);
     }
 
     // ---- Soft-delete interplay ----

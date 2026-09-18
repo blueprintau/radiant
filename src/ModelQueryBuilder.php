@@ -910,13 +910,19 @@ class ModelQueryBuilder extends QueryBuilder
      * {@see ModelNotFoundException} naming the model class. Use when an
      * empty result is a caller bug rather than an expected state.
      *
+     * SIDE-EFFECT-FREE: the fetch (including its internal `limit(1)`)
+     * runs on a shallow clone, so the builder's own limit, wheres, and
+     * column state are untouched — unlike `first()`, which mutates the
+     * limit. Safe to share a builder (or a relation's constrained query)
+     * between a fail-fast read and a later full read.
+     *
      * @return TModel The first model.
      *
      * @throws ModelNotFoundException When no row matches the query.
      */
     public function firstOrFail(): Model
     {
-        return $this->firstOrFailWithKey(null);
+        return (clone $this)->firstOrFailWithKey(null);
     }
 
     /**
@@ -935,7 +941,9 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function findOrFail(mixed $id): Model
     {
-        return $this->whereKey($id)->firstOrFailWithKey($id);
+        // whereKey() also runs on the clone — the added wheres never land
+        // on the shared builder.
+        return (clone $this)->whereKey($id)->firstOrFailWithKey($id);
     }
 
     /**
@@ -948,9 +956,9 @@ class ModelQueryBuilder extends QueryBuilder
      * Intended for reads backed by a uniqueness guarantee (a unique
      * column, a one-to-one relation).
      *
-     * Fetches with `limit(2)` — NOT through {@see first()}, whose
-     * internal `limit(1)` cannot detect a second matching row. Like
-     * `first()`, this mutates the builder's limit.
+     * SIDE-EFFECT-FREE like {@see firstOrFail()}: the `limit(2)` fetch
+     * runs on a shallow clone, so the builder's own limit, wheres, and
+     * column state are untouched.
      *
      * @return TModel The single matching model.
      *
@@ -961,7 +969,7 @@ class ModelQueryBuilder extends QueryBuilder
     {
         // select() returns a Collection (not a bare array) — count it,
         // never `=== []`.
-        $rows = $this->connection->select($this->limit(2));
+        $rows = $this->connection->select((clone $this)->limit(2));
         $rowCount = \count($rows);
 
         if ($rowCount === 0) {

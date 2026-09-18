@@ -39,6 +39,17 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
+ * **Cloning is shallow by contract.** All builder state is value-type
+ * arrays (wheres, bindings, orders, columns), so `clone $this` gives the
+ * copy its own mutable state — the fail-fast reads (`firstOrFail()`,
+ * `sole()`, the scalar `value()` path) and `scopedFor()` rely on this.
+ * The only reference-type state ($connection, nested WhereBuilders inside
+ * existing clauses, union/$from sub-builders, Expression/Aggregate value
+ * objects) is shared — safe because no public-API mutation writes INTO an
+ * existing nested clause or sub-builder (`whereNested()` always builds a
+ * fresh internal builder). Callers who splice raw clauses via the
+ * accessors (`getWheres()`) own aliasing themselves.
+ *
  * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: WhereBuilder, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
