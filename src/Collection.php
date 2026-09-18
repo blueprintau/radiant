@@ -103,8 +103,14 @@ final class Collection extends BaseCollection
      */
     public function modelKeys(): array
     {
+        $keys = [];
+
+        foreach ($this->items as $model) {
+            $keys[] = $model->getKeyForRefresh();
+        }
+
         /** @var list<KeyValue> */
-        return $this->map(fn (Model $model) => $model->getKeyForRefresh())->values()->toArray();
+        return $keys;
     }
 
     /**

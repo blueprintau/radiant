@@ -18,13 +18,15 @@ use BlueprintAU\Radiant\Collection;
  * Swoole/Fiber — could read each other's keys and distribute children to
  * the wrong parents. Returning per-call state instead makes the whole
  * eager-load path stateless with respect to the cached relation.
+ *
+ * @template TModel of \BlueprintAU\Radiant\Model The related model class.
  */
 final class EagerResult
 {
     /**
      * The loaded related models, in query order.
      *
-     * @var Collection<\BlueprintAU\Radiant\Model>
+     * @var Collection<TModel>
      */
     public readonly Collection $models;
 
@@ -41,7 +43,7 @@ final class EagerResult
     public readonly ?array $parentKeys;
 
     /**
-     * @param Collection<\BlueprintAU\Radiant\Model> $models The models.
+     * @param Collection<TModel> $models The models.
      * @param list<int|string|null|list<int|string|null>>|null $parentKeys The per-row parent keys, or null.
      */
     public function __construct(Collection $models, ?array $parentKeys = null)
@@ -53,12 +55,55 @@ final class EagerResult
     /**
      * A models-only result — no per-row parent keys.
      *
-     * @param list<\BlueprintAU\Radiant\Model>|array<int,\BlueprintAU\Radiant\Model> $models The models (list or map — re-indexed by
+     * @template TRelatedModel of \BlueprintAU\Radiant\Model
+     *
+     * @param list<TRelatedModel>|array<int,TRelatedModel> $models The models (list or map — re-indexed by
      *        the collection constructor).
-     * @return self The result.
+     * @return self<TRelatedModel> The result.
      */
     public static function fromModels(array $models): self
     {
-        return new self(Collection::make(array_values($models)));
+        return new self(self::listToCollection($models));
+    }
+
+    /**
+     * A models-only result built from an EXISTING collection — no per-row
+     * parent keys.
+     *
+     * The no-copy path: {@see fromModels()} forces callers holding a
+     * collection to `->all()` it first, dismantling and re-wrapping the
+     * same items. This accepts the collection as-is (the query's `get()`
+     * result is already a 0-based list, so no re-indexing is needed).
+     *
+     * @template TRelatedModel of \BlueprintAU\Radiant\Model
+     *
+     * @param Collection<TRelatedModel> $models The models, in query order.
+     * @return self<TRelatedModel> The result.
+     */
+    public static function fromCollection(Collection $models): self
+    {
+        return new self($models);
+    }
+
+    /**
+     * Wrap a model list into a collection, preserving the element template.
+     *
+     * PHPStan loses the element type when `Collection::make(...)` is passed
+     * straight into a generic constructor (the argument is inferred against
+     * the constructor's template before `make()`'s own inference settles,
+     * collapsing to the bound). Routing through a helper whose RETURN is
+     * explicitly `Collection<T>` keeps the template intact so the
+     * constructor infers `TModel` correctly.
+     *
+     * @template TRelatedModel of \BlueprintAU\Radiant\Model
+     *
+     * @param list<TRelatedModel>|array<int,TRelatedModel> $models The models (list or map — re-indexed).
+     * @return Collection<TRelatedModel> The models as a 0-based list collection.
+     *
+     * @internal Construction detail of the eager-load path; not public API.
+     */
+    public static function listToCollection(array $models): Collection
+    {
+        return Collection::make(array_values($models));
     }
 }

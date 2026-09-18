@@ -281,7 +281,7 @@ class HasManyThrough extends Relation
      *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
      *        scalars, or column => value maps for a composite key.
-     * @return EagerResult The models plus the per-row parent keys.
+     * @return EagerResult<TRelated> The models plus the per-row parent keys.
      */
     public function eagerLoad(array $parentKeys): EagerResult
     {
@@ -301,7 +301,7 @@ class HasManyThrough extends Relation
             array_push($parentKeysOut, ...($chunkResult->parentKeys ?? []));
         }
 
-        return new EagerResult(Collection::make($models), $parentKeysOut);
+        return new EagerResult(EagerResult::listToCollection($models), $parentKeysOut);
     }
 
     /**
@@ -309,7 +309,7 @@ class HasManyThrough extends Relation
      * synthetic-parent-key select for one bounded key list.
      *
      * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return EagerResult The models plus the per-row parent keys, positionally
+     * @return EagerResult<TRelated> The models plus the per-row parent keys, positionally
      *         paired (index i of parentKeys is the key of the parent that
      *         models[i] belongs to).
      */
@@ -410,7 +410,7 @@ class HasManyThrough extends Relation
             $models[] = $this->related::fromRow($row);
         }
 
-        return new EagerResult(Collection::make($models), $keys);
+        return new EagerResult(EagerResult::listToCollection($models), $keys);
     }
 
     /**
@@ -462,7 +462,7 @@ class HasManyThrough extends Relation
 
         $grouped = [];
 
-        foreach ($results->values()->toArray() as $i => $model) {
+        foreach ($results as $i => $model) {
             $parentKey = $eagerParentKeys[$i] ?? null;
 
             if ($parentKey === null) {

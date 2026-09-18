@@ -95,7 +95,7 @@ final class HasOneThrough extends HasManyThrough
 
         $first = [];
 
-        foreach ($results->values()->toArray() as $i => $model) {
+        foreach ($results as $i => $model) {
             $parentKey = $eagerParentKeys[$i] ?? null;
 
             if ($parentKey === null || isset($first[self::serializeKey($parentKey)])) {

@@ -96,7 +96,7 @@ final class BelongsTo extends Relation
      * per bounded key list.
      *
      * @param list<KeyValue> $parentKeys The parents' FK values.
-     * @return EagerResult The related models — no per-row parent keys;
+     * @return EagerResult<TRelated> The related models — no per-row parent keys;
      *         {@see match()} re-derives the key from each model's FK
      *         attribute, which the select carries.
      */
@@ -104,11 +104,10 @@ final class BelongsTo extends Relation
     protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
         if (!$this->isComposite()) {
-            return EagerResult::fromModels(
+            return EagerResult::fromCollection(
                 $this->related::newQuery()
                     ->whereIn($this->getLocalKey(), $parentKeys)
-                    ->get()
-                    ->all(),
+                    ->get(),
             );
         }
 
@@ -132,7 +131,7 @@ final class BelongsTo extends Relation
             ));
         }
 
-        return EagerResult::fromModels($query->get()->all());
+        return EagerResult::fromCollection($query->get());
     }
 
     /**

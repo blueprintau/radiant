@@ -391,7 +391,7 @@ class ModelQueryBuilder extends QueryBuilder
         [$name, $nested] = $this->splitPath($path);
 
         /** @var list<Model> $modelsArray */
-        $modelsArray = $models->values()->toArray();
+        $modelsArray = $models->all();
 
         if ($modelsArray === []) {
             return;
@@ -816,7 +816,7 @@ class ModelQueryBuilder extends QueryBuilder
 
         $models = array_map(
             fn(\stdClass $row) => $this->modelClass::fromRow($row),
-            $rows->values()->toArray(),
+            $rows->all(),
         );
 
         $collection = Collection::make($models);
@@ -1081,9 +1081,12 @@ class ModelQueryBuilder extends QueryBuilder
     {
         [$sql, $alias] = $this->scalarColumn($column);
 
+        // No trailing values() re-index: getRaw() is a 0-based list, and
+        // pluck()/map() preserve those list keys — the result is already
+        // a list, so the re-index would be a no-op collection copy.
         return $this->scopedFor($sql)->getRaw()->pluck($alias)->map(
             fn(mixed $raw) => $this->decodeScalar($column, $raw),
-        )->values();
+        );
     }
 
     /**

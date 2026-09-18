@@ -152,7 +152,7 @@ abstract class Relation
      *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
      *        scalars, or column => value maps for a composite key.
-     * @return EagerResult The related models, with (for through relations)
+     * @return EagerResult<TRelated> The related models, with (for through relations)
      *         the per-row parent key that {@see match()} distributes by.
      */
     public function eagerLoad(array $parentKeys): EagerResult
@@ -174,7 +174,7 @@ abstract class Relation
             }
         }
 
-        return new EagerResult(Collection::make($models), $parentKeysOut);
+        return new EagerResult(EagerResult::listToCollection($models), $parentKeysOut);
     }
 
     /**
@@ -186,7 +186,7 @@ abstract class Relation
      * path's `first()` would take).
      *
      * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return EagerResult The related models for this chunk.
+     * @return EagerResult<TRelated> The related models for this chunk.
      */
     protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
@@ -214,10 +214,10 @@ abstract class Relation
                 ));
             }
 
-            return EagerResult::fromModels($query->get()->all());
+            return EagerResult::fromCollection($query->get());
         }
 
-        return EagerResult::fromModels($query->whereIn($this->getForeignKey(), $parentKeys)->get()->all());
+        return EagerResult::fromCollection($query->whereIn($this->getForeignKey(), $parentKeys)->get());
     }
 
     /**
