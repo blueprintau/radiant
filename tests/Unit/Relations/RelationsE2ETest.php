@@ -7,12 +7,10 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
-use PHPUnit\Framework\TestCase;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
  * Fixture: the parent — one-to-many owner.
@@ -227,57 +225,30 @@ class RelTeamPost extends Model
  * BelongsTo, eager through, Collection::load()/fresh(), and the fail-fast
  * cross-checks.
  */
-final class RelationsE2ETest extends TestCase
+final class RelationsE2ETest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the rel_users / rel_posts / rel_teams / rel_team_posts fixture tables.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager and create the fixture tables.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('rel_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'email', length: 255));
-
-        $this->connection->create((new Blueprint('rel_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'author_id', nullable: true)
-            ->column(ColumnType::String, 'title', length: 255));
-
-        $this->connection->create((new Blueprint('rel_teams'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'owner_id')
-            ->column(ColumnType::String, 'name', length: 64));
-
-        $this->connection->create((new Blueprint('rel_team_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'team_id')
-            ->column(ColumnType::String, 'title', length: 255));
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
+        $this->createTables(
+            (new Blueprint('rel_users'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::String, 'email', length: 255),
+            (new Blueprint('rel_posts'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::BigInt, 'author_id', nullable: true)
+                ->column(ColumnType::String, 'title', length: 255),
+            (new Blueprint('rel_teams'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::BigInt, 'owner_id')
+                ->column(ColumnType::String, 'name', length: 64),
+            (new Blueprint('rel_team_posts'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::BigInt, 'team_id')
+                ->column(ColumnType::String, 'title', length: 255),
+        );
     }
 
     /**

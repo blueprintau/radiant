@@ -4,50 +4,35 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Metadata;
 
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\ModelQueryBuilder;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DefaultedModelProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DirtyProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\SoftDeletingPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\User;
-use PHPUnit\Framework\TestCase;
 
 /**
  * End-to-end metadata pipeline tests: metadata → Blueprint → DDL → live
  * SQLite round-trips (save / find / update / soft delete).
  *
- * The User fixture's table is built by hand here (Blueprint::fromMetadata()
- * lands with §14d); the point is proving the metadata drives real queries.
+ * The users table is built by hand — the User fixture's roleId column
+ * declares a foreign key to `roles.id`, and this suite never creates a
+ * roles table (SQLite enforces FKs), so the metadata-driven DDL would
+ * fail. The point is proving the metadata drives real queries.
  */
-final class MetadataPipelineTest extends TestCase
+final class MetadataPipelineTest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the users table (hand-built — see the class docblock) and
+     * the soft_deleting_posts table from the model's attributes.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a manager with a :memory: SQLite connection and create the tables.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        // users — mirrors the User fixture's #[Table] + #[Column] set.
         $users = (new Blueprint('users'))
             ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
             ->column(ColumnType::String, 'email', length: 255, unique: true)
@@ -55,26 +40,8 @@ final class MetadataPipelineTest extends TestCase
             ->column(ColumnType::DateTime, 'emailVerifiedAt', nullable: true)
             ->column(ColumnType::BigInt, 'roleId', index: true)
             ->column(ColumnType::Json, 'meta', nullable: true);
-        $this->connection->create($users);
 
-        // posts — mirrors the SoftDeletingPost fixture (conventional table
-        // name = snake-cased plural of the class name).
-        $posts = (new Blueprint('soft_deleting_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'title', length: 255)
-            ->column(ColumnType::DateTime, 'deleted_at', nullable: true);
-        $this->connection->create($posts);
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
+        $this->createTables($users, SoftDeletingPost::class);
     }
 
     /**

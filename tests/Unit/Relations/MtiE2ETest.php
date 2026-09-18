@@ -6,12 +6,9 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
-use PHPUnit\Framework\TestCase;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
  * Fixture: the MTI root.
@@ -55,47 +52,15 @@ class MtiChild extends MtiUser
  * End-to-end MTI tests on live SQLite: the split write, the joined read,
  * partitioned updates, and the leaf-first delete.
  */
-final class MtiE2ETest extends TestCase
+final class MtiE2ETest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the MTI parent/child tables from the models' attributes —
+     * the child blueprint carries the derived shared-key FK.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager and create the MTI tables.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('mti_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'email', length: 255));
-
-        $this->connection->create((new Blueprint('mti_admins'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true)
-            ->column(ColumnType::String, 'level', length: 64)
-            ->foreignKey(['id'], 'mti_users', ['id']));
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
+        $this->createTables(MtiUser::class, MtiChild::class);
     }
 
     /**

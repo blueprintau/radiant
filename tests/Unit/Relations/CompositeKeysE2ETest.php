@@ -5,12 +5,10 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpShipment;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Live-SQLite E2E for composite-key paths: composite-PK find/save/delete,
@@ -18,41 +16,14 @@ use PHPUnit\Framework\TestCase;
  * composite `whereKey()` guards, Collection key handling, and the
  * composite-PK model-class #[ForeignKey] resolution.
  */
-class CompositeKeysE2ETest extends TestCase
+class CompositeKeysE2ETest extends DatabaseTestCase
 {
     /**
-     * The SQL connection the fixtures run on.
-     *
-     * @var \BlueprintAU\Radiant\Database\Connections\SqlConnection
+     * Create the composite-key fixture tables from their model metadata.
      */
-    private \BlueprintAU\Radiant\Database\Connections\SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager and create the fixture tables.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create(Blueprint::fromMetadata(CmpRegion::class));
-        $this->connection->create(Blueprint::fromMetadata(CmpShipment::class));
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
+        $this->createTables(CmpRegion::class, CmpShipment::class);
     }
 
     /**

@@ -11,12 +11,10 @@ use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Attributes\Unique;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\SchemaDiffer;
-use PHPUnit\Framework\TestCase;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
  * A sync-able model — exercises {@see Blueprint::fromMetadata()}.
@@ -330,39 +328,8 @@ class CheckedModel extends \BlueprintAU\Radiant\Model
  * §14d end-to-end: `fromMetadata()` → `SchemaDiffer` → `apply()` on live
  * SQLite, mirroring the host's sync command from the plan (§15).
  */
-final class SchemaSyncTest extends TestCase
+final class SchemaSyncTest extends DatabaseTestCase
 {
-    /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
-     */
-    private SqlConnection $connection;
-
-    /**
-     * Build a manager with a :memory: SQLite connection.
-     */
-    protected function setUp(): void
-    {
-        parent::setUp();
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-    }
-
-    /**
-     * Reset the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
-    }
-
     /**
      * fromMetadata() maps every #[Column] (including flag-derived
      * unique/index) onto a blueprint whose DDL round-trips.

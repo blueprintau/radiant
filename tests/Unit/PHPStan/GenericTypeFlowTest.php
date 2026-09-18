@@ -5,14 +5,10 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\PHPStan;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\ModelQueryBuilder;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\PHPStan\Fixtures\TypeFlowPost;
 use BlueprintAU\Radiant\Tests\Unit\PHPStan\Fixtures\TypeFlowUser;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The generic-typing contract, asserted at RUNTIME.
@@ -25,36 +21,15 @@ use PHPUnit\Framework\TestCase;
  * docblock/runtime drift fails loudly here rather than silently in an
  * IDE.
  */
-final class GenericTypeFlowTest extends TestCase
+final class GenericTypeFlowTest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the type_flow_users / type_flow_posts fixture tables from
+     * the models' attributes and seed rows.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager and the fixture tables.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('type_flow_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'name', length: 64));
-
-        $this->connection->create((new Blueprint('type_flow_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'user_id')
-            ->column(ColumnType::String, 'title', length: 64));
+        $this->createTables(TypeFlowUser::class, TypeFlowPost::class);
 
         $user = new TypeFlowUser();
         $user->name = 'alicia';
@@ -66,17 +41,6 @@ final class GenericTypeFlowTest extends TestCase
             $post->title = $title;
             $post->save();
         }
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
     }
 
     /**

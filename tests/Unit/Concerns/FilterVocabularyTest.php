@@ -7,12 +7,9 @@ namespace BlueprintAU\Radiant\Tests\Unit\Concerns;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
-use PHPUnit\Framework\TestCase;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
  * Fixture: filter-vocabulary parent.
@@ -117,38 +114,15 @@ class FvPost extends Model
  * access type-checks only when the trait's `ModelQueryBuilder<static>`
  * return carries the concrete model through `get()`/`first()`.
  */
-final class FilterVocabularyTest extends TestCase
+final class FilterVocabularyTest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the fixture tables from the models' attributes and seed three
+     * users + four posts.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager and seed three users + four posts.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('fv_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'name', length: 64)
-            ->column(ColumnType::Int, 'age', nullable: true));
-
-        $this->connection->create((new Blueprint('fv_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'user_id')
-            ->column(ColumnType::String, 'title', length: 64)
-            ->column(ColumnType::Int, 'views'));
+        $this->createTables(FvUser::class, FvPost::class);
 
         // alicia (30): two posts. ben (40): one post. cara (null age): one post.
         foreach ([['alicia', 30], ['ben', 40], ['cara', null]] as [$name, $age]) {
@@ -171,17 +145,6 @@ final class FilterVocabularyTest extends TestCase
             $post->views = $views;
             $post->save();
         }
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
     }
 
     // ---- Static trait: where-family ----

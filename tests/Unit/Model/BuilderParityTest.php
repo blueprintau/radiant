@@ -7,12 +7,9 @@ namespace BlueprintAU\Radiant\Tests\Unit\Model;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
-use PHPUnit\Framework\TestCase;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
  * Fixture: builder-parity parent model with a datetime + JSON column.
@@ -58,33 +55,15 @@ class BpUser extends Model
  * like its model-level sibling — column validation fails fast on typos,
  * scalar reads decode through the casts, writes encode through them.
  */
-final class BuilderParityTest extends TestCase
+final class BuilderParityTest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the bp_users fixture table from the model's attributes and
+     * seed two rows.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager, create the fixture table, seed rows.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('bp_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'name', length: 64)
-            ->column(ColumnType::DateTime, 'signed_up_at', nullable: true)
-            ->column(ColumnType::Json, 'meta', nullable: true));
+        $this->createTables(BpUser::class);
 
         $user = new BpUser();
         $user->name = 'ada';
@@ -96,17 +75,6 @@ final class BuilderParityTest extends TestCase
         $second->name = 'ben';
         $second->meta = ['theme' => 'light'];
         $second->save();
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
     }
 
     // ---- Column validation on the previously-unvalidated helpers ----

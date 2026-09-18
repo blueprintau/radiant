@@ -4,16 +4,12 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
-use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfSoftPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfUser;
-use PHPUnit\Framework\TestCase;
 
 /**
  * The fail-fast retrieval family: firstOrFail()/findOrFail()/sole() on the
@@ -21,41 +17,15 @@ use PHPUnit\Framework\TestCase;
  * every zero-row path throws ModelNotFoundException, sole()'s multiple-row
  * path throws MultipleRecordsFoundException.
  */
-final class OrFailTest extends TestCase
+final class OrFailTest extends DatabaseTestCase
 {
     /**
-     * The live SQLite connection.
-     *
-     * @var SqlConnection
+     * Create the of_users / of_posts / of_soft_posts fixture tables from
+     * the models' attributes and seed rows.
      */
-    private SqlConnection $connection;
-
-    /**
-     * Build a :memory: SQLite manager, create the fixture tables, seed rows.
-     */
-    protected function setUp(): void
+    protected function setUpDatabase(): void
     {
-        parent::setUp();
-
-        $manager = new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]);
-        \BlueprintAU\Radiant\Database::setManager($manager);
-        $this->connection = $manager->sqlConnection();
-
-        $this->connection->create((new Blueprint('of_users'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'name', length: 64));
-
-        $this->connection->create((new Blueprint('of_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::BigInt, 'author_id', nullable: true)
-            ->column(ColumnType::String, 'title', length: 255));
-
-        $this->connection->create((new Blueprint('of_soft_posts'))
-            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-            ->column(ColumnType::String, 'title', length: 255)
-            ->column(ColumnType::DateTime, 'deleted_at', nullable: true));
+        $this->createTables(OfUser::class, OfPost::class, OfSoftPost::class);
 
         $ada = new OfUser();
         $ada->name = 'ada';
@@ -83,17 +53,6 @@ final class OrFailTest extends TestCase
         $soloPost->authorId = $solo->id;
         $soloPost->title = 'only';
         $soloPost->save();
-    }
-
-    /**
-     * Tear down the static facade so other tests are unaffected.
-     */
-    protected function tearDown(): void
-    {
-        \BlueprintAU\Radiant\Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
-        parent::tearDown();
     }
 
     /**
