@@ -101,7 +101,7 @@ class Column
      *
      * @param string|null $propertyType The PHP property type name (null =
      *        untyped — always rejected for a column).
-     * @param class-string $class The model class (for the message).
+     * @param class-string<\BlueprintAU\Radiant\Model> $class The model class (for the message).
      * @param string $property The property name (for the message).
      * @return void
      * @throws \InvalidArgumentException When the combination cannot round-trip.
@@ -165,7 +165,7 @@ class Column
      *
      * @param \ReflectionProperty $property The reflected column property
      *        (its default value is read when declared).
-     * @param string $class The model class (for the message).
+     * @param class-string<\BlueprintAU\Radiant\Model> $class The model class (for the message).
      * @return void
      * @throws \InvalidArgumentException When the property declares a
      *         PHP default that differs from the declared column default.

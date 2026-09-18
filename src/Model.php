@@ -175,6 +175,55 @@ abstract class Model
     }
 
     /**
+     * Find a model by its primary key — or throw when it does not exist.
+     *
+     * The fail-fast counterpart of {@see find()}: a missing row raises
+     * {@see ModelNotFoundException} carrying the model class and the key.
+     *
+     * @param KeyValue $id The primary-key value (or a column => value map
+     *        for a composite key).
+     * @return static The model.
+     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches the key.
+     */
+    public static function findOrFail(mixed $id): static
+    {
+        return static::newQuery()->findOrFail($id);
+    }
+
+    /**
+     * Hydrate the first model of the table — or throw when the table is empty.
+     *
+     * The fail-fast counterpart of the builder's `first()`: an empty
+     * result raises {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException}.
+     *
+     * @return static The first model.
+     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
+     */
+    public static function firstOrFail(): static
+    {
+        return static::newQuery()->firstOrFail();
+    }
+
+    /**
+     * Require the table to hold EXACTLY ONE row, hydrated.
+     *
+     * Zero rows raise {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
+     * more than one raise
+     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
+     *
+     * @return static The single model.
+     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When more than one row matches.
+     */
+    public static function sole(): static
+    {
+        return static::newQuery()->sole();
+    }
+
+    /**
      * Every model in the table.
      *
      * @return Collection<static> The hydrated models.

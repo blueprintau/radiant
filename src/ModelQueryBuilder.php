@@ -7,6 +7,8 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
@@ -898,6 +900,111 @@ class ModelQueryBuilder extends QueryBuilder
     public function find(mixed $id): ?Model
     {
         return $this->whereKey($id)->first();
+    }
+
+    /**
+     * Run the query and hydrate the first row — or throw when none match.
+     *
+     * The fail-fast counterpart of {@see first()}: identical fetch and
+     * hydration, but an empty result raises
+     * {@see ModelNotFoundException} naming the model class. Use when an
+     * empty result is a caller bug rather than an expected state.
+     *
+     * @return TModel The first model.
+     *
+     * @throws ModelNotFoundException When no row matches the query.
+     */
+    public function firstOrFail(): Model
+    {
+        return $this->firstOrFailWithKey(null);
+    }
+
+    /**
+     * Find a model by primary key — or throw when it does not exist.
+     *
+     * The fail-fast counterpart of {@see find()}: same key handling
+     * (scalar or composite map through {@see whereKey()}), but a missing
+     * row raises {@see ModelNotFoundException} carrying BOTH the model
+     * class and the key that was looked up.
+     *
+     * @param KeyValue $id The primary-key value (or a column => value map
+     *        for a composite key).
+     * @return TModel The model.
+     *
+     * @throws ModelNotFoundException When no row matches the key.
+     */
+    public function findOrFail(mixed $id): Model
+    {
+        return $this->whereKey($id)->firstOrFailWithKey($id);
+    }
+
+    /**
+     * Require the query to match EXACTLY ONE row, hydrated.
+     *
+     * Stricter than {@see firstOrFail()}: zero rows raise
+     * {@see ModelNotFoundException}; MORE than one row raises
+     * {@see MultipleRecordsFoundException} — the two failures are
+     * distinct exception types so callers can catch them separately.
+     * Intended for reads backed by a uniqueness guarantee (a unique
+     * column, a one-to-one relation).
+     *
+     * Fetches with `limit(2)` — NOT through {@see first()}, whose
+     * internal `limit(1)` cannot detect a second matching row. Like
+     * `first()`, this mutates the builder's limit.
+     *
+     * @return TModel The single matching model.
+     *
+     * @throws ModelNotFoundException When no row matches the query.
+     * @throws MultipleRecordsFoundException When more than one row matches.
+     */
+    public function sole(): Model
+    {
+        // select() returns a Collection (not a bare array) — count it,
+        // never `=== []`.
+        $rows = $this->connection->select($this->limit(2));
+        $rowCount = \count($rows);
+
+        if ($rowCount === 0) {
+            throw new ModelNotFoundException($this->modelClass);
+        }
+
+        if ($rowCount > 1) {
+            throw new MultipleRecordsFoundException($rowCount, $this->modelClass);
+        }
+
+        $model = $this->modelClass::fromRow($rows[0]);
+
+        // Eager loads apply to single-model reads too — same tail as first().
+        if ($this->eagerLoad !== []) {
+            $this->eagerLoadRelations(Collection::make([$model]));
+        }
+
+        return $model;
+    }
+
+    /**
+     * The shared fail-fast fetch behind {@see firstOrFail()} and
+     * {@see findOrFail()}.
+     *
+     * The key is threaded through ONLY to build the exception message —
+     * `firstOrFail()` passes null (no key involved), `findOrFail()` passes
+     * the id it looked up. Building the exception once here (rather than
+     * catching and re-wrapping) keeps the throw site single.
+     *
+     * @param mixed $keyForMessage The lookup key for the exception, or null.
+     * @return TModel The first model.
+     *
+     * @throws ModelNotFoundException When no row matches the query.
+     */
+    private function firstOrFailWithKey(mixed $keyForMessage): Model
+    {
+        $model = $this->first();
+
+        if ($model === null) {
+            throw new ModelNotFoundException($this->modelClass, $keyForMessage);
+        }
+
+        return $model;
     }
 
     // ---- Scalar reads (decoded through the column casts) ----

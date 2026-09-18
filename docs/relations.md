@@ -55,6 +55,12 @@ foreach ($user->posts()->orderBy('created_at')->getResults() as $post) { ... }
 $recent = $user->posts()->where('active', '=', 1)->limit(5)->getResults();
 ```
 
+The relation also exposes fail-fast reads: `firstOrFail()` returns the
+first related model or throws
+`BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException` when the
+relation matches none, and `sole()` requires exactly one match (more than
+one throws `MultipleRecordsFoundException`).
+
 ## Key conventions
 
 FK/local-key defaults follow the snake_case convention (`user_id`, the

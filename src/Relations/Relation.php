@@ -250,6 +250,42 @@ abstract class Relation
     }
 
     /**
+     * The first related model — or throw when the relation matches none.
+     *
+     * Delegates to the constrained builder's {@see ModelQueryBuilder::firstOrFail()}.
+     * For one-to-one relations this is the natural "must exist" read; on
+     * a to-many relation it takes the first of the matches (use
+     * {@see sole()} when there must be exactly one).
+     *
+     * @return TRelated The first related model.
+     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
+     */
+    public function firstOrFail(): Model
+    {
+        return $this->getQuery()->firstOrFail();
+    }
+
+    /**
+     * Require the relation to match EXACTLY ONE related model.
+     *
+     * Delegates to the constrained builder's {@see ModelQueryBuilder::sole()}:
+     * zero related rows raise
+     * {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
+     * more than one raise
+     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
+     *
+     * @return TRelated The single related model.
+     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When the relation matches multiple rows.
+     */
+    public function sole(): Model
+    {
+        return $this->getQuery()->sole();
+    }
+
+    /**
      * The constrained builder — the trait's orderBy/limit/offset delegate
      * here; the sink methods below funnel into the builder's validated
      * where() directly.

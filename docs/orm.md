@@ -43,6 +43,26 @@ $user->email = 'alicia@example.com';
 $user->save();
 ```
 
+### Fail-fast retrieval
+
+`find()` and the builder's `first()` return `null` on no match. When an
+empty result is a bug rather than an expected state, use the fail-fast
+counterparts — they throw
+`BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException` naming
+the model class and, for keyed lookups, the key:
+
+```php
+$user = User::findOrFail(1);          // static
+$user = User::newQuery()->firstOrFail();
+$region = Region::newQuery()->sole(); // exactly one row required
+```
+
+`sole()` is stricter: it throws `ModelNotFoundException` on zero rows and
+`MultipleRecordsFoundException` when more than one row matches — intended
+for reads backed by a uniqueness guarantee. Relations expose the same
+fail-fast reads: `$user->featuredPost()->firstOrFail()` and
+`->sole()` delegate to the constrained query.
+
 Every `#[Column]` property must declare a single named PHP type — untyped,
 union, and intersection types fail at metadata build. A `?Carbon` property
 on a DateTime column round-trips `Carbon` instances; an `int` property on
