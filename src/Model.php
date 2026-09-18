@@ -225,18 +225,6 @@ abstract class Model
     }
 
     /**
-     * Start a model query with an OR-connected nested where group.
-     *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
-     * @return ModelQueryBuilder<static> The query builder.
-     */
-    public static function orWhereNested(callable $callback): ModelQueryBuilder
-    {
-        return static::whereNested($callback, WhereBoolean::Or);
-    }
-
-    /**
      * Start a model query with an order-by clause.
      *
      * @param string $column The column to order by.
@@ -275,12 +263,12 @@ abstract class Model
     /**
      * Start a model query with an explicit column selection.
      *
-     * @param array<int, string>|string $columns A column list, or a single column.
+     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function select(array|string $columns = ['*']): ModelQueryBuilder
+    public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder
     {
-        return static::newQuery()->select($columns);
+        return static::newQuery()->select(...$columns);
     }
 
     /**
@@ -297,13 +285,13 @@ abstract class Model
     /**
      * Start a model query with a having clause.
      *
-     * @param string $column The column (or aggregate expression) to compare.
+     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @return ModelQueryBuilder<static> The query builder.
      */
     public static function having(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column,
         WhereOperator|string $operator,
         mixed $value,
     ): ModelQueryBuilder {

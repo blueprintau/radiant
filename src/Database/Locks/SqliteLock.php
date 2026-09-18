@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Locks;
 
-use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 

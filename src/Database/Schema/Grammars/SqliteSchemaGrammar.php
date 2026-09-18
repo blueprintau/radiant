@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema\Grammars;
 
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /**
  * The SQLite dialect of the schema grammar.

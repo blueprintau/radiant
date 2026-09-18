@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Query;
 
 use BlueprintAU\Collections\Collection;
+use BlueprintAU\Radiant\Concerns\FiltersWhere;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
@@ -38,17 +39,19 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: WhereBuilder, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: WhereBuilder, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
  */
 class QueryBuilder
 {
+    use FiltersWhere;
+
     /**
      * The columns to select.
      *
-     * @var list<string|Expression>
+     * @var list<string|Expression|Aggregate>
      */
     protected array $columns = ['*'];
 
@@ -97,7 +100,11 @@ class QueryBuilder
     /**
      * The having clauses.
      *
-     * @var list<array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed}>
+     * The compared `column` may be a plain column, an {@see Expression}, or
+     * an {@see Aggregate} (filtering on a computed value —
+     * `HAVING count(*) > ?`).
+     *
+     * @var list<array{type: WhereType::Basic, column: string|Expression|Aggregate, operator: WhereOperator, value: mixed}>
      */
     protected array $havings = [];
 
@@ -196,12 +203,20 @@ class QueryBuilder
      * only raw-select path, and a greppable one: every verbatim splice in
      * an app is a visible `new Expression(...)`.
      *
-     * @param array<int, string|Expression>|string|Expression $columns A column list, a single column, or a raw expression.
+     * An aggregate is declared as an {@see Aggregate} object (static
+     * factories cover the common five; `new Aggregate(...)` covers
+     * server-specific functions). The old string form
+     * (`'count(*) as total'`) is no longer accepted.
+     *
+     * VARIADIC: one column per argument. Calling with NO arguments resets
+     * to the `['*']` default select — the explicit reset form.
+     *
+     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return $this
      */
-    public function select(array|string|Expression $columns = ['*']): static
+    public function select(string|Expression|Aggregate ...$columns): static
     {
-        $this->columns = is_array($columns) ? array_values($columns) : func_get_args();
+        $this->columns = $columns === [] ? ['*'] : array_values($columns);
         return $this;
     }
 
@@ -437,13 +452,20 @@ class QueryBuilder
     /**
      * Add a where clause.
      *
-     * @param string $column The column to compare.
+     * The column is a plain string or a raw {@see Expression} — the only
+     * verbatim-splice path, greppable by the `new Expression(...)` wrapper.
+     * Aggregate left-hand sides are structurally impossible here: they are
+     * select/having territory (SQL forbids aggregates in WHERE), so the
+     * typed {@see Aggregate} is not part of this signature at all.
+     *
+     * @param string|Expression $column The column to compare — or a raw
+     *        SQL fragment wrapped in an Expression.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector to the previous clause.
      * @return $this
      */
-    public function where(string $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
+    public function where(string|Expression $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
     {
         $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
 
@@ -499,9 +521,10 @@ class QueryBuilder
         // everything out. The intent is always IS NULL / IS NOT NULL — say
         // so, fail fast, and name the correct method.
         if ($value === null) {
+            $label = is_string($column) ? $column : $column->value;
             throw new \InvalidArgumentException(
-                "where('{$column}', '{$operator->value}', null) can never match — SQL comparisons against NULL"
-                . ' are UNKNOWN. Use whereNull(\'' . $column . '\') or whereNotNull(\'' . $column . '\') instead.'
+                "where('{$label}', '{$operator->value}', null) can never match — SQL comparisons against NULL"
+                . ' are UNKNOWN. Use whereNull(\'' . $label . '\') or whereNotNull(\'' . $label . '\') instead.'
             );
         }
 
@@ -513,96 +536,18 @@ class QueryBuilder
     }
 
     /**
-     * Add an `or where` clause.
+     * Add a raw SQL where clause — the parameterized raw-condition path.
      *
-     * @param string $column The column to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return $this
-     */
-    public function orWhere(string $column, WhereOperator|string $operator, mixed $value): static
-    {
-        return $this->where($column, $operator, $value, WhereBoolean::Or);
-    }
-
-    /**
-     * Add a `where in` clause.
+     * The SQL is spliced verbatim by design (it is an expression, not a
+     * column reference, so there is nothing to validate); its bindings are
+     * POSITIONAL — the column each belongs to is not knowable, so no
+     * per-column cast applies. The SAFETY mechanism is the binding: values
+     * ride as parameters, never quoted into the statement — only the
+     * scaffolding (e.g. `lower(email) = ?`) is raw. Keep user input out of
+     * the `$sql` string itself; put it in `$bindings`.
      *
-     * @param string $column The column to test.
-     * @param array<int, mixed> $values The list of values.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereIn(string $column, array $values, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::In, $values, $boolean);
-    }
-
-    /**
-     * Add a `where not in` clause.
-     *
-     * @param string $column The column to test.
-     * @param array<int, mixed> $values The list of values.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereNotIn(string $column, array $values, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::NotIn, $values, $boolean);
-    }
-
-    /**
-     * Add a `where null` clause.
-     *
-     * @param string $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::Null, null, $boolean);
-    }
-
-    /**
-     * Add a `where not null` clause.
-     *
-     * @param string $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereNotNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::NotNull, null, $boolean);
-    }
-
-    /**
-     * Add a `where between` clause.
-     *
-     * @param string $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::Between, $range, $boolean);
-    }
-
-    /**
-     * Add a `where not between` clause.
-     *
-     * @param string $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
-     */
-    public function whereNotBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::NotBetween, $range, $boolean);
-    }
-
-    /**
-     * Add a raw SQL where clause.
+     * This method is itself the greppable marker: every verbatim SQL
+     * fragment in an app is found by searching for `whereRaw`.
      *
      * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
      * @param array<int, mixed> $bindings The values to bind into the condition.
@@ -672,23 +617,6 @@ class QueryBuilder
     }
 
     /**
-     * Add an OR-connected nested group of where clauses.
-     *
-     * The sugar for composing tuple matches: each call appends one parenthesized
-     * group connected by OR —
-     * `whereNested(fn ($q) => ...)->orWhereNested(fn ($q) => ...)` compiles to
-     * `WHERE (... AND ...) OR (... AND ...)`.
-     *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
-     * @return $this
-     */
-    public function orWhereNested(callable $callback): static
-    {
-        return $this->whereNested($callback, WhereBoolean::Or);
-    }
-
-    /**
      * The builder a nested where group stores its clauses on.
      *
      * The ONE construction point `whereNested()` owns the whole group
@@ -723,12 +651,16 @@ class QueryBuilder
     /**
      * Filter groups after aggregation (HAVING).
      *
-     * @param string $column The column (or aggregate expression) to compare.
+     * The compared left-hand side may be a plain column, an
+     * {@see Expression}, or an {@see Aggregate} — the typed form of the old
+     * `having('count(*)', ...)` string.
+     *
+     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @return $this
      */
-    public function having(string $column, WhereOperator|string $operator, mixed $value): static
+    public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
         $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
         $this->havings[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value];
@@ -892,11 +824,21 @@ class QueryBuilder
      * the caller already provides an `as` alias on the column, that alias
      * is used instead.
      *
-     * @param string $column The column to read.
+     * An {@see Aggregate} argument selects the aggregate under the same
+     * stable alias — the typed scalar-aggregate read.
+     *
+     * @param string|Aggregate $column The column to read — or an aggregate.
      * @return mixed The column value, or null when no row matches.
      */
-    public function value(string $column): mixed
+    public function value(string|Aggregate $column): mixed
     {
+        if ($column instanceof Aggregate) {
+            return $this
+                ->select(new Aggregate($column->function, $column->column, 'radiant_scalar'))
+                ->first()
+                ->radiant_scalar ?? null;
+        }
+
         [$sql, $alias] = $this->scalarColumn($column);
         return $this->select($sql)->first()->{$alias} ?? null;
     }
@@ -946,17 +888,23 @@ class QueryBuilder
      */
     public function count(): int
     {
-        return (int) $this->value('count(*)');
+        return (int) $this->value(Aggregate::count());
     }
 
     /**
      * Whether any matching rows exist.
      *
+     * A limit-1 probe rather than a COUNT: the backend stops at the first
+     * matching row instead of counting every one, and the builder's select
+     * is never rewritten to an aggregate. `first()` applies the limit
+     * itself, so this stays backend-agnostic (SQL and the CSV evaluator
+     * both short-circuit on the first match).
+     *
      * @return bool True when at least one row matches.
      */
     public function exists(): bool
     {
-        return $this->count() > 0;
+        return $this->first() !== null;
     }
 
     /**
@@ -967,7 +915,7 @@ class QueryBuilder
      */
     public function max(string $column): mixed
     {
-        return $this->value("max({$column})");
+        return $this->value(Aggregate::max($column));
     }
 
     /**
@@ -978,7 +926,7 @@ class QueryBuilder
      */
     public function min(string $column): mixed
     {
-        return $this->value("min({$column})");
+        return $this->value(Aggregate::min($column));
     }
 
     /**
@@ -989,7 +937,7 @@ class QueryBuilder
      */
     public function sum(string $column): mixed
     {
-        return $this->value("sum({$column})");
+        return $this->value(Aggregate::sum($column));
     }
 
     /**
@@ -1000,23 +948,33 @@ class QueryBuilder
      */
     public function avg(string $column): mixed
     {
-        return $this->value("avg({$column})");
+        return $this->value(Aggregate::avg($column));
     }
 
     /**
      * Multiple aggregates in one query.
      *
-     * @param array<string, array{0: string, 1: string}> $aggregates
-     *        `['total' => ['count', '*'], 'max_price' => ['max', 'price']]`.
-     * @return array<string, mixed> The aggregate values keyed by alias.
+     * The aggregate's own ALIAS names its result column — one way to name
+     * a column, no override layer:
+     *
+     *     $db->table('orders')->aggregates(
+     *         Aggregate::count('*', 'total'),
+     *         Aggregate::max('price', 'top'),
+     *     ); // ['total' => ..., 'top' => ...]
+     *
+     * @param Aggregate ...$aggregates The aggregates to compute.
+     * @return \stdClass The values as properties, keyed by each aggregate's
+     *         result key (the explicit alias when given, else the derived
+     *         call text). Property access on an unknown key throws — no
+     *         silent null for a typo'd alias.
      */
-    public function aggregates(array $aggregates): array
+    public function aggregates(Aggregate ...$aggregates): \stdClass
     {
-        $columns = [];
-        foreach ($aggregates as $alias => [$function, $column]) {
-            $columns[] = "{$function}({$column}) as {$alias}";
-        }
-        return (array) $this->select($columns)->first();
+        return $this->select(...$aggregates)->first()
+            ?? throw new \LogicException(
+                'aggregates() cannot run — the query matched no rows to aggregate (this '
+                . 'indicates a connection that returned an empty first() without an aggregate row).'
+            );
     }
 
     // ---- Writes ----
@@ -1134,9 +1092,49 @@ class QueryBuilder
      */
 
     /**
+     * Assert the query uses ONLY the given features, or fail fast.
+     *
+     * The pre-flight gate for feature-limited backends and callers — the
+     * named features are the SUPPORTED set: a query that uses ANYTHING
+     * outside it is rejected. One missing case cannot sneak a feature
+     * through the way a forgotten entry in a forbidden-set could:
+     *
+     *     $conn->assertSupports(SqlFeature::Aggregates);
+     *     // plain wheres + aggregates pass; a query with a JOIN throws
+     *
+     * A connection implementation calls this with everything it can
+     * execute ({@see \BlueprintAU\Radiant\Database\Connections\CsvConnection::select()}
+     * does exactly that), so rejection is the identical check a caller's
+     * pre-flight would run.
+     *
+     * @param SqlFeature ...$features The features the query may use.
+     * @return static The builder (chainable).
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
+     *         When the query uses any feature outside the supported set —
+     *         the message lists every violated feature.
+     */
+    public function assertSupports(SqlFeature ...$features): static
+    {
+        $used = SqlFeature::usedBy($this);
+        $violated = array_values(array_filter(
+            $used,
+            fn(SqlFeature $feature) => !in_array($feature, $features, true),
+        ));
+
+        if ($violated !== []) {
+            $names = implode(', ', array_map(fn(SqlFeature $f) => $f->value, $violated));
+            throw new \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException(
+                "This query uses feature(s) [{$names}] outside the supported set."
+            );
+        }
+
+        return $this;
+    }
+
+    /**
      * The columns to select.
      *
-     * @return list<string|Expression>
+     * @return list<string|Expression|Aggregate>
      */
     public function getColumns(): array
     {
@@ -1210,7 +1208,7 @@ class QueryBuilder
     /**
      * The having clauses.
      *
-     * @return list<array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed}>
+     * @return list<array{type: WhereType::Basic, column: string|Expression|Aggregate, operator: WhereOperator, value: mixed}>
      */
     public function getHavings(): array
     {

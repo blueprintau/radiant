@@ -11,6 +11,10 @@ services:
         tags:
             - phpstan.rules.rule
     -
+        class: BlueprintAU\Radiant\PHPStan\Rules\DisallowUnusedImportsRule
+        tags:
+            - phpstan.rules.rule
+    -
         class: BlueprintAU\Radiant\PHPStan\Rules\RequireDocCommentRule
         tags:
             - phpstan.rules.rule

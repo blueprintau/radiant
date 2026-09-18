@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Grammars;
 
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
-use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 
 /**
  * The SQLite dialect of the SQL Grammar.

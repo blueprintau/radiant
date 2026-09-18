@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures;
 
-use BlueprintAU\Radiant\Model;
 
 /**
  * A behavior-only subclass — inherits User's table (rule 1).

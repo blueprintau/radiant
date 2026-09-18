@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Database\Concerns\ConcatenatesStatements;
 use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
@@ -81,7 +82,7 @@ abstract class Grammar
             return $value->value;
         }
         return implode('.', array_map(
-            fn ($segment) => $segment === '*' ? '*' : $this->wrap($segment),
+            fn($segment) => $segment === '*' ? '*' : $this->wrap($segment),
             explode('.', $value)
         ));
     }
@@ -108,27 +109,34 @@ abstract class Grammar
     /**
      * Wrap a column reference, respecting an `as` alias.
      *
-     * `count(*) as total` is passed through as an aggregate expression; a
-     * plain column is wrapped. The aggregate's inner content is wrapped
-     * segment-wise, so `sum(price)`, `count(distinct user_id)`, and
-     * `count(*)` all compile correctly.
+     * An {@see Aggregate} renders from its structured parts — function as a
+     * bare identifier, inner column wrapped segment-wise (`*`, `distinct x`,
+     * or a single identifier path), and the result key as the alias. A
+     * plain column is wrapped; an {@see Expression} is passed through.
      *
-     * @param string|Expression $column The column reference.
+     * @param string|Expression|Aggregate $column The column reference.
      * @return string The wrapped column reference.
      */
-    protected function wrapColumn(string|Expression $column): string
+    protected function wrapColumn(string|Expression|Aggregate $column): string
     {
         if ($column instanceof Expression) {
             return $column->value;
         }
-        if (preg_match('/^([a-z_]+)\((.+)\)(?:\s+as\s+(.+))?$/i', $column, $m)) {
-            $inner = $m[2] === '*' ? '*' : $this->wrapAggregateInner($m[2]);
-            $alias = isset($m[3]) ? ' AS ' . $this->wrapSegments($m[3]) : '';
-            return "{$m[1]}({$inner}){$alias}";
+
+        if ($column instanceof Aggregate) {
+            $rendered = $column->function . '(' . $this->wrapAggregateInner($column->column) . ')';
+
+            // Only an EXPLICIT alias renders an AS — the derived result key
+            // (e.g. `count(*)`) is for reading the row back, not for SQL.
+            return $column->alias === null
+                ? $rendered
+                : $rendered . ' AS ' . $this->wrapSegments($column->alias);
         }
+
         if (preg_match('/^(.+?)(?:\s+as\s+)(.+)$/i', $column, $m)) {
             return $this->wrapSegments($m[1]) . ' AS ' . $this->wrapSegments($m[2]);
         }
+        
         return $this->wrapSegments($column);
     }
 
@@ -136,22 +144,25 @@ abstract class Grammar
      * Wrap the inner content of an aggregate expression.
      *
      * `distinct user_id` becomes `distinct "user_id"`; a plain column is
-     * wrapped. The accepted inner shapes are STRICT — `*`, `distinct x`,
+     * wrapped; an {@see Expression} is spliced VERBATIM — raw SQL by
+     * contract, the caller owns its safety (the same trust model as a raw
+     * select). The accepted string shapes are STRICT — `*`, `distinct x`,
      * or a single identifier path (optionally `.*`). Anything else
      * (nested expressions like `coalesce(x, 0)`) FAILS CLOSED with
      * {@see UnsupportedFeatureException} instead of passing through
-     * un-wrapped: the aggregate regex admits `func(<anything>)` shapes,
-     * and an unwrapped inner would splice arbitrary text into the SQL.
-     * Today every public caller validates upstream, so this is
-     * defense-in-depth for future callers.
+     * un-wrapped: complex arguments belong in an Expression, where the
+     * splice is explicit and greppable.
      *
-     * @param string $inner The aggregate's inner content.
+     * @param string|Expression $inner The aggregate's inner content.
      * @return string The wrapped inner content.
-     * @throws UnsupportedFeatureException When the inner content is not a
+     * @throws UnsupportedFeatureException When a string inner content is not a
      *         strict single-identifier shape.
      */
-    protected function wrapAggregateInner(string $inner): string
+    protected function wrapAggregateInner(string|Expression $inner): string
     {
+        if ($inner instanceof Expression) {
+            return $inner->value;
+        }
         if (preg_match('/^distinct\s+(.+)$/i', $inner, $m)) {
             return 'DISTINCT ' . $this->wrapSegments($m[1]);
         }
@@ -165,7 +176,7 @@ abstract class Grammar
         if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*|\.\*)?$/', $inner) !== 1) {
             throw new UnsupportedFeatureException(
                 'Aggregate arguments support only a single column (optionally schema-qualified '
-                . "or `distinct col`); got [{$inner}]. Use a raw Expression for complex arguments.",
+                    . "or `distinct col`); got [{$inner}]. Use a raw Expression for complex arguments.",
             );
         }
 
@@ -175,12 +186,12 @@ abstract class Grammar
     /**
      * Wrap a list of columns into a comma-separated list.
      *
-     * @param list<string|Expression> $columns The columns to wrap.
+     * @param list<string|Expression|Aggregate> $columns The columns to wrap.
      * @return string The comma-separated wrapped columns.
      */
     protected function columnize(array $columns): string
     {
-        return implode(', ', array_map(fn ($column) => $this->wrapColumn($column), $columns));
+        return implode(', ', array_map(fn($column) => $this->wrapColumn($column), $columns));
     }
 
     // ---- Value helpers ----
@@ -215,7 +226,7 @@ abstract class Grammar
      */
     protected function parameterize(array $values): string
     {
-        return implode(', ', array_map(fn ($value) => $this->parameter($value), $values));
+        return implode(', ', array_map(fn($value) => $this->parameter($value), $values));
     }
 
     // ---- Select root ----
@@ -275,9 +286,9 @@ abstract class Grammar
             );
         }
 
-        $columns = implode(', ', array_map(fn ($column) => $this->wrapSegments($column), array_keys($rows[0])));
+        $columns = implode(', ', array_map(fn($column) => $this->wrapSegments($column), array_keys($rows[0])));
         $placeholders = implode(', ', array_map(
-            fn ($row) => '(' . implode(', ', array_fill(0, count($row), '?')) . ')',
+            fn($row) => '(' . implode(', ', array_fill(0, count($row), '?')) . ')',
             $rows
         ));
         $sql = "INSERT INTO {$this->wrapFromTable($builder)} ({$columns}) VALUES {$placeholders}";
@@ -377,7 +388,7 @@ abstract class Grammar
     public function compileUpdate(QueryBuilder $builder, array $values): string
     {
         $sets = implode(', ', array_map(
-            fn ($column) => $this->wrapSegments($column) . ' = ?',
+            fn($column) => $this->wrapSegments($column) . ' = ?',
             array_keys($values)
         ));
         $sql = "UPDATE {$this->wrapFromTable($builder)} SET {$sets}";
@@ -539,7 +550,7 @@ abstract class Grammar
     /**
      * Compile a basic comparison where clause.
      *
-     * @param array{type: WhereType::Basic, column: string, operator: WhereOperator, value: mixed, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileBasicWhere(array $where): string
@@ -562,7 +573,7 @@ abstract class Grammar
     /**
      * Compile a between where clause.
      *
-     * @param array{type: WhereType::Between, column: string, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileBetweenWhere(array $where): string
@@ -575,7 +586,7 @@ abstract class Grammar
     /**
      * Compile a null where clause.
      *
-     * @param array{type: WhereType::Null, column: string, operator: WhereOperator, boolean: WhereBoolean} $where The clause to compile.
+     * @param array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean} $where The clause to compile.
      * @return string The compiled clause.
      */
     protected function compileNullWhere(array $where): string
@@ -597,7 +608,7 @@ abstract class Grammar
         if ($groups === []) {
             return '';
         }
-        return 'GROUP BY ' . implode(', ', array_map(fn ($group) => $this->wrapSegments($group), $groups));
+        return 'GROUP BY ' . implode(', ', array_map(fn($group) => $this->wrapSegments($group), $groups));
     }
 
     /**

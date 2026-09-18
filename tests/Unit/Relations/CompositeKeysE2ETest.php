@@ -7,7 +7,6 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpShipment;

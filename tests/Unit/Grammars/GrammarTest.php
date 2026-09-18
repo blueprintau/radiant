@@ -8,7 +8,9 @@ use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Grammars\MySqlGrammar;
 use BlueprintAU\Radiant\Database\Grammars\PostgresGrammar;
 use BlueprintAU\Radiant\Database\Grammars\SqliteGrammar;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\SqlFeature;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
@@ -96,14 +98,38 @@ final class GrammarTest extends TestCase
     }
 
     /**
-     * Aggregate expressions pass through with wrapped inner columns and aliases.
+     * Aggregate columns compile with the function spliced bare and the
+     * inner column wrapped.
      */
     public function testAggregateColumns(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->select('count(*)', 'sum(price) as total'),
+            $this->builder()->select(Aggregate::count(), Aggregate::sum('price', 'total')),
         );
         self::assertSame('SELECT count(*), sum("price") AS "total" FROM "users"', $sql);
+    }
+
+    /**
+     * A SINGLE Aggregate (not wrapped in a list) is a valid select argument.
+     */
+    public function testSingleAggregateSelect(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->select(Aggregate::count()),
+        );
+        self::assertSame('SELECT count(*) FROM "users"', $sql);
+    }
+
+    /**
+     * An Expression argument inside an Aggregate is spliced verbatim —
+     * the caller owns its safety (raw SQL by contract).
+     */
+    public function testAggregateWithExpressionArgument(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->select(new Aggregate('sum', new Expression('price * qty'), 'line_total')),
+        );
+        self::assertSame('SELECT sum(price * qty) AS "line_total" FROM "users"', $sql);
     }
 
     /**
@@ -134,18 +160,19 @@ final class GrammarTest extends TestCase
     public function testQualifiedStarAndAggregate(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->select('schema.*', 'count(*) as total'),
+            $this->builder()->select('schema.*', Aggregate::count('*', 'total')),
         );
         self::assertSame('SELECT "schema".*, count(*) AS "total" FROM "users"', $sql);
     }
 
     /**
-     * An aggregate over a column wraps the inner column.
+     * An aggregate over a column wraps the inner column; the function is
+     * spliced as a bare identifier.
      */
     public function testAggregateWithColumn(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->select('SUM(total)', 'SUM(total) as grand_total'),
+            $this->builder()->select(new Aggregate('SUM', 'total'), new Aggregate('SUM', 'total', 'grand_total')),
         );
         self::assertSame('SELECT SUM("total"), SUM("total") AS "grand_total" FROM "users"', $sql);
     }
@@ -156,7 +183,7 @@ final class GrammarTest extends TestCase
     public function testDistinctAggregate(): void
     {
         $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()->select('COUNT(DISTINCT user_id) as cnt'),
+            $this->builder()->select(new Aggregate('COUNT', 'distinct user_id', 'cnt')),
         );
         self::assertSame('SELECT COUNT(DISTINCT "user_id") AS "cnt" FROM "users"', $sql);
     }
@@ -321,9 +348,9 @@ final class GrammarTest extends TestCase
     {
         $sql = (new SqliteGrammar())->compileSelect(
             $this->builder()
-                ->select('status', 'count(*) as total')
+                ->select('status', Aggregate::count('*', 'total'))
                 ->groupBy('status')
-                ->having('count(*)', WhereOperator::Gt, 5),
+                ->having(Aggregate::count(), WhereOperator::Gt, 5),
         );
         self::assertSame(
             'SELECT "status", count(*) AS "total" FROM "users" GROUP BY "status" HAVING count(*) > ?',
@@ -648,7 +675,7 @@ final class GrammarTest extends TestCase
     {
         $builder = $this->builder()
             ->where('active', WhereOperator::Eq, 1)
-            ->having('count(*)', WhereOperator::Gt, 5);
+            ->having(Aggregate::count(), WhereOperator::Gt, 5);
 
         self::assertSame([1], $builder->getBindings([BindingCategory::Where]));
         self::assertSame([5], $builder->getBindings([BindingCategory::Having]));
@@ -661,10 +688,59 @@ final class GrammarTest extends TestCase
     {
         $builder = $this->builder()
             ->where('id', WhereOperator::Eq, 1)
-            ->having('count(*)', WhereOperator::Gt, 5);
+            ->having(Aggregate::count(), WhereOperator::Gt, 5);
 
         $sql = (new SqliteGrammar())->compileUpdate($builder, ['name' => 'Alicia']);
         self::assertSame('UPDATE "users" SET "name" = ? WHERE "id" = ?', $sql);
         self::assertSame(['Alicia', 1], array_merge(array_values(['name' => 'Alicia']), $builder->getBindings([BindingCategory::Join, BindingCategory::Where])));
+    }
+
+    /**
+     * assertSupports() uses SUPPORTED-SET semantics: the named features are
+     * what the query MAY use, anything else is rejected.
+     */
+    public function testAssertSupports(): void
+    {
+        // A plain filtered select uses nothing — any supported set passes.
+        $plain = $this->builder()->where('active', WhereOperator::Eq, 1);
+        self::assertSame([], SqlFeature::usedBy($plain));
+        self::assertSame($plain, $plain->assertSupports(SqlFeature::Joins, SqlFeature::Unions));
+
+        // A feature-heavy query names ALL its features on introspection...
+        $heavy = $this->builder()
+            ->join('posts', 'posts.user_id', '=', 'users.id')
+            ->whereRaw('lower(email) = ?', ['a@b.c'])
+            ->union($this->builder());
+
+        self::assertSame(
+            [SqlFeature::Joins, SqlFeature::RawSql, SqlFeature::Unions],
+            SqlFeature::usedBy($heavy),
+        );
+
+        // ...and every feature OUTSIDE a narrow supported set is rejected
+        // at once (the missed set entries cannot sneak features through).
+        try {
+            $heavy->assertSupports(SqlFeature::RawSql);
+            self::fail('Expected UnsupportedFeatureException for unsupported features.');
+        } catch (UnsupportedFeatureException $e) {
+            self::assertStringContainsString('joins', $e->getMessage());
+            self::assertStringContainsString('unions', $e->getMessage());
+        }
+
+        // Naming the FULL set the query uses passes.
+        self::assertSame(
+            $heavy,
+            $heavy->assertSupports(SqlFeature::Joins, SqlFeature::RawSql, SqlFeature::Unions),
+        );
+
+        // Aggregate detection: select + having, and groupBy alone.
+        self::assertContains(
+            SqlFeature::Aggregates,
+            SqlFeature::usedBy($this->builder()->select(Aggregate::count())),
+        );
+        self::assertContains(
+            SqlFeature::Aggregates,
+            SqlFeature::usedBy($this->builder()->groupBy('status')),
+        );
     }
 }

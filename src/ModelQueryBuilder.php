@@ -7,7 +7,7 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
-use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
@@ -193,11 +193,11 @@ class ModelQueryBuilder extends QueryBuilder
         $metadata = MetadataFactory::for($modelClass);
 
         $this->forcedKeys = array_values(array_filter(array_map(
-            fn (Column $column) => $column->name ?? '',
+            fn(Column $column) => $column->name ?? '',
             $metadata->primaryKeys,
-        ), fn (string $name) => $name !== ''));
+        ), fn(string $name) => $name !== ''));
         $this->modelColumns = array_map(
-            fn ($mapping) => $mapping->columnName,
+            fn($mapping) => $mapping->columnName,
             array_values($metadata->properties),
         );
 
@@ -282,7 +282,7 @@ class ModelQueryBuilder extends QueryBuilder
         if (!is_string($path) || $path === '') {
             throw new \InvalidArgumentException(
                 'Relation paths must be non-empty strings; got '
-                . (is_string($path) ? 'an empty path' : get_debug_type($path)) . '.'
+                    . (is_string($path) ? 'an empty path' : get_debug_type($path)) . '.'
             );
         }
 
@@ -599,7 +599,7 @@ class ModelQueryBuilder extends QueryBuilder
             $selects[] = "{$ownerTable}.{$column} as {$column}";
         }
 
-        parent::select($selects);
+        parent::select(...$selects);
     }
 
     /**
@@ -813,7 +813,7 @@ class ModelQueryBuilder extends QueryBuilder
         $rows = parent::get();
 
         $models = array_map(
-            fn (\stdClass $row) => $this->modelClass::fromRow($row),
+            fn(\stdClass $row) => $this->modelClass::fromRow($row),
             $rows->values()->toArray(),
         );
 
@@ -912,15 +912,31 @@ class ModelQueryBuilder extends QueryBuilder
      * model's own attribute reads a Carbon. Here, a bare declared column
      * name runs through its {@see Column::decode()} — the same cast
      * {@see Model::fromRow()} hydrates through, so builder scalar reads
-     * and attribute reads agree. Aggregate expressions, raw SQL, and
-     * user-aliased columns (`sum(price) as total`) pass through raw — the
-     * model layer has no cast for a computed value.
+     * and attribute reads agree. Raw SQL and user-aliased columns
+     * (`sum(price) as total`) pass through raw — the model layer has no
+     * cast for a computed value.
      *
-     * @param string $column The column to read.
+     * An {@see Aggregate} argument DECODES through its column's cast when
+     * that column is declared — `value(Aggregate::max('signed_up_at'))`
+     * yields a Carbon, matching `max('signed_up_at')`.
+     *
+     * @param string|Aggregate $column The column to read — or an aggregate.
      * @return mixed The decoded column value, or null when no row matches.
      */
-    public function value(string $column): mixed
+    public function value(string|Aggregate $column): mixed
     {
+        if ($column instanceof Aggregate) {
+            $rows = $this->connection->select(
+                $this->scopedFor(new Aggregate($column->function, $column->column, 'radiant_scalar'))->limit(1),
+            );
+            $raw = $rows[0] ?? null;
+
+            // An Expression argument is a computed value — no cast applies.
+            return $column->column instanceof Expression
+                ? ($raw === null ? null : $raw->radiant_scalar)
+                : $this->decodeScalar($column->column, $raw === null ? null : $raw->radiant_scalar);
+        }
+
         [$sql, $alias] = $this->scalarColumn($column);
 
         // Fetch the RAW row directly (mirroring first()): the hydrating
@@ -951,7 +967,7 @@ class ModelQueryBuilder extends QueryBuilder
         [$sql, $alias] = $this->scalarColumn($column);
 
         return $this->scopedFor($sql)->getRaw()->pluck($alias)->map(
-            fn (mixed $raw) => $this->decodeScalar($column, $raw),
+            fn(mixed $raw) => $this->decodeScalar($column, $raw),
         )->values();
     }
 
@@ -972,10 +988,10 @@ class ModelQueryBuilder extends QueryBuilder
      * scalar read; a unioned pluck is not a shape the scalar path
      * supports).
      *
-     * @param string $sql The column expression to select.
+     * @param string|Aggregate $sql The column expression (or aggregate) to select.
      * @return static The scoped clone.
      */
-    private function scopedFor(string $sql): static
+    private function scopedFor(string|Aggregate $sql): static
     {
         $clone = clone $this;
         $clone->columns = [$sql];
@@ -1016,17 +1032,7 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function count(): int
     {
-        return (int) $this->value('count(*)');
-    }
-
-    /**
-     * Whether any matching rows exist.
-     *
-     * @return bool True when at least one row matches.
-     */
-    public function exists(): bool
-    {
-        return $this->count() > 0;
+        return (int) $this->value(Aggregate::count());
     }
 
     /**
@@ -1038,7 +1044,7 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function max(string $column): mixed
     {
-        return $this->decodeScalar($column, $this->value("max({$column})"));
+        return $this->value(Aggregate::max($column));
     }
 
     /**
@@ -1050,7 +1056,7 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function min(string $column): mixed
     {
-        return $this->decodeScalar($column, $this->value("min({$column})"));
+        return $this->value(Aggregate::min($column));
     }
 
     /**
@@ -1062,7 +1068,7 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function sum(string $column): mixed
     {
-        return $this->decodeScalar($column, $this->value("sum({$column})"));
+        return $this->value(Aggregate::sum($column));
     }
 
     /**
@@ -1074,37 +1080,50 @@ class ModelQueryBuilder extends QueryBuilder
      */
     public function avg(string $column): mixed
     {
-        return $this->decodeScalar($column, $this->value("avg({$column})"));
+        return $this->value(Aggregate::avg($column));
     }
 
     /**
      * Multiple aggregates in one query — the raw values decoded through
      * each aggregate's column cast (see {@see decodeScalar()}); computed
-     * targets (`count(*)`) pass through raw.
+     * targets (`count(*)`) and Expression arguments pass through raw.
      *
-     * @param array<string, array{0: string, 1: string}> $aggregates
-     *        `['total' => ['count', '*'], 'max_price' => ['max', 'price']]`.
-     * @return array<string, mixed> The aggregate values keyed by alias.
+     * The aggregate's own ALIAS names its result column — one way to name
+     * a column, no override layer:
+     *
+     *     User::query()->aggregates(
+     *         Aggregate::count('*', 'total'),
+     *         Aggregate::max('signed_up_at', 'latest'),
+     *     )->latest; // a Carbon for a datetime column
+     *
+     * @param Aggregate ...$aggregates The aggregates to compute.
+     * @return \stdClass The values as properties, keyed by each
+     *         aggregate's result key (the explicit alias when given, else
+     *         the derived call text). Property access on an unknown key
+     *         throws — no silent null for a typo'd alias.
      */
-    public function aggregates(array $aggregates): array
+    public function aggregates(Aggregate ...$aggregates): \stdClass
     {
-        $columns = [];
+        // Raw rows — a hydrated Model has no aggregate-alias properties to
+        // read the values back from.
+        $row = $this->select(...$aggregates)->getRaw()->first();
 
-        foreach ($aggregates as $alias => [$function, $column]) {
-            $columns[] = "{$function}({$column}) as {$alias}";
+        $out = new \stdClass();
+
+        foreach ($aggregates as $aggregate) {
+            $column = $aggregate->column;
+            $isExpression = $column instanceof Expression;
+            $columnKey = $isExpression ? $column->value : $column;
+            $key = $aggregate->alias ?? "{$aggregate->function}({$columnKey})";
+
+            // An Expression argument is a computed value — no cast applies;
+            // declared-column arguments decode through the column's cast.
+            $out->{$key} = $isExpression
+                ? ($row === null ? null : $row->{$key})
+                : $this->decodeScalar($column, $row === null ? null : $row->{$key});
         }
 
-        // Raw rows — a hydrated Model has no alias properties to read the
-        // aggregates back from.
-        $row = $this->select($columns)->getRaw()->first();
-
-        $values = [];
-
-        foreach ($aggregates as $alias => [, $column]) {
-            $values[$alias] = $this->decodeScalar($column, $row === null ? null : $row->{$alias});
-        }
-
-        return $values;
+        return $out;
     }
 
     /**
@@ -1137,13 +1156,16 @@ class ModelQueryBuilder extends QueryBuilder
         $selected = $this->getColumns();
         if ($selected !== ['*']) {
             $pkNames = array_filter(
-                array_map(fn ($pk) => $pk->name, $primaryKeys),
-                fn ($name) => $name !== null,
+                array_map(fn($pk) => $pk->name, $primaryKeys),
+                fn($name) => $name !== null,
             );
 
             foreach ($selected as $column) {
                 if ($column instanceof Expression) {
                     continue; // raw expressions carry no column contract.
+                }
+                if ($column instanceof Aggregate) {
+                    continue; // aggregates are computed columns, not the PK.
                 }
                 $bare = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
 
@@ -1165,11 +1187,11 @@ class ModelQueryBuilder extends QueryBuilder
             if ($pkNames !== []) {
                 throw new \InvalidArgumentException(
                     'whereKey() requires the primary key in the select list — the result feeds '
-                    . 'save()/delete(), which need the key hydrated. Add the PK column '
-                    . '[' . implode(', ', array_map(
-                        fn ($name) => $this->table . '.' . $name,
-                        $pkNames,
-                    )) . '] to the select, or use select([table.*]).'
+                        . 'save()/delete(), which need the key hydrated. Add the PK column '
+                        . '[' . implode(', ', array_map(
+                            fn($name) => $this->table . '.' . $name,
+                            $pkNames,
+                        )) . '] to the select, or use select(\'' . $this->table . '.*\').'
                 );
             }
         }
@@ -1325,14 +1347,14 @@ class ModelQueryBuilder extends QueryBuilder
         if (!is_string($column) || $column === '') {
             throw new \InvalidArgumentException(
                 'A composite key must be a column => value map with string column names; got '
-                . (is_string($column) ? 'an empty column name' : get_debug_type($column)) . '.'
+                    . (is_string($column) ? 'an empty column name' : get_debug_type($column)) . '.'
             );
         }
 
         if (!is_int($value) && !is_string($value) && $value !== null) {
             throw new \InvalidArgumentException(
                 "Composite key value for [{$column}] must be int, string or null; got "
-                . get_debug_type($value) . '.'
+                    . get_debug_type($value) . '.'
             );
         }
 
@@ -1363,8 +1385,8 @@ class ModelQueryBuilder extends QueryBuilder
 
         throw new \InvalidArgumentException(
             "Composite key column [{$column}] is not a primary key of model "
-            . "[{$this->modelClass}]; expected one of: "
-            . implode(', ', array_map(fn (Column $pk) => $pk->name ?? '(unnamed)', $primaryKeys)) . '.'
+                . "[{$this->modelClass}]; expected one of: "
+                . implode(', ', array_map(fn(Column $pk) => $pk->name ?? '(unnamed)', $primaryKeys)) . '.'
         );
     }
 
@@ -1404,24 +1426,38 @@ class ModelQueryBuilder extends QueryBuilder
      * properties are NOT set for the aggregate keys — read those off the
      * raw row via {@see getRaw()}.
      *
-     * @param array<int, string|Expression>|string|Expression $columns A column list, a single column, or a raw expression.
+     * An {@see Aggregate} validates its column against the declared model
+     * columns — the typed form of the old aggregate strings.
+     *
+     * VARIADIC: one column per argument. Calling with NO arguments resets
+     * to the `['*']` default select — which then maps to the model's own
+     * columns (the same `*` → declared columns path).
+     *
+     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return static The builder.
      * @throws \InvalidArgumentException When an explicit string column is
      *         not a declared model column.
      */
-    public function select(array|string|Expression $columns = ['*']): static
+    public function select(string|Expression|Aggregate ...$columns): static
     {
-        $columns = is_array($columns) ? array_values($columns) : [$columns];
+        $flat = $columns === [] ? ['*'] : array_values($columns);
 
-        if ($columns === ['*']) {
+        if ($flat === ['*']) {
             // `*` → the model's own columns (PK first, then the rest).
-            $columns = array_values(array_unique(array_merge(
+            $flat = array_values(array_unique(array_merge(
                 $this->forcedKeys,
                 array_diff($this->modelColumns, $this->forcedKeys),
             )));
         } else {
-            foreach ($columns as $column) {
-                if (!$column instanceof Expression) {
+            foreach ($flat as $column) {
+                if ($column instanceof Aggregate) {
+                    // The aggregate's column gets the same allowlist check
+                    // as a plain select column; an Expression argument is
+                    // raw SQL by contract and passes through.
+                    if (!$column->column instanceof Expression && $column->column !== '*') {
+                        $this->validateColumn($column->column);
+                    }
+                } elseif (!$column instanceof Expression) {
                     $this->validateColumn($column);
                 }
             }
@@ -1434,17 +1470,19 @@ class ModelQueryBuilder extends QueryBuilder
             // so a typo'd or attacker-influenced `table.column` fails fast
             // here rather than compiling into the SQL quote-only.
             $callerOwned = (bool) array_filter(
-                $columns,
-                fn (string|Expression $column) => $column instanceof Expression ? false : str_contains($column, '.'),
+                $flat,
+                fn(string|Expression|Aggregate $column) => $column instanceof Expression || $column instanceof Aggregate
+                    ? true
+                    : str_contains($column, '.'),
             );
 
             if ($callerOwned) {
-                return parent::select($columns);
+                return parent::select(...$flat);
             }
         }
 
         if ($this->getGroups() !== []) {
-            return parent::select($columns);
+            return parent::select(...$flat);
         }
 
         // Merge forced keys (PK always selected), dedupe, preserve order.
@@ -1454,39 +1492,40 @@ class ModelQueryBuilder extends QueryBuilder
         // since grouping changes the shape). Filter defensively for the
         // type system: array_unique/array_merge need strings here.
         $stringColumns = array_values(array_filter(
-            $columns,
-            fn (string|Expression $column) => is_string($column),
+            $flat,
+            fn(string|Expression|Aggregate $column) => is_string($column),
         ));
-        $columns = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
+        $merged = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
 
-        return parent::select($columns);
+        return parent::select(...$merged);
     }
 
     /**
      * Add a where clause with model-aware column validation.
      *
-     * Accepts plain column names AND qualified `table.column` references
-     * (including the `table.column as alias` select spec) — the qualified
-     * form names its table explicitly, which is the safety property: the
-     * column must exist on the NAMED table per the partition map (MTI) or
-     * the model's own table. Join-aware internals and user code share the
-     * one `where()`.
+     * Accepts plain column names, qualified `table.column` references, and
+     * raw {@see Expression} fragments (raw by contract — no validation).
+     * Aggregate left-hand sides are structurally impossible: the typed
+     * {@see Aggregate} is not part of this signature (SQL forbids
+     * aggregates in WHERE — they are having() territory).
      *
-     * @param string $column The column to compare.
+     * @param string|Expression $column The column to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The builder.
-     * @throws \InvalidArgumentException When the column is not a declared
-     *         model column (or a valid qualified reference).
+     * @throws \InvalidArgumentException When a string column is not a
+     *         declared model column (or a valid qualified reference).
      */
     public function where(
-        string $column,
+        string|Expression $column,
         WhereOperator|string $operator,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        $this->validateColumn($column);
+        if (!$column instanceof Expression) {
+            $this->validateColumn($column);
+        }
 
         return parent::where($column, $operator, $value, $boolean);
     }
@@ -1532,18 +1571,36 @@ class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Add a having clause with model-aware column validation.
+     * Add a having clause with model-aware validation.
      *
-     * @param string $column The column (or aggregate expression) to compare.
+     * An {@see Aggregate} left-hand side validates its COLUMN against the
+     * declared model columns (the function/alias are validated by the
+     * Aggregate itself); an {@see Expression} passes through raw. A string
+     * column must be a declared model column.
+     *
+     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @return static The builder.
-     * @throws \InvalidArgumentException When the column is not a declared
-     *         model column.
+     * @throws \InvalidArgumentException When a string column is not a
+     *         declared model column, or an aggregate column is not declared.
      */
-    public function having(string $column, WhereOperator|string $operator, mixed $value): static
+    public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
-        $this->validateColumn($column);
+        if ($column instanceof Aggregate) {
+            // The column of a typed aggregate gets the same allowlist check
+            // as a plain column — the old string path bypassed it. An
+            // Expression argument is raw SQL by contract.
+            if (!$column->column instanceof Expression && $column->column !== '*') {
+                $this->validateColumn($column->column);
+            }
+
+            return parent::having($column, $operator, $value);
+        }
+
+        if (!$column instanceof Expression) {
+            $this->validateColumn($column);
+        }
 
         return parent::having($column, $operator, $value);
     }
@@ -1552,9 +1609,9 @@ class ModelQueryBuilder extends QueryBuilder
      * Fail fast on an unknown model column.
      *
      * Accepts a declared column name (DB column) or a forced PK key.
-     * Aggregate expressions (`count(*)`) pass through — the select layer
-     * owns expression handling, and rejecting them here would break
-     * `having('count(*)', ...)`.
+     * Aggregate left-hand sides no longer ride this path as strings — pass
+     * a typed {@see Aggregate} to having()/select(), which validates the
+     * aggregate's column through this method directly.
      *
      * @param string $column The column name to check.
      * @return void
@@ -1608,10 +1665,6 @@ class ModelQueryBuilder extends QueryBuilder
                 // Own-table prefix but an unknown column — fall through to
                 // the throw below, same as the unqualified form would.
             }
-        }
-
-        if (preg_match('/^[a-z_]+\(\*?\)?/i', $column) === 1) {
-            return; // aggregate expression — select/having territory.
         }
 
         throw new \InvalidArgumentException(

@@ -4,10 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
-use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
-use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
@@ -388,7 +386,7 @@ class HasManyThrough extends Relation
 
         $selects[] = "{$relatedTable}.*";
 
-        $builder->select($selects);
+        $builder->select(...$selects);
 
         $rows = $builder->getRaw();
 

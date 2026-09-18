@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
 
 /**
  * The result of one eager load: the related models plus, for through

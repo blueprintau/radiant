@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Query;
 
+use BlueprintAU\Radiant\Concerns\FiltersWhere;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 
@@ -12,10 +13,12 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * callbacks — the vocabulary a parenthesized group may legally carry.
  *
  * A nested group is a filter, not a query: it cannot JOIN, select, order,
- * or page. This class exposes ONLY the where-family (the same funnel shape
- * as the query builder: one {@see WhereBuilder::where()} sink, the `or*`/
- * `where*` helpers derived over it), so a callback cannot reach for
- * structure a group has no place declaring.
+ * or page. This class exposes ONLY the where-family — the same funnel shape
+ * as the query builder, and now the SAME trait: the shared
+ * {@see FiltersWhere} vocabulary over the {@see WhereBuilder::where()}
+ * sink — so a callback cannot reach for structure a group has no place
+ * declaring, and every helper stays in lockstep with the builders by
+ * construction.
  *
  * Why it doesn't OWN clauses itself (Q: "should it just add the binding?
  * does it actually need the Query when we're creating a new one anyway?"):
@@ -38,6 +41,8 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  */
 final class WhereBuilder
 {
+    use FiltersWhere;
+
     /**
      * Create a facade over the owning builder's where sink.
      *
@@ -55,14 +60,15 @@ final class WhereBuilder
     /**
      * Add a where clause — the single sink every other filter funnels into.
      *
-     * @param string $column The column to compare.
+     * @param string|Expression $column The column to compare — or a raw SQL
+     *        fragment wrapped in an Expression.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The builder (chainable).
      */
     public function where(
-        string $column,
+        string|Expression $column,
         WhereOperator|string $operator,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
@@ -73,101 +79,22 @@ final class WhereBuilder
     }
 
     /**
-     * Add an `or where` clause.
+     * Add a nested where group — the trait's second sink. Delegates to the
+     * owning builder, so the group's clauses land on it like any other
+     * filter and merge with the parent query's wheres at compile time.
      *
-     * @param string $column The column to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return static The builder (chainable).
-     */
-    public function orWhere(
-        string $column,
-        WhereOperator|string $operator,
-        mixed $value,
-    ): static {
-        return $this->where($column, $operator, $value, WhereBoolean::Or);
-    }
-
-    /**
-     * Add a `where in` clause.
-     *
-     * @param string $column The column to test.
-     * @param array<int, mixed> $values The list of values.
+     * @param callable(WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The builder (chainable).
      */
-    public function whereIn(
-        string $column,
-        array $values,
+    public function whereNested(
+        callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        return $this->where($column, WhereOperator::In, $values, $boolean);
-    }
+        $this->query->whereNested($callback, $boolean);
 
-    /**
-     * Add a `where not in` clause.
-     *
-     * @param string $column The column to test.
-     * @param array<int, mixed> $values The list of values.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
-     */
-    public function whereNotIn(
-        string $column,
-        array $values,
-        WhereBoolean $boolean = WhereBoolean::And,
-    ): static {
-        return $this->where($column, WhereOperator::NotIn, $values, $boolean);
-    }
-
-    /**
-     * Add a `where null` clause.
-     *
-     * @param string $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
-     */
-    public function whereNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::Null, null, $boolean);
-    }
-
-    /**
-     * Add a `where not null` clause.
-     *
-     * @param string $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
-     */
-    public function whereNotNull(string $column, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::NotNull, null, $boolean);
-    }
-
-    /**
-     * Add a `where between` clause.
-     *
-     * @param string $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
-     */
-    public function whereBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::Between, $range, $boolean);
-    }
-
-    /**
-     * Add a `where not between` clause.
-     *
-     * @param string $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
-     */
-    public function whereNotBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
-    {
-        return $this->where($column, WhereOperator::NotBetween, $range, $boolean);
+        return $this;
     }
 
     /**

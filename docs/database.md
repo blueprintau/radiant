@@ -126,6 +126,28 @@ $emails   = $db->table('users')->pluck('email'); // Collection
 $one      = $db->table('users')->where('id', '=', 1)->first();
 ```
 
+Aggregates are typed. The common five have static factories; anything
+server-specific (`group_concat`, `array_agg`, …) takes `new Aggregate(...)`
+— the function is any bare SQL identifier, the column a declared column
+(or `*`, optionally `distinct`):
+
+```php
+use BlueprintAU\Radiant\Database\Query\Aggregate;
+
+// Group + filter on an aggregate:
+$busy = $db->table('posts')
+    ->select('user_id', Aggregate::count('*', 'total'))
+    ->groupBy('user_id')
+    ->having(Aggregate::count(), '>', 5)
+    ->getRaw();
+
+// Multiple aggregates in one query:
+$stats = $db->table('orders')->aggregates([
+    'total' => Aggregate::count(),
+    'top'   => Aggregate::max('price'),
+]);
+```
+
 `insertGetId()` returns the new row's id only when the builder knows which
 column holds it — declare it with `insertIdColumn()` first; otherwise the
 insert runs and the method returns `null`:

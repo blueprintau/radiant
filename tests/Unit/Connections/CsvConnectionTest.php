@@ -213,7 +213,7 @@ final class CsvConnectionTest extends TestCase
         ]);
 
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('does not support joins');
+        $this->expectExceptionMessage('[joins]');
         $csv->table('users')->join('orders', 'users.id', '=', 'orders.user_id')->get();
     }
 
@@ -230,7 +230,7 @@ final class CsvConnectionTest extends TestCase
         // CsvConnection has no selectSql — the SQL-only raw path is gated
         // by the facade. This asserts the where-level fail-fast instead.
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('does not support raw where clauses');
+        $this->expectExceptionMessage('[raw-sql]');
         $csv->table('users')->whereRaw('1 = 1')->get();
     }
 

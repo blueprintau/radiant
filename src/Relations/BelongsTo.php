@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
 

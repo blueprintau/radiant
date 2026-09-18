@@ -11,7 +11,6 @@ use BlueprintAU\Radiant\Database\Exceptions\QueryException;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
-use BlueprintAU\Radiant\Database\Query\Enums\LockType;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar;

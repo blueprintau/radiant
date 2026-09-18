@@ -6,7 +6,8 @@ namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Concerns\FiltersQuery;
-use BlueprintAU\Radiant\Database\Query\QueryBuilder;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
+use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
@@ -265,14 +266,15 @@ abstract class Relation
      * helpers are default implementations over it. Validation and the
      * clause live on the builder (the builder's validated where() runs).
      *
-     * @param string $column The column to compare.
+     * @param string|Expression $column The column to compare — or a raw
+     *        SQL fragment wrapped in an Expression.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The relation (chainable).
      */
     public function where(
-        string $column,
+        string|Expression $column,
         WhereOperator|string $operator,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
@@ -284,7 +286,7 @@ abstract class Relation
 
     /**
      * Add a nested where group on the constrained builder — the second
-     * sink; the `orWhereNested` sugar delegates here.
+     * sink; the trait's `orWhereNested` default delegates here.
      *
      * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
      *        where-family facade to constrain.
@@ -303,11 +305,12 @@ abstract class Relation
     /**
      * Add an order-by clause on the constrained builder.
      *
-     * @param string $column The column to order by.
+     * @param string|Expression $column The column to order by — or a raw
+     *        SQL fragment wrapped in an Expression.
      * @param SortDirection|string $direction `ASC` or `DESC`.
      * @return static The relation (chainable).
      */
-    public function orderBy(string $column, SortDirection|string $direction = SortDirection::Asc): static
+    public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
         $this->query->orderBy($column, $direction);
 
@@ -343,12 +346,14 @@ abstract class Relation
     /**
      * Set an explicit column selection on the constrained builder.
      *
-     * @param array<int, string>|string $columns A column list, or a single column.
+     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return static The relation (chainable).
      */
-    public function select(array|string $columns = ['*']): static
+    public function select(string|Expression|Aggregate ...$columns): static
     {
-        $this->query->select($columns);
+        // No args → the default `['*']` select (a variadic list cannot have
+        // a default, so the empty case is handled here).
+        $this->query->select(...$columns);
 
         return $this;
     }
@@ -369,12 +374,12 @@ abstract class Relation
     /**
      * Filter groups after aggregation on the constrained builder.
      *
-     * @param string $column The column (or aggregate expression) to compare.
+     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @return static The relation (chainable).
      */
-    public function having(string $column, WhereOperator|string $operator, mixed $value): static
+    public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
         $this->query->having($column, $operator, $value);
 

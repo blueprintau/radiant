@@ -6,7 +6,6 @@ namespace BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 
 /**
  * The first concrete descendant of AbstractPerson — merges its columns and

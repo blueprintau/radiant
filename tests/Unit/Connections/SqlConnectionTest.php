@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Connections;
 
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Expression;
-use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -216,13 +216,13 @@ final class SqlConnectionTest extends TestCase
     }
 
     /**
-     * value() honors a user-supplied alias on the column expression.
+     * value() honors a user-supplied alias on the aggregate.
      */
     public function testValueWithUserAlias(): void
     {
         $this->connection->table('users')->insert(['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30]);
 
-        $value = $this->connection->table('users')->value('sum(age) as total');
+        $value = $this->connection->table('users')->value(Aggregate::sum('age', 'total'));
         self::assertSame(30, (int) $value);
     }
 

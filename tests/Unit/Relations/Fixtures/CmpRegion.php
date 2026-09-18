@@ -8,7 +8,6 @@ use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\Relations\BelongsTo;
 use BlueprintAU\Radiant\Relations\HasMany;
 
 /**

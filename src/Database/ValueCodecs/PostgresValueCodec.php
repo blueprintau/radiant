@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\ValueCodecs;
 
-use Override;
 
 /**
  * The Postgres value codec — formats `DateTimeInterface` values with

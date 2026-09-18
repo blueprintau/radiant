@@ -6,7 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Concerns;
 
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
-use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -290,7 +290,7 @@ final class FilterVocabularyTest extends TestCase
     {
         $counts = FvPost::select('user_id')
             ->groupBy('user_id')
-            ->having('count(*)', '>', 1)
+            ->having(Aggregate::count(), '>', 1)
             ->getRaw();
 
         self::assertCount(1, $counts, 'only alicia (id 1) has more than one post');
@@ -381,7 +381,7 @@ final class FilterVocabularyTest extends TestCase
         $rows = $user->posts()
             ->select('title')
             ->groupBy('title')
-            ->having('count(*)', '>', 0)
+            ->having(Aggregate::count(), '>', 0)
             ->orderBy('title')
             ->getQuery()
             ->getRaw();

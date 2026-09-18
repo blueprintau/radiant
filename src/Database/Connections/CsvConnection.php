@@ -7,12 +7,14 @@ namespace BlueprintAU\Radiant\Database\Connections;
 use BlueprintAU\Collections\Collection;
 use BlueprintAU\Radiant\Database\Concerns\NormalizesInsertRows;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
+use BlueprintAU\Radiant\Database\Query\SqlFeature;
 use Override;
 
 /**
@@ -72,34 +74,28 @@ final class CsvConnection implements ConnectionInterface
      * Run the query and return the matching rows.
      *
      * Applies the wheres, orders, limit/offset, and aggregates entirely in
-     * PHP.
+     * PHP. The feature gate is the SAME one user code can pre-flight: this
+     * connection names every feature it CAN execute, so a query rejected
+     * here is rejected by the identical check
+     * {@see QueryBuilder::assertSupports()} would have run.
      *
      * @param QueryBuilder $query The query to run.
      * @return Collection<int,\stdClass> The matching rows, each as an object.
-     * @throws UnsupportedFeatureException When the query uses a feature CSV
-     *         can't support (joins, having, unions, locks).
+     * @throws UnsupportedFeatureException When the query uses any feature
+     *         outside the CSV-supported set (only aggregates supported).
      */
     #[Override]
     public function select(QueryBuilder $query): Collection
     {
-        if ($query->getJoins() !== []) {
-            throw new UnsupportedFeatureException('This connection does not support joins.');
-        }
-        if ($query->getUnions() !== []) {
-            throw new UnsupportedFeatureException('This connection does not support unions.');
-        }
-        if ($query->getLock() !== null) {
-            throw new UnsupportedFeatureException('This connection does not support row locks.');
-        }
-        if ($query->isDistinct()) {
-            throw new UnsupportedFeatureException('This connection does not support DISTINCT.');
-        }
+        $query->assertSupports(
+            SqlFeature::Aggregates,
+        );
 
         $rows = $this->applyWheres($query, $this->readRows());
         $rows = $this->applyOrders($query, $rows);
 
-        // Split the requested columns into plain fields and aggregate
-        // expressions (e.g. 'count(*)', 'max(price) as max_price').
+        // Split the requested columns into plain fields and typed
+        // Aggregate declarations.
         [$fields, $aggregates] = $this->splitColumns($query->getColumns());
 
         // No aggregates → apply limit/offset to the raw rows, then project.
@@ -129,6 +125,14 @@ final class CsvConnection implements ConnectionInterface
                 $computed[$c] = $bucket[0][$c] ?? null;
             }
             $out[] = $computed;
+        }
+
+        // SQL's ungrouped aggregate ALWAYS returns exactly one row — an
+        // empty filtered dataset yields one row of neutral values (count 0,
+        // max/min/avg null, sum 0), not zero rows. Synthesize it here so
+        // the CSV backend matches that contract.
+        if ($out === [] && $groups === []) {
+            $out[] = $this->computeAggregates([], $aggregates);
         }
 
         // SQL orders AFTER grouping: the declared order-by must apply to
@@ -558,16 +562,18 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Split the requested columns into plain fields and aggregate
-     * expressions.
+     * Split the requested columns into plain fields and aggregates.
      *
-     * An aggregate is anything matching `func(col)` or `func(col) as alias`.
-     * The CSV's aggregate functions are count, max, min, sum and avg.
+     * An {@see Aggregate} is evaluated in PHP over each group's rows (the
+     * supported functions are count, max, min, sum and avg); an
+     * {@see Expression} is raw SQL — not something a CSV connection can
+     * evaluate — so it is rejected.
      *
-     * @param list<string|Expression> $columns The requested columns.
-     * @return array{0: list<string>, 1: array<string, array{0: string, 1: string}>}
-     *         The plain fields, and aggregate aliases mapped to
+     * @param list<string|Expression|Aggregate> $columns The requested columns.
+     * @return array{0: list<string>, 1: array<string, array{0: string, string|Expression}>}
+     *         The plain fields, and aggregate result keys mapped to
      *         [function, column].
+     * @throws UnsupportedFeatureException When a raw Expression is selected.
      */
     private function splitColumns(array $columns): array
     {
@@ -575,13 +581,20 @@ final class CsvConnection implements ConnectionInterface
         $aggregates = [];
         foreach ($columns as $column) {
             if ($column instanceof Expression) {
-                // An Expression is raw SQL — not something a CSV connection can
-                // evaluate as an aggregate, so treat it as unsupported.
                 throw new UnsupportedFeatureException('This connection does not support raw select expressions.');
             }
-            if (preg_match('/^([a-z_]+)\((.+)\)(?:\s+as\s+(.+))?$/i', $column, $m)) {
-                $alias = $m[3] ?? $column;
-                $aggregates[$alias] = [$m[1], $m[2]];
+            if ($column instanceof Aggregate) {
+                // The read-back key: the alias when given, else the derived
+                // call text (`count(*)`, `sum(age)`) — the same value SQL
+                // returns for an aliased aggregate and the same shape the
+                // ordering path matches against.
+                $columnKey = $column->column instanceof Expression
+                    ? $column->column->value
+                    : $column->column;
+                $aggregates[$column->alias ?? "{$column->function}({$columnKey})"] = [
+                    $column->function,
+                    $column->column,
+                ];
             } else {
                 $fields[] = $column;
             }
@@ -616,16 +629,24 @@ final class CsvConnection implements ConnectionInterface
      * Compute aggregate functions over a group of rows.
      *
      * @param list<array<string,mixed>> $rows The group's rows.
-     * @param array<string, array{0: string, 1: string}> $aggregates
+     * @param array<string, array{0: string, string|Expression}> $aggregates
      *        Alias → [function, column].
      * @return array<string, mixed> Alias → computed value.
      * @throws \InvalidArgumentException When the aggregate function is
      *         unsupported.
+     * @throws UnsupportedFeatureException When an aggregate's argument is a
+     *         raw Expression — the CSV connection computes in PHP and
+     *         cannot evaluate arbitrary SQL.
      */
     private function computeAggregates(array $rows, array $aggregates): array
     {
         $result = [];
         foreach ($aggregates as $alias => [$function, $column]) {
+            if ($column instanceof Expression) {
+                throw new UnsupportedFeatureException(
+                    'This connection cannot compute an aggregate over a raw Expression argument.',
+                );
+            }
             $values = $column === '*' ? $rows : array_column($rows, $column);
             $result[$alias] = match ($function) {
                 'count' => count($values),

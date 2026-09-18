@@ -12,7 +12,6 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
-use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
 use PHPUnit\Framework\TestCase;
 

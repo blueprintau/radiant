@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -192,11 +193,11 @@ final class BuilderParityTest extends TestCase
     }
 
     /**
-     * value() on an undeclared expression passes through raw.
+     * value() on an aggregate passes through the computed value.
      */
     public function testValuePassesThroughUnknownExpressions(): void
     {
-        $value = BpUser::newQuery()->value('count(*)');
+        $value = BpUser::newQuery()->value(Aggregate::count());
 
         self::assertSame(2, (int) $value);
     }
@@ -228,13 +229,13 @@ final class BuilderParityTest extends TestCase
      */
     public function testAggregatesDecodeColumns(): void
     {
-        $result = BpUser::newQuery()->aggregates([
-            'total' => ['count', '*'],
-            'latest' => ['max', 'signed_up_at'],
-        ]);
+        $result = BpUser::newQuery()->aggregates(
+            Aggregate::count('*', 'total'),
+            Aggregate::max('signed_up_at', 'latest'),
+        );
 
-        self::assertSame(2, (int) $result['total']);
-        self::assertInstanceOf(\Carbon\Carbon::class, $result['latest']);
+        self::assertSame(2, (int) $result->total);
+        self::assertInstanceOf(\Carbon\Carbon::class, $result->latest);
     }
 
     // ---- Writes encode through the casts ----

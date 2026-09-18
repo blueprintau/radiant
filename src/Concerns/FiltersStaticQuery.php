@@ -4,30 +4,31 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Concerns;
 
-use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
+use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 
 /**
  * The shared filter vocabulary, static-forwarder shaped.
  *
  * The static twin of {@see FiltersQuery}: `Model`'s filter entry points are
- * STATIC (they start a query — `User::where(...)`), so the sink differs. Every `or*`/`where*` helper
- * funnels into {@see FiltersStaticQuery::where()} — the ONE abstract sink,
- * so a host overriding `where()` gets the whole where-family updated for
- * free. `orderBy`/`limit`/`offset`/`select`/`groupBy`/`having` are abstract
- * too — they are not `where`-derivable, so the implementer owns them
- * (typically `static::newQuery()->...`).
+ * STATIC (they start a query — `User::where(...)`), so the sink differs.
+ * A PHP trait method cannot be static AND instance at once, so this trait
+ * cannot compose {@see FiltersWhere} (whose helpers are instance
+ * methods) — it mirrors the SAME vocabulary by hand, forwarding every
+ * helper into the {@see FiltersStaticQuery::where()} static sink. When a
+ * helper is added to FiltersWhere, add its static twin here.
+ *
+ * `orderBy`/`limit`/`offset`/`select`/`groupBy`/`having` are abstract —
+ * not where-derivable, so the implementer owns them (typically
+ * `static::newQuery()->...`).
  *
  * Unlike the instance trait, static filters RETURN the builder (they
  * start a query — there is no `$this` wrapper to chain on), matching
  * Model's forwarder contract.
- *
- * Both traits exist because a PHP trait method cannot be static AND
- * instance at once — the shared shape is the code; only the sink differs.
  *
  * @phpstan-require-extends Model
  *
@@ -37,13 +38,7 @@ trait FiltersStaticQuery
 {
     /**
      * Start a model query with a where clause — the single sink every
-     * other static filter funnels into. (Intelephense models the abstract
-     * trait member as a real abstract method on the consumer; the generic
-     * on the builder's @return there reads `<static>` of the TRAIT, which
-     * mismatches Model's `ModelQueryBuilder<static of Model>` — the
-     * the `<static>` on the @return resolves to the CONSUMING class
-     * (require-extends Model), so `User::where()` is typed as a User
-     * builder — strict without a trait-level template dance.)
+     * other static filter funnels into.
      *
      * @param string $column The column to compare.
      * @param WhereOperator|string $operator The comparison operator.
@@ -60,10 +55,9 @@ trait FiltersStaticQuery
 
     /**
      * Start a model query with a nested where group — the second static
-     * sink (whereNested is structural, not where-derivable: it wraps a
-     * parenthesized group around fresh clauses).
+     * sink; the `orWhereNested` default delegates here.
      *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
+     * @param callable(WhereBuilder): void $callback Receives the group's
      *        where-family facade to constrain.
      * @param WhereBoolean $boolean The boolean connector.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
@@ -74,9 +68,21 @@ trait FiltersStaticQuery
     ): ModelQueryBuilder;
 
     /**
+     * Start a model query with a nested where group on the wrapped builder.
+     *
+     * @param callable(WhereBuilder): void $callback Receives the group's
+     *        where-family facade to constrain.
+     * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
+     */
+    public static function whereNestedGroup(callable $callback): ModelQueryBuilder
+    {
+        return static::whereNested($callback, WhereBoolean::And);
+    }
+
+    /**
      * Start a model query with an OR-connected nested where group.
      *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
+     * @param callable(WhereBuilder): void $callback Receives the group's
      *        where-family facade to constrain.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
      */
@@ -184,6 +190,46 @@ trait FiltersStaticQuery
     }
 
     /**
+     * Start a model query with a `where like` clause — the pattern is a
+     * bound value (`%`/`_` are the wildcards; everything else matches
+     * literally).
+     *
+     * @param string $column The column to test.
+     * @param string $pattern The LIKE pattern (e.g. `'%@example.com'`).
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
+     */
+    public static function whereLike(string $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    {
+        return static::where($column, WhereOperator::Like, $pattern, $boolean);
+    }
+
+    /**
+     * Start a model query with an OR-connected `where like` clause.
+     *
+     * @param string $column The column to test.
+     * @param string $pattern The LIKE pattern.
+     * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
+     */
+    public static function orWhereLike(string $column, string $pattern): ModelQueryBuilder
+    {
+        return static::where($column, WhereOperator::Like, $pattern, WhereBoolean::Or);
+    }
+
+    /**
+     * Start a model query with a `where not like` clause.
+     *
+     * @param string $column The column to test.
+     * @param string $pattern The LIKE pattern to exclude.
+     * @param WhereBoolean $boolean The boolean connector.
+     * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
+     */
+    public static function whereNotLike(string $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    {
+        return static::where($column, WhereOperator::NotLike, $pattern, $boolean);
+    }
+
+    /**
      * Start a model query with an order-by clause.
      *
      * @param string $column The column to order by.
@@ -214,10 +260,10 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an explicit column selection.
      *
-     * @param array<int, string>|string $columns A column list, or a single column.
+     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
      */
-    abstract public static function select(array|string $columns = ['*']): ModelQueryBuilder;
+    abstract public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder;
 
     /**
      * Start a model query grouped by one or more columns.
@@ -230,13 +276,13 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a having clause.
      *
-     * @param string $column The column (or aggregate expression) to compare.
+     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
      */
     abstract public static function having(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column,
         WhereOperator|string $operator,
         mixed $value,
     ): ModelQueryBuilder;

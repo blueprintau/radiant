@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Database;
 
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
-use BlueprintAU\Radiant\Database\Connections\CsvConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\DatabaseManager;
 use PHPUnit\Framework\Attributes\DataProvider;

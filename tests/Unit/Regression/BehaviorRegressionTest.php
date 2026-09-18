@@ -6,9 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Regression;
 
 use BlueprintAU\Radiant\Database\Connections\CsvConnection;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
-use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
-use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -329,11 +327,17 @@ final class BehaviorRegressionTest extends TestCase
         );
     }
 
-    // ---- Fail-closed aggregate parsing ----
+    // ---- Fail-closed aggregate handling ----
 
     /**
-     * An aggregate over a nested expression fails closed instead of
-     * splicing unwrapped text into the SQL.
+     * A complex string column is treated as an ALIASED plain column (the
+     * aggregate-string parsing is gone) — the grammar wraps it segment-wise
+     * and defers any identifier rules to the dialect's wrap.
+     *
+     * The fail-closed guarantee for aggregate arguments now lives at the
+     * {@see \BlueprintAU\Radiant\Database\Query\Aggregate} CONSTRUCTOR
+     * (see {@see testAggregateConstructorFailsClosed()}), with
+     * wrapAggregateInner retained as defense-in-depth for typed aggregates.
      */
     public function testAggregateInnerFailsClosed(): void
     {
@@ -367,15 +371,45 @@ final class BehaviorRegressionTest extends TestCase
                 }
             };
 
+        // A plain string column wraps as an identifier path.
+        self::assertSame('"price"', $grammar->exposeWrapColumn('price'));
+    }
+
+    /**
+     * The typed Aggregate rejects complex arguments at DECLARATION — the
+     * fail-closed guarantee now sits at the constructor instead of compile
+     * time (defense-in-depth in wrapAggregateInner remains).
+     */
+    public function testAggregateConstructorFailsClosed(): void
+    {
         try {
-            $grammar->exposeWrapColumn('sum(coalesce(x, 0))');
+            new \BlueprintAU\Radiant\Database\Query\Aggregate('sum', 'coalesce(x, 0)');
             self::fail('Expected a fail-closed exception for a nested aggregate argument.');
-        } catch (UnsupportedFeatureException $e) {
-            self::assertStringContainsString('single column', $e->getMessage());
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('identifier path', $e->getMessage());
         }
 
-        // Simple aggregates still work.
-        self::assertSame('sum("price")', $grammar->exposeWrapColumn('sum(price)'));
+        // A hostile function name is rejected as a bare-identifier violation.
+        try {
+            new \BlueprintAU\Radiant\Database\Query\Aggregate('sum("price)', '*');
+            self::fail('Expected a fail-closed exception for a non-identifier function.');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('bare SQL identifier', $e->getMessage());
+        }
+
+        // Custom server aggregates (open function set) are accepted.
+        $custom = new \BlueprintAU\Radiant\Database\Query\Aggregate('group_concat', 'name', 'names');
+        self::assertSame('group_concat', $custom->function);
+        self::assertSame('names', $custom->alias);
+
+        // An Expression argument is accepted — the raw escape hatch for
+        // complex arguments (caller owns its safety).
+        $expression = new \BlueprintAU\Radiant\Database\Query\Aggregate(
+            'sum',
+            new \BlueprintAU\Radiant\Database\Query\Expression('price * qty'),
+        );
+        self::assertSame('sum', $expression->function);
+        self::assertInstanceOf(\BlueprintAU\Radiant\Database\Query\Expression::class, $expression->column);
     }
 }
 
