@@ -15,7 +15,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
  * SQL-standard identity column, preferred over `SERIAL`). Postgres supports
  * dropping columns natively.
  */
-class PostgresSchemaGrammar extends SchemaGrammar
+final class PostgresSchemaGrammar extends SchemaGrammar
 {
     /**
      * Wrap an identifier in Postgres double quotes.

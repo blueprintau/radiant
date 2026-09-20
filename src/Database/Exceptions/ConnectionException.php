@@ -12,7 +12,7 @@ namespace BlueprintAU\Radiant\Database\Exceptions;
 
  * The package reports; the host logs.
  */
-class ConnectionException extends \RuntimeException
+final class ConnectionException extends \RuntimeException
 {
     /**
      * @param string $message The exception message.

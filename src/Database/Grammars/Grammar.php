@@ -237,7 +237,7 @@ abstract class Grammar
      * @param QueryBuilder $builder The query to compile.
      * @return string The compiled SQL.
      */
-    public function compileSelect(QueryBuilder $builder): string
+    final public function compileSelect(QueryBuilder $builder): string
     {
         $sql = $this->concatenate([
             'SELECT',
@@ -269,7 +269,7 @@ abstract class Grammar
      * @param string|null $pk The PK column to return, when known.
      * @return string The compiled SQL.
      */
-    public function compileInsert(QueryBuilder $builder, array $values, ?string $pk = null): string
+    final public function compileInsert(QueryBuilder $builder, array $values, ?string $pk = null): string
     {
         $rows = $this->normalizeInsertRows($values);
 
@@ -368,7 +368,7 @@ abstract class Grammar
      *         and whether executing it yields the generated key (fetch the
      *         row) or not (read `lastInsertId()` after execution).
      */
-    public function compileInsertForId(QueryBuilder $builder, array $values, string $pk): array
+    final public function compileInsertForId(QueryBuilder $builder, array $values, string $pk): array
     {
         return [
             'sql' => $this->compileInsert($builder, $values, $pk),
@@ -385,7 +385,7 @@ abstract class Grammar
      * @param array<string, mixed> $values The columns to change and their new values.
      * @return string The compiled SQL.
      */
-    public function compileUpdate(QueryBuilder $builder, array $values): string
+    final public function compileUpdate(QueryBuilder $builder, array $values): string
     {
         $sets = implode(', ', array_map(
             fn($column) => $this->wrapSegments($column) . ' = ?',
@@ -407,7 +407,7 @@ abstract class Grammar
      * @param QueryBuilder $builder The query to compile.
      * @return string The compiled SQL.
      */
-    public function compileDelete(QueryBuilder $builder): string
+    final public function compileDelete(QueryBuilder $builder): string
     {
         $sql = "DELETE FROM {$this->wrapFromTable($builder)}";
         $wheres = $this->compileWheres($builder);

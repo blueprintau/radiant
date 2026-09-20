@@ -190,7 +190,7 @@ class BelongsToMany extends Relation
      * @throws \InvalidArgumentException When a pivot column starts with
      *         the reserved `radiant_` prefix.
      */
-    public function withPivot(string ...$columns): static
+    final public function withPivot(string ...$columns): static
     {
         foreach ($columns as $column) {
             Model::assertNotReservedPrefix($column, 'pivot column');
@@ -208,7 +208,7 @@ class BelongsToMany extends Relation
      *
      * @return static The relation (chainable).
      */
-    public function withTimestamps(): static
+    final public function withTimestamps(): static
     {
         return $this->withPivot('created_at', 'updated_at');
     }
@@ -380,7 +380,7 @@ class BelongsToMany extends Relation
      * @return void
      */
     #[\Override]
-    public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
+    final public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void
     {
         if ($eagerParentKeys === null) {
             throw new \LogicException(
@@ -466,7 +466,7 @@ class BelongsToMany extends Relation
      * @return int The number of detached rows.
      * @throws \RuntimeException When the connection is not a SQL connection.
      */
-    public function detach(int|string|array|null $ids = null): int
+    final public function detach(int|string|array|null $ids = null): int
     {
         $connection = $this->sqlConnection();
 
@@ -496,7 +496,7 @@ class BelongsToMany extends Relation
      * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>} The diff.
      * @throws \RuntimeException When the connection is not a SQL connection.
      */
-    public function sync(array $ids, bool $detaching = true): array
+    final public function sync(array $ids, bool $detaching = true): array
     {
         $connection = $this->sqlConnection();
 
@@ -558,7 +558,7 @@ class BelongsToMany extends Relation
      * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>} The diff
      *         (detached is always empty).
      */
-    public function syncWithoutDetaching(array $ids): array
+    final public function syncWithoutDetaching(array $ids): array
     {
         return $this->sync($ids, detaching: false);
     }
@@ -571,7 +571,7 @@ class BelongsToMany extends Relation
      * @return array{attached: list<int|string>, detached: list<int|string>} The diff.
      * @throws \RuntimeException When the connection is not a SQL connection.
      */
-    public function toggle(array $ids): array
+    final public function toggle(array $ids): array
     {
         $connection = $this->sqlConnection();
         $current = $this->currentPivotRows($connection);

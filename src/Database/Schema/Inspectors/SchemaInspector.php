@@ -51,7 +51,7 @@ abstract class SchemaInspector
      * @param string $name The table name.
      * @return bool True when the table exists.
      */
-    public function hasTable(string $name): bool
+    final public function hasTable(string $name): bool
     {
         return in_array($name, $this->tables(), true);
     }

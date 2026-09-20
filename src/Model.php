@@ -199,7 +199,7 @@ abstract class Model
      *
      * @return string The resolved table name.
      */
-    public static function table(): string
+    final public static function table(): string
     {
         $tableName = MetadataFactory::for(static::class)->tableName;
 
@@ -221,7 +221,7 @@ abstract class Model
      *
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function newQuery(): ModelQueryBuilder
+    final public static function newQuery(): ModelQueryBuilder
     {
         return new ModelQueryBuilder(static::class, static::connection());
     }
@@ -233,7 +233,7 @@ abstract class Model
      *        for a composite key).
      * @return static|null The model, or null when not found.
      */
-    public static function find(mixed $id): ?static
+    final public static function find(mixed $id): ?static
     {
         return static::newQuery()->find($id);
     }
@@ -250,7 +250,7 @@ abstract class Model
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches the key.
      */
-    public static function findOrFail(mixed $id): static
+    final public static function findOrFail(mixed $id): static
     {
         return static::newQuery()->findOrFail($id);
     }
@@ -265,7 +265,7 @@ abstract class Model
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
      */
-    public static function firstOrFail(): static
+    final public static function firstOrFail(): static
     {
         return static::newQuery()->firstOrFail();
     }
@@ -282,7 +282,7 @@ abstract class Model
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
      * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When more than one row matches.
      */
-    public static function sole(): static
+    final public static function sole(): static
     {
         return static::newQuery()->sole();
     }
@@ -292,7 +292,7 @@ abstract class Model
      *
      * @return Collection<static> The hydrated models.
      */
-    public static function all(): Collection
+    final public static function all(): Collection
     {
         return static::newQuery()->get();
     }
@@ -312,7 +312,7 @@ abstract class Model
      * @param WhereBoolean $boolean The boolean connector.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function where(
+    final public static function where(
         string $column,
         WhereOperator|string $operator,
         mixed $value,
@@ -330,7 +330,7 @@ abstract class Model
      * @param WhereBoolean $boolean The boolean connector.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function whereNested(
+    final public static function whereNested(
         callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): ModelQueryBuilder {
@@ -344,7 +344,7 @@ abstract class Model
      * @param SortDirection|string $direction `ASC` or `DESC`.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function orderBy(
+    final public static function orderBy(
         string $column,
         SortDirection|string $direction = SortDirection::Asc,
     ): ModelQueryBuilder {
@@ -357,7 +357,7 @@ abstract class Model
      * @param int $limit The row limit.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function limit(int $limit): ModelQueryBuilder
+    final public static function limit(int $limit): ModelQueryBuilder
     {
         return static::newQuery()->limit($limit);
     }
@@ -368,7 +368,7 @@ abstract class Model
      * @param int $offset The number of rows to skip.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function offset(int $offset): ModelQueryBuilder
+    final public static function offset(int $offset): ModelQueryBuilder
     {
         return static::newQuery()->offset($offset);
     }
@@ -379,7 +379,7 @@ abstract class Model
      * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder
+    final public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder
     {
         return static::newQuery()->select(...$columns);
     }
@@ -390,7 +390,7 @@ abstract class Model
      * @param string|array<int, string> $columns The column(s) to group by.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function groupBy(string|array $columns): ModelQueryBuilder
+    final public static function groupBy(string|array $columns): ModelQueryBuilder
     {
         return static::newQuery()->groupBy($columns);
     }
@@ -403,7 +403,7 @@ abstract class Model
      * @param mixed $value The value to compare against.
      * @return ModelQueryBuilder<static> The query builder.
      */
-    public static function having(
+    final public static function having(
         string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column,
         WhereOperator|string $operator,
         mixed $value,
@@ -425,7 +425,7 @@ abstract class Model
      * @throws \InvalidArgumentException When a name does not resolve to a
      *         relation method on the model.
      */
-    public static function with(string ...$relations): ModelQueryBuilder
+    final public static function with(string ...$relations): ModelQueryBuilder
     {
         // Variadics are already a list — the @param on with() narrows it.
         /** @var list<string> $relations */
@@ -446,7 +446,7 @@ abstract class Model
      *
      * @return bool True on success (failures throw).
      */
-    public function save(): bool
+    final public function save(): bool
     {
         if (!$this->exists) {
             return $this->performInsert();

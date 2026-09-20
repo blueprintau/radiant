@@ -16,7 +16,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
  * {@see UnsupportedFeatureException} — a drop request fails fast rather than
  * silently doing nothing.
  */
-class SqliteSchemaGrammar extends SchemaGrammar
+final class SqliteSchemaGrammar extends SchemaGrammar
 {
     /**
      * Wrap an identifier in SQLite double quotes.

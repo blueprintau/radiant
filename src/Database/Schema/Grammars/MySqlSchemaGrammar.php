@@ -14,7 +14,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
  * Auto-increment renders as `AUTO_INCREMENT`; MySQL supports dropping
  * columns natively.
  */
-class MySqlSchemaGrammar extends SchemaGrammar
+final class MySqlSchemaGrammar extends SchemaGrammar
 {
     /**
      * Wrap an identifier in MySQL backticks.

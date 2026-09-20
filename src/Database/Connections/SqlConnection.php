@@ -173,7 +173,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @return QueryBuilder A new query builder, pre-bound to the table.
      */
     #[Override]
-    public function table(string $identifier): QueryBuilder
+    final public function table(string $identifier): QueryBuilder
     {
         return new QueryBuilder($this, $identifier);
     }
@@ -194,7 +194,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @throws \LogicException When the query locks rows with no transaction open.
      */
     #[Override]
-    public function select(QueryBuilder $query): Collection
+    final public function select(QueryBuilder $query): Collection
     {
         if ($query->getLock() !== null && $this->transactionLevel === 0) {
             throw new \LogicException(
@@ -217,7 +217,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @return int The number of rows inserted.
      */
     #[Override]
-    public function insert(QueryBuilder $query, array $values): int
+    final public function insert(QueryBuilder $query, array $values): int
     {
         $sql = $this->grammar->compileInsert($query, $values);
         return $this->affectingStatement($sql, $this->flattenInsertValues($values));
@@ -231,7 +231,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @return string|int|null The generated id, or null when there is none.
      */
     #[Override]
-    public function insertGetId(QueryBuilder $query, array $values): string|int|null
+    final public function insertGetId(QueryBuilder $query, array $values): string|int|null
     {
         $pk = $query->getInsertIdColumn();
 
@@ -295,7 +295,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @return int How many rows were updated.
      */
     #[Override]
-    public function update(QueryBuilder $query, array $values): int
+    final public function update(QueryBuilder $query, array $values): int
     {
         $sql = $this->grammar->compileUpdate($query, $values);
         return $this->affectingStatement($sql, array_merge(array_values($values), $query->getBindings([BindingCategory::Join, BindingCategory::Where])));
@@ -308,7 +308,7 @@ abstract class SqlConnection implements ConnectionInterface
      * @return int How many rows were deleted.
      */
     #[Override]
-    public function delete(QueryBuilder $query): int
+    final public function delete(QueryBuilder $query): int
     {
         $sql = $this->grammar->compileDelete($query);
         return $this->affectingStatement($sql, $query->getBindings([BindingCategory::Join, BindingCategory::Where]));

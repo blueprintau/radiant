@@ -198,7 +198,7 @@ class MorphToMany extends BelongsToMany
      * @return void
      */
     #[\Override]
-    public function attach(int|string|array $ids, array $pivotAttributes = []): void
+    final public function attach(int|string|array $ids, array $pivotAttributes = []): void
     {
         $connection = $this->sqlConnection();
 

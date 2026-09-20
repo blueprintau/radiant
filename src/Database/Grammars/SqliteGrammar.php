@@ -16,7 +16,7 @@ use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
  * inherits the base Grammar's {@see UnsupportedFeatureException} — a lock
  * request fails fast rather than silently dropping the lock.
  */
-class SqliteGrammar extends Grammar
+final class SqliteGrammar extends Grammar
 {
     /**
      * Wrap an identifier in SQLite double quotes.

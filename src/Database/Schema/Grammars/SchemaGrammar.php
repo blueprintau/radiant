@@ -63,7 +63,7 @@ abstract class SchemaGrammar
      * @param Blueprint $blueprint The table and columns to create.
      * @return string The compiled SQL.
      */
-    public function compileCreate(Blueprint $blueprint): string
+    final public function compileCreate(Blueprint $blueprint): string
     {
         $table = $blueprint->getTable();
         $columns = $blueprint->getColumns();
@@ -188,7 +188,7 @@ abstract class SchemaGrammar
      * @throws \InvalidArgumentException When the blueprint declares no
      *         columns to add.
      */
-    public function compileAddColumns(Blueprint $blueprint): string
+    final public function compileAddColumns(Blueprint $blueprint): string
     {
         return $this->compileAddColumn($blueprint);
     }
@@ -202,7 +202,7 @@ abstract class SchemaGrammar
      * @throws UnsupportedFeatureException When the dialect cannot drop
      *         columns (the base dialect; MySQL and Postgres override).
      */
-    public function compileDropColumns(Blueprint $blueprint): string
+    final public function compileDropColumns(Blueprint $blueprint): string
     {
         return $this->compileDropColumn($blueprint);
     }
@@ -213,7 +213,7 @@ abstract class SchemaGrammar
      * @param string $table The table name.
      * @return string The compiled SQL.
      */
-    public function compileDrop(string $table): string
+    final public function compileDrop(string $table): string
     {
         return 'DROP TABLE ' . $this->wrap($table);
     }
@@ -261,7 +261,7 @@ abstract class SchemaGrammar
      * @param Blueprint $blueprint The blueprint.
      * @return list<string> One `CREATE INDEX` statement per index.
      */
-    public function compileIndexes(Blueprint $blueprint): array
+    final public function compileIndexes(Blueprint $blueprint): array
     {
         $table = $blueprint->getTable();
 

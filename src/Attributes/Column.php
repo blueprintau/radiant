@@ -32,7 +32,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * never sees the field type.
  */
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
-class Column
+final class Column
 {
     /**
      * Create a column declaration.

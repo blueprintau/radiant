@@ -28,7 +28,7 @@ namespace BlueprintAU\Radiant\Database\Exceptions;
  * The package reports; the host logs — but what the package emits by
  * default is safe to log.
  */
-class QueryException extends \RuntimeException
+final class QueryException extends \RuntimeException
 {
     /**
      * @param string $sql The SQL that failed.

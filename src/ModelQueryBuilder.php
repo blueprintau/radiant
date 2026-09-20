@@ -46,7 +46,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * @template-covariant TModel of Model
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
  */
-class ModelQueryBuilder extends QueryBuilder
+final class ModelQueryBuilder extends QueryBuilder
 {
     /**
      * The PK column names — always force-selected so hydration and

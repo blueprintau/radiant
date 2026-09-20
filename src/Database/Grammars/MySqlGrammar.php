@@ -19,7 +19,7 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  * `lock in share mode`; an offset without a limit is padded with the
  * unsigned-bigint maximum so the offset is accepted.
  */
-class MySqlGrammar extends Grammar
+final class MySqlGrammar extends Grammar
 {
     /**
      * Wrap an identifier in MySQL backticks.

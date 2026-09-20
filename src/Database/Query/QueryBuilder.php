@@ -236,7 +236,7 @@ class QueryBuilder
      *
      * @return $this
      */
-    public function distinct(): static
+    final public function distinct(): static
     {
         $this->distinct = true;
         return $this;
@@ -255,7 +255,7 @@ class QueryBuilder
      * @param string $alias The alias the subquery is referenced by.
      * @return $this
      */
-    public function fromSub(QueryBuilder $query, string $alias): static
+    final public function fromSub(QueryBuilder $query, string $alias): static
     {
         if ($this->from instanceof QueryBuilder) {
             throw new \LogicException('The query from is already set and cannot be changed.');
@@ -315,7 +315,7 @@ class QueryBuilder
      * @param string $table The table to join.
      * @return $this
      */
-    public function crossJoin(string $table): static
+    final public function crossJoin(string $table): static
     {
         return $this->addJoin(JoinType::Cross, $table, '', '=', '');
     }
@@ -607,7 +607,7 @@ class QueryBuilder
      * @param WhereBoolean $boolean The boolean connector.
      * @return $this
      */
-    public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
+    final public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
     {
         $nested = $this->newNestedBuilder();
         $group = new WhereBuilder($nested);
@@ -753,7 +753,7 @@ class QueryBuilder
      * @param bool $all Whether to use `UNION ALL`.
      * @return $this
      */
-    public function union(QueryBuilder $query, bool $all = false): static
+    final public function union(QueryBuilder $query, bool $all = false): static
     {
         $this->unions[] = ['query' => $query, 'all' => $all];
         return $this;
@@ -766,7 +766,7 @@ class QueryBuilder
      *
      * @return $this
      */
-    public function lockForUpdate(): static
+    final public function lockForUpdate(): static
     {
         $this->lock = LockType::Update;
         return $this;
@@ -777,7 +777,7 @@ class QueryBuilder
      *
      * @return $this
      */
-    public function sharedLock(): static
+    final public function sharedLock(): static
     {
         $this->lock = LockType::Shared;
         return $this;
@@ -913,7 +913,7 @@ class QueryBuilder
      *
      * @return bool True when at least one row matches.
      */
-    public function exists(): bool
+    final public function exists(): bool
     {
         return $this->first() !== null;
     }
@@ -1029,7 +1029,7 @@ class QueryBuilder
      *
      * @return int How many rows were deleted.
      */
-    public function delete(): int
+    final public function delete(): int
     {
         return $this->connection->delete($this);
     }
@@ -1043,7 +1043,7 @@ class QueryBuilder
      *        null flattens every category in canonical order.
      * @return list<BindingValue> The flattened bindings.
      */
-    public function getBindings(?array $categories = null): array
+    final public function getBindings(?array $categories = null): array
     {
         $categories ??= array_keys($this->bindings);
         $bindings = [];
@@ -1075,7 +1075,7 @@ class QueryBuilder
      * @param list<mixed> $bindings The values to append.
      * @return void
      */
-    public function pushBindings(BindingCategory $category, array $bindings): void
+    final public function pushBindings(BindingCategory $category, array $bindings): void
     {
         array_push($this->bindings[$category->value], ...$bindings);
     }
@@ -1094,7 +1094,7 @@ class QueryBuilder
      * @param list<mixed> $bindings The values to store.
      * @return void
      */
-    public function replaceBindings(BindingCategory $category, array $bindings): void
+    final public function replaceBindings(BindingCategory $category, array $bindings): void
     {
         $this->bindings[$category->value] = $bindings;
     }
@@ -1110,7 +1110,7 @@ class QueryBuilder
      * @param BindingCategory $category The category to clear.
      * @return void
      */
-    public function clearBindings(BindingCategory $category): void
+    final public function clearBindings(BindingCategory $category): void
     {
         $this->bindings[$category->value] = [];
     }
@@ -1125,7 +1125,7 @@ class QueryBuilder
      *        it, and insertGetId() fails fast when one is attempted.
      * @return $this
      */
-    public function insertIdColumn(string $column, bool $autoIncrement = true): static
+    final public function insertIdColumn(string $column, bool $autoIncrement = true): static
     {
         $this->insertIdColumn = $column;
         $this->insertIdAutoIncrement = $autoIncrement;
@@ -1168,7 +1168,7 @@ class QueryBuilder
      *         When the query uses any feature outside the supported set —
      *         the message lists every violated feature.
      */
-    public function assertSupports(SqlFeature ...$features): static
+    final public function assertSupports(SqlFeature ...$features): static
     {
         $used = SqlFeature::usedBy($this);
         $violated = array_values(array_filter(
@@ -1191,7 +1191,7 @@ class QueryBuilder
      *
      * @return list<string|Expression|Aggregate>
      */
-    public function getColumns(): array
+    final public function getColumns(): array
     {
         return $this->columns;
     }
@@ -1201,7 +1201,7 @@ class QueryBuilder
      *
      * @return bool True when distinct.
      */
-    public function isDistinct(): bool
+    final public function isDistinct(): bool
     {
         return $this->distinct;
     }
@@ -1211,7 +1211,7 @@ class QueryBuilder
      *
      * @return string|QueryBuilder
      */
-    public function getFrom(): string|QueryBuilder
+    final public function getFrom(): string|QueryBuilder
     {
         return $this->from;
     }
@@ -1221,7 +1221,7 @@ class QueryBuilder
      *
      * @return string|null The alias, or null when there is none.
      */
-    public function getFromAlias(): ?string
+    final public function getFromAlias(): ?string
     {
         return $this->fromAlias;
     }
@@ -1231,7 +1231,7 @@ class QueryBuilder
      *
      * @return list<array{type: JoinType, table: string, wheres: list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}>}>
      */
-    public function getJoins(): array
+    final public function getJoins(): array
     {
         return $this->joins;
     }
@@ -1245,7 +1245,7 @@ class QueryBuilder
      *
      * @return list<WhereClause>
      */
-    public function getWheres(): array
+    final public function getWheres(): array
     {
         return $this->wheres;
     }
@@ -1255,7 +1255,7 @@ class QueryBuilder
      *
      * @return list<string>
      */
-    public function getGroups(): array
+    final public function getGroups(): array
     {
         return $this->groups;
     }
@@ -1265,7 +1265,7 @@ class QueryBuilder
      *
      * @return list<array{type: WhereType::Basic, column: string|Expression|Aggregate, operator: WhereOperator, value: mixed}>
      */
-    public function getHavings(): array
+    final public function getHavings(): array
     {
         return $this->havings;
     }
@@ -1281,7 +1281,7 @@ class QueryBuilder
      *
      * @return list<array{column: string|Expression, direction: SortDirection|null}>
      */
-    public function getOrders(): array
+    final public function getOrders(): array
     {
         return $this->orders;
     }
@@ -1291,7 +1291,7 @@ class QueryBuilder
      *
      * @return list<array{query: QueryBuilder, all: bool}>
      */
-    public function getUnions(): array
+    final public function getUnions(): array
     {
         return $this->unions;
     }
@@ -1301,7 +1301,7 @@ class QueryBuilder
      *
      * @return LockType|null The lock, or null when there is none.
      */
-    public function getLock(): ?LockType
+    final public function getLock(): ?LockType
     {
         return $this->lock;
     }
@@ -1311,7 +1311,7 @@ class QueryBuilder
      *
      * @return int|null The limit, or null when there is none.
      */
-    public function getLimit(): ?int
+    final public function getLimit(): ?int
     {
         return $this->limit;
     }
@@ -1321,7 +1321,7 @@ class QueryBuilder
      *
      * @return int|null The offset, or null when there is none.
      */
-    public function getOffset(): ?int
+    final public function getOffset(): ?int
     {
         return $this->offset;
     }
@@ -1331,7 +1331,7 @@ class QueryBuilder
      *
      * @return string|null The PK column, or null when unknown.
      */
-    public function getInsertIdColumn(): ?string
+    final public function getInsertIdColumn(): ?string
     {
         return $this->insertIdColumn;
     }
@@ -1342,7 +1342,7 @@ class QueryBuilder
      * @return bool True when the key is server-generated; false when a key
      *         is declared but caller-supplied; false when none is declared.
      */
-    public function isInsertIdAutoIncrement(): bool
+    final public function isInsertIdAutoIncrement(): bool
     {
         return $this->insertIdAutoIncrement ?? false;
     }

@@ -421,7 +421,7 @@ abstract class Relation
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
      */
-    public function firstOrFail(): Model
+    final public function firstOrFail(): Model
     {
         return $this->getQuery()->firstOrFail();
     }
@@ -440,7 +440,7 @@ abstract class Relation
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
      * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When the relation matches multiple rows.
      */
-    public function sole(): Model
+    final public function sole(): Model
     {
         return $this->getQuery()->sole();
     }
@@ -469,7 +469,7 @@ abstract class Relation
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The relation (chainable).
      */
-    public function where(
+    final public function where(
         string|Expression $column,
         WhereOperator|string $operator,
         mixed $value,
@@ -490,7 +490,7 @@ abstract class Relation
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The relation (chainable).
      */
-    public function whereNested(
+    final public function whereNested(
         callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
@@ -508,7 +508,7 @@ abstract class Relation
      * @param SortDirection|string $direction `ASC` or `DESC`.
      * @return static The relation (chainable).
      */
-    public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
+    final public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
         $this->composed = true;
         $this->query->orderBy($column, $direction);
@@ -522,7 +522,7 @@ abstract class Relation
      * @param int $limit The row limit.
      * @return static The relation (chainable).
      */
-    public function limit(int $limit): static
+    final public function limit(int $limit): static
     {
         $this->composed = true;
         $this->query->limit($limit);
@@ -536,7 +536,7 @@ abstract class Relation
      * @param int $offset The number of rows to skip.
      * @return static The relation (chainable).
      */
-    public function offset(int $offset): static
+    final public function offset(int $offset): static
     {
         $this->composed = true;
         $this->query->offset($offset);
@@ -550,7 +550,7 @@ abstract class Relation
      * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
      * @return static The relation (chainable).
      */
-    public function select(string|Expression|Aggregate ...$columns): static
+    final public function select(string|Expression|Aggregate ...$columns): static
     {
         // No args → the default `['*']` select (a variadic list cannot have
         // a default, so the empty case is handled here).
@@ -566,7 +566,7 @@ abstract class Relation
      * @param string|array<int, string> $columns The column(s) to group by.
      * @return static The relation (chainable).
      */
-    public function groupBy(string|array $columns): static
+    final public function groupBy(string|array $columns): static
     {
         $this->composed = true;
         $this->query->groupBy($columns);
@@ -582,7 +582,7 @@ abstract class Relation
      * @param mixed $value The value to compare against.
      * @return static The relation (chainable).
      */
-    public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
+    final public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
         $this->composed = true;
         $this->query->having($column, $operator, $value);

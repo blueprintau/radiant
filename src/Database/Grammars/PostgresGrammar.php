@@ -16,7 +16,7 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  * render as `for update` and `for share`; a bare offset is
  * valid without a limit.
  */
-class PostgresGrammar extends Grammar
+final class PostgresGrammar extends Grammar
 {
     /**
      * Wrap an identifier in Postgres double quotes.
