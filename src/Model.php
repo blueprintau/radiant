@@ -36,6 +36,29 @@ abstract class Model
     use FiltersStaticQuery;
 
     /**
+     * The reserved alias prefix for the ORM's internal select aliases.
+     *
+     * Every synthetic select alias the ORM splices into a query starts
+     * with `radiant_` — `radiant_pivot_{column}` (BelongsToMany/MorphToMany
+     * pivot columns), `radiant_pivot_parent_{table}` (the through-pivot
+     * parent key), `radiant_scalar` (aggregate reads), and
+     * `radiant_through_parent_{table}` (through-relation parent keys).
+     * The lift in {@see Model::fromRow()} treats any row field with this
+     * prefix as internal state, so a USER COLUMN named `radiant_foo`
+     * would collide: inside a pivot select it would silently hijack the
+     * pivot value slot (and vice versa). The prefix is therefore
+     * RESERVED — columns and pivot columns must not start with it.
+     *
+     * The constant lives HERE (not on a relation or the query layer)
+     * because the collision surface is model-shaped: the row lift runs
+     * on Model, and every alias-bearing feature — relations today, any
+     * query-layer feature tomorrow — turns user-named columns into
+     * these aliases. {@see Model::assertNotReservedPrefix()} is the
+     * shared fail-fast guard.
+     */
+    public const RESERVED_PREFIX = 'radiant_';
+
+    /**
      * The loaded values at hydration time, keyed by column name — the
      * hydration/save-time snapshot dirty tracking compares against.
      *
@@ -79,12 +102,53 @@ abstract class Model
     /**
      * Loaded relation results, keyed by relation name.
      *
-     * Written by the eager loader and read by getRelation(); a relation
-     * method's own lazy access never consults this — lazy always executes.
+     * Written by the eager loader (via {@see Relation::match()}) and read
+     * by {@see Relation::getResults()} through {@see Model::cachedRelation()}
+     * — a relation method's own access returns the cache when the relation
+     * is loaded and unfiltered, and executes fresh otherwise.
      *
      * @var array<string, Model|Collection<Model>|null>
      */
     protected array $relations = [];
+
+    /**
+     * Pivot values carried onto this model by a BelongsToMany eager load,
+     * keyed by pivot column name.
+     *
+     * Written by the relation's hydration pass (the `radiant_pivot_`
+     * aliased select columns); read through {@see Model::pivotValue()}.
+     * Per-call state on the instance — a model hydrated WITHOUT a pivot
+     * join simply has none.
+     *
+     * @var array<string, mixed>
+     */
+    protected array $pivotValues = [];
+
+    /**
+     * Fail fast when a column name starts with the ORM's reserved prefix.
+     *
+     * The shared guard for every surface that turns user-named columns
+     * into internal select aliases — today {@see BelongsToMany::withPivot()},
+     * tomorrow any new alias-bearing feature. Reserved names are a data
+     * bug caught at the call site, not silent row-shape corruption.
+     *
+     * @param string $column The user-facing column name to check.
+     * @param string $role What the column is (for the message).
+     * @return void
+     * @throws \InvalidArgumentException When the column starts with
+     *         {@see RESERVED_PREFIX}.
+     */
+    final public static function assertNotReservedPrefix(string $column, string $role): void
+    {
+        if (str_starts_with($column, self::RESERVED_PREFIX)) {
+            throw new \InvalidArgumentException(
+                "The {$role} [{$column}] starts with the reserved prefix ["
+                . self::RESERVED_PREFIX . '] — the ORM uses that namespace for its internal '
+                . 'select aliases (radiant_pivot_*, radiant_scalar, radiant_through_parent_*). '
+                . 'Rename the column.'
+            );
+        }
+    }
 
     // ---- Connection ----
 
@@ -899,7 +963,7 @@ abstract class Model
      *
      * @return KeyValue The key value, or a column => value map.
      */
-    public function getKeyForRefresh(): mixed
+    final public function getKeyForRefresh(): mixed
     {
         $pks = static::getPrimaryKeys();
 
@@ -931,7 +995,7 @@ abstract class Model
      * @param \stdClass $row The raw row (stdClass), keyed by column name.
      * @return static The hydrated model.
      */
-    public static function fromRow(\stdClass $row): static
+    final public static function fromRow(\stdClass $row): static
     {
         $instance = (new \ReflectionClass(static::class))->newInstanceWithoutConstructor();
 
@@ -960,7 +1024,29 @@ abstract class Model
         $instance->exists = true;
         $instance->syncOriginal();
 
+        // Pivot columns from a BelongsToMany eager select ride the row as
+        // `radiant_pivot_{column}` aliases — lift them onto the instance's
+        // pivot store (a model hydrated WITHOUT a pivot join has none).
+        foreach (get_object_vars($row) as $field => $value) {
+            if (str_starts_with($field, 'radiant_pivot_')) {
+                $instance->pivotValues[substr($field, strlen('radiant_pivot_'))] = $value;
+            }
+        }
+
         return $instance;
+    }
+
+    /**
+     * A pivot value carried onto this model by a BelongsToMany eager load.
+     *
+     * @param string $column The pivot column name (as passed to
+     *        `withPivot()`).
+     * @return mixed The value, or null when the model was not loaded with
+     *         that pivot column.
+     */
+    final public function pivotValue(string $column): mixed
+    {
+        return $this->pivotValues[$column] ?? null;
     }
 
     /**
@@ -1017,7 +1103,7 @@ abstract class Model
      * @return mixed The decoded (typed-property-shaped) value, or null when
      *         unset.
      */
-    public function attribute(string $columnName): mixed
+    final public function attribute(string $columnName): mixed
     {
         $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
 
@@ -1054,7 +1140,7 @@ abstract class Model
      * @throws \InvalidArgumentException When the column is backed by a
      *         typed property (write the property directly), or is unknown.
      */
-    public function setAttribute(string $columnName, mixed $value): void
+    final public function setAttribute(string $columnName, mixed $value): void
     {
         $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
 
@@ -1160,6 +1246,9 @@ abstract class Model
      * declared explicitly as a matching column list (a composite FK cannot
      * be derived by convention).
      *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
      * @param string|list<string>|null $foreignKey The FK column (or column
      *        list) on the related table.
      * @param string|list<string>|null $localKey The key column (or column
@@ -1167,9 +1256,6 @@ abstract class Model
      * @return Relations\HasMany<TRelated> The relation (a lazily-executed query).
      * @throws \InvalidArgumentException When the FK column does not exist
      *         on the related model.
-     *
-     * @template TRelated of Model
-     * @param class-string<TRelated> $related The related model class.
      */
     protected function hasMany(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasMany
     {
@@ -1179,12 +1265,16 @@ abstract class Model
         self::assertColumnExists($related, $foreignKey, 'foreign key');
         self::assertColumnExists(static::class, $localKey, 'local key');
 
-        return new Relations\HasMany($this, $related, $foreignKey, $localKey);
+        return (new Relations\HasMany($this, $related, $foreignKey, $localKey))
+            ->withName(self::relationName());
     }
 
     /**
      * Composite keys follow the same rules as {@see Model::hasMany()}.
      *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
      * @param string|list<string>|null $foreignKey The FK column (or column
      *        list) on the related table.
      * @param string|list<string>|null $localKey The key column (or column
@@ -1192,9 +1282,6 @@ abstract class Model
      * @return Relations\HasOne<TRelated> The relation.
      * @throws \InvalidArgumentException When the FK column does not exist
      *         on the related model.
-     *
-     * @template TRelated of Model
-     * @param class-string<TRelated> $related The related model class.
      */
     protected function hasOne(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasOne
     {
@@ -1204,7 +1291,8 @@ abstract class Model
         self::assertColumnExists($related, $foreignKey, 'foreign key');
         self::assertColumnExists(static::class, $localKey, 'local key');
 
-        return new Relations\HasOne($this, $related, $foreignKey, $localKey);
+        return (new Relations\HasOne($this, $related, $foreignKey, $localKey))
+            ->withName(self::relationName());
     }
 
     /**
@@ -1214,6 +1302,9 @@ abstract class Model
      * defaults to its full PK column list — and `$foreignKey` must then be
      * declared explicitly as a matching column list.
      *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related (owning) model class.
      * @param string|list<string>|null $foreignKey The FK column (or column
      *        list) on THIS table.
      * @param string|list<string>|null $ownerKey The key column (or column
@@ -1221,9 +1312,6 @@ abstract class Model
      * @return Relations\BelongsTo<TRelated> The relation.
      * @throws \InvalidArgumentException When the FK column does not exist
      *         on this model.
-     *
-     * @template TRelated of Model
-     * @param class-string<TRelated> $related The related (owning) model class.
      */
     protected function belongsTo(string $related, string|array|null $foreignKey = null, string|array|null $ownerKey = null): Relations\BelongsTo
     {
@@ -1233,7 +1321,8 @@ abstract class Model
         self::assertColumnExists(static::class, $foreignKey, 'foreign key');
         self::assertColumnExists($related, $ownerKey, 'owner key');
 
-        return new Relations\BelongsTo($this, $related, $foreignKey, $ownerKey);
+        return (new Relations\BelongsTo($this, $related, $foreignKey, $ownerKey))
+            ->withName(self::relationName());
     }
 
     /**
@@ -1244,6 +1333,10 @@ abstract class Model
      * and are overridable for non-standard keys. Composite keys are declared
      * as matching column lists on every side that is composite.
      *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The final related model class.
+     * @param class-string<Model> $through The intermediate model class.
      * @param string|list<string>|null $firstKey FK column (or list) on the
      *        intermediate table → this model.
      * @param string|list<string>|null $secondKey FK column (or list) on the
@@ -1253,10 +1346,6 @@ abstract class Model
      * @return Relations\HasOneThrough<TRelated> The relation.
      * @throws \InvalidArgumentException When any derived column does not
      *         exist on its model.
-     *
-     * @template TRelated of Model
-     * @param class-string<TRelated> $related The final related model class.
-     * @param class-string<Model> $through The intermediate model class.
      */
     protected function hasOneThrough(
         string $related,
@@ -1273,12 +1362,17 @@ abstract class Model
         self::assertColumnExists($related, $secondKey, 'second key');
         self::assertColumnExists(static::class, $localKey, 'local key');
 
-        return new Relations\HasOneThrough($this, $related, $through, $firstKey, $secondKey, $localKey);
+        return (new Relations\HasOneThrough($this, $related, $through, $firstKey, $secondKey, $localKey))
+            ->withName(self::relationName());
     }
 
     /**
      * A one-to-many two-hop relation through an intermediate model.
      *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The final related model class.
+     * @param class-string<Model> $through The intermediate model class.
      * @param string|list<string>|null $firstKey FK column (or list) on the
      *        intermediate table → this model.
      * @param string|list<string>|null $secondKey FK column (or list) on the
@@ -1288,10 +1382,6 @@ abstract class Model
      * @return Relations\HasManyThrough<TRelated> The relation.
      * @throws \InvalidArgumentException When any derived column does not
      *         exist on its model.
-     *
-     * @template TRelated of Model
-     * @param class-string<TRelated> $related The final related model class.
-     * @param class-string<Model> $through The intermediate model class.
      */
     protected function hasManyThrough(
         string $related,
@@ -1308,7 +1398,311 @@ abstract class Model
         self::assertColumnExists($related, $secondKey, 'second key');
         self::assertColumnExists(static::class, $localKey, 'local key');
 
-        return new Relations\HasManyThrough($this, $related, $through, $firstKey, $secondKey, $localKey);
+        return (new Relations\HasManyThrough($this, $related, $through, $firstKey, $secondKey, $localKey))
+            ->withName(self::relationName());
+    }
+
+    /**
+     * A one-to-many POLYMORPHIC relation: the related table's FK + type
+     * columns point back at models of ANY class.
+     *
+     * `Post::comments()` → `Comment::newQuery()->where(commentable_id,
+     * $post->id)->where(commentable_type, Post::class)`. The type column
+     * defaults to `{morphName}_type` and the FK to `{morphName}_id` — pass
+     * the morph name (e.g. `'commentable'`) or the explicit columns.
+     *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
+     * @param string|null $morphName The morph alias prefix — derives both
+     *        column names when the explicit ones are null.
+     * @param string|null $foreignKey The FK column on the related table.
+     * @param string|null $localKey The key column on this table.
+     * @param string|null $typeColumn The type-discriminator column on the
+     *        related table.
+     * @return Relations\MorphMany<TRelated> The relation.
+     * @throws \InvalidArgumentException When a derived column does not
+     *         exist on its model.
+     */
+    protected function morphMany(
+        string $related,
+        ?string $morphName = null,
+        ?string $foreignKey = null,
+        ?string $localKey = null,
+        ?string $typeColumn = null,
+    ): Relations\MorphMany {
+        $localKey ??= self::defaultLocalKey();
+
+        if (is_array($localKey)) {
+            throw new \LogicException(
+                'morphMany() does not support composite keys; the morph (type, key) '
+                . 'pair is a scalar-key convention.'
+            );
+        }
+
+        $foreignKey ??= self::defaultMorphForeignKey($morphName, $related, $foreignKey, $typeColumn);
+        $typeColumn ??= self::defaultMorphTypeColumn($morphName, $related, $foreignKey);
+
+        self::assertColumnExists($related, $foreignKey, 'foreign key');
+        self::assertColumnExists($related, $typeColumn, 'morph type');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return (new Relations\MorphMany($this, $related, $foreignKey, $localKey, $typeColumn))
+            ->withName(self::relationName());
+    }
+
+    /**
+     * A one-to-one POLYMORPHIC relation — {@see Model::morphMany()}'s
+     * first row, stably ordered by the related PK.
+     *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
+     * @param string|null $morphName The morph alias prefix — derives both
+     *        column names when the explicit ones are null.
+     * @param string|null $foreignKey The FK column on the related table.
+     * @param string|null $localKey The key column on this table.
+     * @param string|null $typeColumn The type-discriminator column on the
+     *        related table.
+     * @return Relations\MorphOne<TRelated> The relation.
+     * @throws \InvalidArgumentException When a derived column does not
+     *         exist on its model.
+     */
+    protected function morphOne(
+        string $related,
+        ?string $morphName = null,
+        ?string $foreignKey = null,
+        ?string $localKey = null,
+        ?string $typeColumn = null,
+    ): Relations\MorphOne {
+        $localKey ??= self::defaultLocalKey();
+
+        if (is_array($localKey)) {
+            throw new \LogicException(
+                'morphOne() does not support composite keys; the morph (type, key) '
+                . 'pair is a scalar-key convention.'
+            );
+        }
+
+        $foreignKey ??= self::defaultMorphForeignKey($morphName, $related, $foreignKey, $typeColumn);
+        $typeColumn ??= self::defaultMorphTypeColumn($morphName, $related, $foreignKey);
+
+        self::assertColumnExists($related, $foreignKey, 'foreign key');
+        self::assertColumnExists($related, $typeColumn, 'morph type');
+        self::assertColumnExists(static::class, $localKey, 'local key');
+
+        return (new Relations\MorphOne($this, $related, $foreignKey, $localKey, $typeColumn))
+            ->withName(self::relationName());
+    }
+
+    /**
+     * The inverse POLYMORPHIC relation: this model's (type, key) pair
+     * points at a row of ANY model table, resolved per row from the type
+     * column.
+     *
+     * `Comment::commentable()` reads `commentable_type` + `commentable_id`
+     * and queries whichever model class the type column names. The owner
+     * key defaults to the TARGET's primary key (resolved per query — the
+     * target class is dynamic).
+     *
+     * Typing: the `$types` allowlist drives the static type. With
+     * `morphTo('commentable', types: [Post::class, Video::class])` the
+     * relation's reads narrow to `(Post|Video)|null` — the same classes
+     * the runtime allowlist enforces. Without it the result is the honest
+     * `Model|null` (any class can resolve) and callers narrow with a
+     * local `instanceof`.
+     *
+     * @template TRelated of Model The classes the allowlist admits —
+     *         inferred from `$types`; never resolved when `$types` is null.
+     *
+     * @param string|null $morphName The morph alias prefix — derives both
+     *        column names when the explicit ones are null.
+     * @param string|null $typeColumn The type-discriminator column on THIS
+     *        table.
+     * @param string|null $foreignKey The FK column on THIS table.
+     * @param string|null $ownerKey The key column on the target tables.
+     * @param list<class-string<TRelated>>|null $types The optional
+     *        morph-alias allowlist — null resolves any model class; a
+     *        value outside the list fails fast at resolution.
+     * @return ($types is null ? Relations\MorphTo<Model> : Relations\MorphTo<TRelated>) The relation:
+     *         the Model bound when no allowlist is declared (any class can
+     *         resolve — the honest contract), the allowlist-narrowed
+     *         template when one is.
+     * @throws \InvalidArgumentException When a derived column does not
+     *         exist on this model.
+     */
+    protected function morphTo(
+        ?string $morphName = null,
+        ?string $typeColumn = null,
+        ?string $foreignKey = null,
+        ?string $ownerKey = null,
+        ?array $types = null,
+    ): Relations\MorphTo {
+        $typeColumn ??= self::defaultMorphTypeColumn($morphName, static::class, $typeColumn);
+        $foreignKey ??= self::defaultMorphForeignKey($morphName, static::class, $foreignKey, $typeColumn);
+        $ownerKey ??= 'id';
+
+        self::assertColumnExists(static::class, $typeColumn, 'morph type');
+        self::assertColumnExists(static::class, $foreignKey, 'foreign key');
+
+        return (new Relations\MorphTo($this, $typeColumn, $foreignKey, $ownerKey, $types))
+            ->withName(self::relationName());
+    }
+
+    /**
+     * The morph FK default: `{morphName}_id`, or the caller's explicit
+     * type column's `_type` → `_id` mirror.
+     *
+     * @param string|null $morphName The morph alias prefix.
+     * @param class-string<Model> $model The model the columns live on (for
+     *        the error message).
+     * @param string|null $foreignKey The caller's explicit FK (null here —
+     *        the param exists for the mirror rule).
+     * @param string|null $typeColumn The caller's explicit type column.
+     * @return string The FK column name.
+     * @throws \InvalidArgumentException When neither a morph name nor an
+     *         explicit type column is available to derive from.
+     */
+    private static function defaultMorphForeignKey(
+        ?string $morphName,
+        string $model,
+        ?string $foreignKey,
+        ?string $typeColumn,
+    ): string {
+        if ($morphName !== null && $morphName !== '') {
+            return $morphName . '_id';
+        }
+
+        if ($typeColumn !== null && str_ends_with($typeColumn, '_type')) {
+            return substr($typeColumn, 0, -strlen('_type')) . '_id';
+        }
+
+        throw new \InvalidArgumentException(
+            "A morph relation on [{$model}] needs a morph name (or an explicit "
+            . '`_type`-suffixed type column) to derive its column names.'
+        );
+    }
+
+    /**
+     * The morph type-column default: `{morphName}_type`, or the caller's
+     * explicit FK column's `_id` → `_type` mirror.
+     *
+     * @param string|null $morphName The morph alias prefix.
+     * @param class-string<Model> $model The model the columns live on (for
+     *        the error message).
+     * @param string|null $foreignKey The caller's explicit FK column.
+     * @return string The type column name.
+     * @throws \InvalidArgumentException When neither a morph name nor an
+     *         explicit FK column is available to derive from.
+     */
+    private static function defaultMorphTypeColumn(
+        ?string $morphName,
+        string $model,
+        ?string $foreignKey,
+    ): string {
+        if ($morphName !== null && $morphName !== '') {
+            return $morphName . '_type';
+        }
+
+        if ($foreignKey !== null && str_ends_with($foreignKey, '_id')) {
+            return substr($foreignKey, 0, -strlen('_id')) . '_type';
+        }
+
+        throw new \InvalidArgumentException(
+            "A morph relation on [{$model}] needs a morph name (or an explicit "
+            . '`_id`-suffixed foreign key) to derive its column names.'
+        );
+    }
+
+    /**
+     * A many-to-many relation through a pivot table.
+     *
+     * `Post::tags()` links through `posts_tags` (the deterministic
+     * `{parentTable}_{relatedTable}` default — pass `$table` for any other
+     * name). The pivot key columns default to `{parentTable}_id` /
+     * `{relatedTable}_id`; both models must declare a single named primary
+     * key (pivot keys are scalar-only).
+     *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
+     * @param string|null $table The pivot table name.
+     * @param string|null $foreignPivotKey The pivot column → this model.
+     * @param string|null $relatedPivotKey The pivot column → related.
+     * @param string|null $parentKey This model's key column.
+     * @param string|null $relatedKey The related model's key column.
+     * @return Relations\BelongsToMany<TRelated> The relation.
+     * @throws \InvalidArgumentException When a model's primary key is
+     *         composite or unnamed.
+     */
+    protected function belongsToMany(
+        string $related,
+        ?string $table = null,
+        ?string $foreignPivotKey = null,
+        ?string $relatedPivotKey = null,
+        ?string $parentKey = null,
+        ?string $relatedKey = null,
+    ): Relations\BelongsToMany {
+        return (new Relations\BelongsToMany(
+            $this,
+            $related,
+            $table,
+            $foreignPivotKey,
+            $relatedPivotKey,
+            $parentKey,
+            $relatedKey,
+        ))->withName(self::relationName());
+    }
+
+    /**
+     * A many-to-many POLYMORPHIC relation: the pivot's parent side is a
+     * (type, key) pair, so models of ANY class share the pool.
+     *
+     * `Post::tags()` and `Video::tags()` both link through `taggables`
+     * (the `{morphName}{relatedTable}` default pivot name); every query
+     * filters the pivot's `{morphName}_type` to THIS class's FQCN.
+     *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class.
+     * @param string $morphName The morph alias prefix — the pivot's
+     *        `{morphName}_id`/`{morphName}_type` columns.
+     * @param string|null $table The pivot table name.
+     * @return Relations\MorphToMany<TRelated> The relation.
+     * @throws \InvalidArgumentException When a model's primary key is
+     *         composite or unnamed.
+     */
+    protected function morphToMany(
+        string $related,
+        string $morphName,
+        ?string $table = null,
+    ): Relations\MorphToMany {
+        return (new Relations\MorphToMany($this, $related, $morphName, $table))
+            ->withName(self::relationName());
+    }
+
+    /**
+     * The INVERSE polymorphic many-to-many relation: this model is the
+     * RELATED side of the pivot (`Tag::posts()` lists every post tagged
+     * with it).
+     *
+     * @template TRelated of Model
+     *
+     * @param class-string<TRelated> $related The related model class (the
+     *        morph PARENT side — e.g. Post when called on Tag).
+     * @param string $morphName The morph alias prefix.
+     * @param string|null $table The pivot table name.
+     * @return Relations\MorphToMany<TRelated> The relation.
+     * @throws \InvalidArgumentException When a model's primary key is
+     *         composite or unnamed.
+     */
+    protected function morphedByMany(
+        string $related,
+        string $morphName,
+        ?string $table = null,
+    ): Relations\MorphToMany {
+        return (new Relations\MorphToMany($this, $related, $morphName, $table, inverse: true))
+            ->withName(self::relationName());
     }
 
     /**
@@ -1323,7 +1717,7 @@ abstract class Model
      *        (HasMany/through), or null (an empty single-valued relation).
      * @return static The model.
      */
-    public function setRelation(string $name, Model|Collection|null $value): static
+    final public function setRelation(string $name, Model|Collection|null $value): static
     {
         $this->relations[$name] = $value;
 
@@ -1331,28 +1725,22 @@ abstract class Model
     }
 
     /**
-     * A loaded relation's cached result.
+     * A loaded relation's cached result — the loader's read path.
      *
-     * Pass `$related` to TYPE the result — the conditional return narrows
-     * it statically: `$user->getRelation('posts', Post::class)` reads as
-     * `Post|Collection<Post>|null` with no local instanceof dance, and the
-     * narrowing is BACKED by a runtime check (a mismatch throws — a
-     * name/class pair that disagrees is a caller bug, not an empty result).
-     * Callers who want the loose contract omit the arg and keep
-     * `Model|Collection<Model>|null`.
+     * Internal: the eager loader reads nested children through it, and
+     * {@see Relation::getResults()} consults it for the cache-backed read.
+     * Public so the Relations namespace can reach it (the relation owns
+     * the cache-hit decision); there is deliberately NO public typed
+     * accessor — callers read relations through the relation METHOD
+     * (`$user->posts()->getResults()`), which is typed by the method's
+     * declared return and shares this cache when the relation is loaded
+     * and unfiltered.
      *
      * @param string $name The relation name.
-     * @template TRelated of Model
-     * @param class-string<TRelated>|null $related The expected related model
-     *        class. Null keeps the untyped `Model|Collection|null` contract.
-     * @return ($related is null ? Model|Collection<Model>|null : TRelated|Collection<TRelated>|null) The cached
-     *         result, or null when not loaded (or loaded empty). With
-     *         `$related`, runtime-verified to be `TRelated` (single) or a
-     *         collection of `TRelated` items.
-     * @throws \InvalidArgumentException When `$related` is given and the
-     *         cached relation's class does not match it.
+     * @return Model|Collection<Model>|null The cached result, or null when
+     *         not loaded (or loaded empty).
      */
-    public function getRelation(string $name, ?string $related = null): Model|Collection|null
+    final public function cachedRelation(string $name): Model|Collection|null
     {
         $value = $this->relations[$name] ?? null;
 
@@ -1360,31 +1748,62 @@ abstract class Model
             return null;
         }
 
-        if ($related !== null) {
-            if ($value instanceof Model) {
-                if (!$value instanceof $related) {
-                    throw new \InvalidArgumentException(
-                        'Relation [' . $name . '] on [' . static::class . '] holds a ['
-                        . $value::class . '] but [' . $related . '] was expected.'
-                    );
+        return $value;
+    }
+
+    /**
+     * The relation-method name the CURRENT factory call came from.
+     *
+     * The factories (`hasMany` etc.) are called from relation methods
+     * (`posts()`); the relation needs that caller's name as its cache key
+     * so {@see Relation::getResults()} can find the eagerly-loaded result.
+     * A bounded backtrace reads it — no relation method has to pass its
+     * own name, and a typo'd explicit name cannot silently break the
+     * cache. The walk skips every frame INSIDE the ORM's own namespace
+     * (the factories, any internal helper a relation method delegates
+     * through, the loader) and takes the first frame outside it — a
+     * factory called from a helper method still resolves to the relation
+     * method above it. The ORM's own test namespace is EXEMPT from the
+     * skip: this repo's fixtures are the stand-in for user models, so
+     * `RelUser::posts()` must stamp just like a model in a host app
+     * would. A factory reached from anywhere else (the loader's prototype
+     * invocation, user code that is not a relation method) stamps nothing
+     * and the cache path stays off.
+     *
+     * @return string|null The calling relation method's name, or null when
+     *         the factory was not called from a relation method.
+     */
+    private static function relationName(): string|null
+    {
+        $ormNamespace = __NAMESPACE__ . '\\';
+        // This repo's fixtures are user-model stand-ins — not plumbing.
+        $exemptNamespace = __NAMESPACE__ . '\\Tests\\';
+
+        // Frame 0 is relationName() itself, frame 1 the factory — the
+        // caller of interest is frame 2 and up.
+        $frames = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 6);
+
+        foreach (array_slice($frames, 2) as $frame) {
+            $class = $frame['class'] ?? null;
+
+            if (is_string($class)) {
+                $isFramework = str_starts_with($class, $ormNamespace)
+                    && !str_starts_with($class, $exemptNamespace);
+
+                if (!$isFramework) {
+                    return $frame['function'];
                 }
 
-                return $value;
+                continue;
             }
 
-            foreach ($value as $item) {
-                if (!$item instanceof $related) {
-                    throw new \InvalidArgumentException(
-                        'Relation [' . $name . '] on [' . static::class . '] holds a collection with a ['
-                        . $item::class . '] item but [' . $related . '] was expected.'
-                    );
-                }
-            }
-
-            return $value;
+            // A class-less frame is a plain function — never a relation
+            // method (those are class methods), so the factory was not
+            // called from one.
+            return null;
         }
 
-        return $value;
+        return null;
     }
 
     /**
@@ -1393,7 +1812,7 @@ abstract class Model
      * @param string $name The relation name.
      * @return bool True when the relation result is cached.
      */
-    public function relationLoaded(string $name): bool
+    final public function relationLoaded(string $name): bool
     {
         return array_key_exists($name, $this->relations);
     }

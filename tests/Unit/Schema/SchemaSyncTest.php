@@ -395,9 +395,11 @@ final class SchemaSyncTest extends DatabaseTestCase
         // generates. The live inspector's column shape reports
         // `autoIncrement` via the DDL clause; assert through the raw SQL
         // instead (the shape has no autoIncrement key by design).
-        $ddl = (string) $this->connection->selectSql(
+        $ddlRow = $this->connection->selectSql(
             "SELECT sql FROM sqlite_master WHERE name = 'sync_admins'",
-        )->first()->sql;
+        )->first();
+        self::assertNotNull($ddlRow);
+        $ddl = (string) $ddlRow->sql;
         self::assertStringNotContainsString('AUTOINCREMENT', $ddl);
         self::assertStringContainsString('FOREIGN KEY ("id") REFERENCES "sync_users" ("id")', $ddl);
 

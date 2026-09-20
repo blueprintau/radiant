@@ -85,7 +85,9 @@ final class SqlConnectionTest extends TestCase
             ->get();
 
         self::assertCount(1, $rows);
-        self::assertSame('Alice', $rows->first()->name);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame('Alice', $first->name);
     }
 
     /**
@@ -134,7 +136,9 @@ final class SqlConnectionTest extends TestCase
         $rows = $this->connection->selectSql('SELECT * FROM users WHERE name = ?', ['Alice']);
 
         self::assertCount(1, $rows);
-        self::assertSame('Alice', $rows->first()->name);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame('Alice', $first->name);
     }
 
     /**

@@ -92,6 +92,8 @@ final class CsvHardeningTest extends TestCase
 
         $rows = $db->table('t')->get();
         $this->assertCount(3, $rows);
+        $this->assertNotNull($rows[2]);
+        $this->assertNotNull($rows[0]);
         $this->assertSame('Linus', $rows[2]->name);
         $this->assertSame('Ada', $rows[0]->name);
     }
@@ -190,6 +192,8 @@ final class CsvHardeningTest extends TestCase
         $rows = $db->table('t')->orderBy('id')->get();
         // Row 2's name must still be under `name`, not shifted into `email`.
         // (CSV reads stringify every value.)
+        $this->assertNotNull($rows[1]);
+        $this->assertNotNull($rows[0]);
         $this->assertSame('Hopper', $rows[1]->name);
         $this->assertSame('2', $rows[1]->id);
         // Row 1's new column lands under the right header.
@@ -224,6 +228,8 @@ final class CsvHardeningTest extends TestCase
         $reader = new CsvConnection($this->path);
         $rows = $reader->table('t')->orderBy('id')->get();
         $this->assertCount(3, $rows);
+        $this->assertNotNull($rows[0]);
+        $this->assertNotNull($rows[2]);
         $this->assertSame('1', $rows[0]->id);
         $this->assertSame('B-Wrote', $rows[0]->name, 'writer B\'s update must survive writer A\'s rename');
         $this->assertSame('3', $rows[2]->id);

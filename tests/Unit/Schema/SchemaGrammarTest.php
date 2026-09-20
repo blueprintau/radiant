@@ -687,7 +687,9 @@ final class SchemaGrammarTest extends TestCase
         $indexes = $connection->selectSql(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'posts'",
         );
-        self::assertSame('posts_user_id_index', $indexes->first()->name);
+        $indexRow = $indexes->first();
+        self::assertNotNull($indexRow);
+        self::assertSame('posts_user_id_index', $indexRow->name);
     }
 
     /**

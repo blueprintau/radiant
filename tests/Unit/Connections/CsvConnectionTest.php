@@ -69,6 +69,7 @@ final class CsvConnectionTest extends TestCase
         $rows = $csv->table('users')->get();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
         self::assertSame('1', $rows[0]->id);
         self::assertSame('Alice', $rows[0]->name);
     }
@@ -89,6 +90,8 @@ final class CsvConnectionTest extends TestCase
             ->get();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
         self::assertSame(['1', '3'], [$rows[0]->id, $rows[1]->id]);
     }
 
@@ -109,6 +112,7 @@ final class CsvConnectionTest extends TestCase
             ->get();
 
         self::assertCount(1, $rows);
+        self::assertNotNull($rows[0]);
         self::assertSame('1', $rows[0]->id); // second oldest = Alice (age 30)
     }
 
@@ -165,6 +169,7 @@ final class CsvConnectionTest extends TestCase
         self::assertSame(1, $affected);
         $rows = $csv->table('users')->get();
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[1]);
         self::assertSame('Bob', $rows[1]->name);
     }
 
@@ -183,6 +188,7 @@ final class CsvConnectionTest extends TestCase
 
         self::assertSame(1, $affected);
         $rows = $csv->table('users')->orderBy('id')->get();
+        self::assertNotNull($rows[1]);
         self::assertSame('26', $rows[1]->age);
     }
 

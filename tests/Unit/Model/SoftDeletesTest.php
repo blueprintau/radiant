@@ -170,7 +170,9 @@ final class SoftDeletesTest extends DatabaseTestCase
         // The renamed column carries the timestamp in the database.
         $raw = $this->connection->table('sd_renamed_posts')->get();
         self::assertCount(1, $raw);
-        self::assertNotNull($raw[0]->renamed_at);
+        $rawRow = $raw[0] ?? null;
+        self::assertNotNull($rawRow);
+        self::assertNotNull($rawRow->renamed_at);
     }
 
     /**

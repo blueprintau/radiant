@@ -165,14 +165,16 @@ final class CollectionTest extends DatabaseTestCase
         $this->seed();
 
         $users = CollUser::all();
+        self::assertNotNull($users[0]);
         self::assertFalse($users[0]->relationLoaded('posts'));
 
         $users->load('posts');
 
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->getRelation('posts'));
+        self::assertCount(2, $users[0]->posts()->getResults());
+        self::assertNotNull($users[1]);
         self::assertTrue($users[1]->relationLoaded('posts'));
-        self::assertCount(0, $users[1]->getRelation('posts'));
+        self::assertCount(0, $users[1]->posts()->getResults());
     }
 
     /**
@@ -208,10 +210,12 @@ final class CollectionTest extends DatabaseTestCase
         $this->seed();
 
         $users = CollUser::all();
+        self::assertNotNull($users[0]);
         $users[0]->email = 'changed-in-memory@example.com';
 
         $users->fresh();
 
+        self::assertNotNull($users[0]);
         self::assertSame('ada@example.com', $users[0]->email);
     }
 
@@ -232,6 +236,7 @@ final class CollectionTest extends DatabaseTestCase
         $users->fresh();
 
         self::assertCount(2, $users, 'the deleted row keeps its original model in place');
+        self::assertNotNull($users[1]);
         self::assertSame($ids['id2'], $users[1]->id);
     }
 
@@ -250,6 +255,8 @@ final class CollectionTest extends DatabaseTestCase
 
         $users->fresh();
 
+        self::assertNotNull($users[0]);
+        self::assertNotNull($users[1]);
         self::assertSame($ids['id1'], $users[0]->id);
         self::assertSame($ids['id2'], $users[1]->id);
         self::assertSame('updated@example.com', $users[1]->email, 'row 2 was replaced by its fresh hydration');

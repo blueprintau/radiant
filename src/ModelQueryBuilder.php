@@ -305,7 +305,16 @@ class ModelQueryBuilder extends QueryBuilder
 
         foreach (explode('.', $path) as $segment) {
             $relation = static::resolveRelation($class, $segment, $path);
-            $class = $relation->getRelated();
+            $classes = $relation->relatedClasses();
+
+            if ($classes === []) {
+                // A DYNAMIC related set (MorphTo) — the deeper segments
+                // cannot be validated statically; the runtime recursion
+                // resolves them off the actual loaded models.
+                return;
+            }
+
+            $class = $classes[0];
         }
     }
 
@@ -484,7 +493,12 @@ class ModelQueryBuilder extends QueryBuilder
 
         if ($keys === []) {
             foreach ($parents as $parent) {
-                $parent->setRelation($name, Collection::make([]));
+                // A single-valued relation (HasOne/BelongsTo/MorphTo) loads
+                // as NULL when no parent carries a key; a to-many relation
+                // loads as an EMPTY collection. The relation's cardinality
+                // decides — a probe match against an empty result set
+                // keeps the shapes honest without special-casing names.
+                $relation->match([$parent], Collection::make([]), $name, []);
             }
 
             return;
@@ -502,7 +516,7 @@ class ModelQueryBuilder extends QueryBuilder
             $children = [];
 
             foreach ($parents as $parent) {
-                $value = $parent->getRelation($name);
+                $value = $parent->cachedRelation($name);
 
                 if ($value instanceof Collection) {
                     foreach ($value as $child) {
@@ -980,7 +994,13 @@ class ModelQueryBuilder extends QueryBuilder
             throw new MultipleRecordsFoundException($rowCount, $this->modelClass);
         }
 
-        $model = $this->modelClass::fromRow($rows[0]);
+        $row = $rows[0] ?? null;
+
+        if (!$row instanceof \stdClass) {
+            throw new ModelNotFoundException($this->modelClass);
+        }
+
+        $model = $this->modelClass::fromRow($row);
 
         // Eager loads apply to single-model reads too — same tail as first().
         if ($this->eagerLoad !== []) {

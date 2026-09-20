@@ -302,6 +302,8 @@ final class RelationsE2ETest extends DatabaseTestCase
         $posts = $user->posts()->orderBy('title')->getResults();
 
         self::assertCount(2, $posts);
+        self::assertNotNull($posts[0]);
+        self::assertNotNull($posts[1]);
         self::assertSame('First', $posts[0]->title);
         self::assertSame('Second', $posts[1]->title);
     }
@@ -319,6 +321,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $author = $post->author()->getResults();
         self::assertCount(1, $author);
+        self::assertNotNull($author[0]);
         self::assertSame($user->id, $author[0]->id);
 
         $orphan = RelPost::where('title', '=', 'Orphan')->first();
@@ -336,6 +339,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $featured = $user->featuredPost()->getResults();
 
         self::assertCount(1, $featured);
+        self::assertNotNull($featured[0]);
         self::assertSame('First', $featured[0]->title);
     }
 
@@ -367,11 +371,12 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $lazy = $second->featuredPost()->getResults();
         self::assertCount(1, $lazy);
+        self::assertNotNull($lazy[0]);
         self::assertSame(1, $lazy[0]->id, 'lazy HasOne picks the lowest-PK duplicate');
 
         $eager = RelUser::with('featuredPost')->find($second->id);
         self::assertNotNull($eager);
-        $featured = $eager->getRelation('featuredPost');
+        $featured = $eager->featuredPost()->getResults()->first();
         self::assertInstanceOf(RelPost::class, $featured);
         self::assertSame(1, $featured->id, 'eager HasOne must agree with lazy: lowest PK wins');
 
@@ -379,11 +384,12 @@ final class RelationsE2ETest extends DatabaseTestCase
         // 'Second' id 2 remains theirs): their winner is id 2 on both paths.
         $lazyFirst = $user->featuredPost()->getResults();
         self::assertCount(1, $lazyFirst);
+        self::assertNotNull($lazyFirst[0]);
         self::assertSame(2, $lazyFirst[0]->id);
 
         $eagerFirst = RelUser::with('featuredPost')->find($user->id);
         self::assertNotNull($eagerFirst);
-        $featuredFirst = $eagerFirst->getRelation('featuredPost');
+        $featuredFirst = $eagerFirst->featuredPost()->getResults()->first();
         self::assertInstanceOf(RelPost::class, $featuredFirst);
         self::assertSame(2, $featuredFirst->id);
     }
@@ -400,9 +406,11 @@ final class RelationsE2ETest extends DatabaseTestCase
         $users = RelUser::with('posts')->orderBy('id')->get();
 
         self::assertCount(2, $users);
+        self::assertNotNull($users[0]);
+        self::assertNotNull($users[1]);
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->getRelation('posts'));
-        self::assertCount(0, $users[1]->getRelation('posts'), 'the second user has no posts');
+        self::assertCount(2, $users[0]->posts()->getResults());
+        self::assertCount(0, $users[1]->posts()->getResults(), 'the second user has no posts');
     }
 
     /**
@@ -415,8 +423,10 @@ final class RelationsE2ETest extends DatabaseTestCase
         $posts = RelPost::with('author')->orderBy('id')->get();
 
         self::assertCount(3, $posts);
-        self::assertInstanceOf(RelUser::class, $posts[0]->getRelation('author'));
-        self::assertNull($posts[2]->getRelation('author'), 'the orphan has no author');
+        self::assertNotNull($posts[0]);
+        self::assertNotNull($posts[2]);
+        self::assertInstanceOf(RelUser::class, $posts[0]->author()->getResults()->first());
+        self::assertCount(0, $posts[2]->author()->getResults(), 'the orphan has no author');
     }
 
     /**
@@ -433,8 +443,10 @@ final class RelationsE2ETest extends DatabaseTestCase
         $teamPosts = RelTeamPost::with('team')->orderBy('id')->get();
 
         self::assertCount(2, $teamPosts);
-        $firstTeam = $teamPosts[0]->getRelation('team');
-        $secondTeam = $teamPosts[1]->getRelation('team');
+        self::assertNotNull($teamPosts[0]);
+        self::assertNotNull($teamPosts[1]);
+        $firstTeam = $teamPosts[0]->team()->getResults()->first();
+        $secondTeam = $teamPosts[1]->team()->getResults()->first();
         self::assertInstanceOf(RelTeam::class, $firstTeam);
         self::assertInstanceOf(RelTeam::class, $secondTeam);
         self::assertSame('Core', $firstTeam->name);
@@ -458,6 +470,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $author = $post->author()->getResults();
         self::assertCount(1, $author);
+        self::assertNotNull($author[0]);
         self::assertSame($second->id, $author[0]->id);
     }
 
@@ -473,10 +486,11 @@ final class RelationsE2ETest extends DatabaseTestCase
         $teamPosts = RelTeamPost::with('team.owner')->get();
 
         self::assertCount(2, $teamPosts);
-        $team = $teamPosts[0]->getRelation('team');
+        self::assertNotNull($teamPosts[0]);
+        $team = $teamPosts[0]->team()->getResults()->first();
         self::assertInstanceOf(RelTeam::class, $team);
         self::assertTrue($team->relationLoaded('owner'));
-        self::assertNotNull($team->getRelation('owner'));
+        self::assertCount(1, $team->owner()->getResults());
     }
 
     /**
@@ -593,7 +607,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $loaded = RelUser::with('teamPosts')->find($user->id);
 
         self::assertNotNull($loaded);
-        $posts = $loaded->getRelation('teamPosts');
+        $posts = $loaded->teamPosts()->getResults();
         self::assertInstanceOf(Collection::class, $posts);
         self::assertCount(2, $posts);
     }
@@ -622,7 +636,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $loaded = RelUser::with('featuredTeamPost')->find($user->id);
         self::assertNotNull($loaded);
-        self::assertInstanceOf(RelTeamPost::class, $loaded->getRelation('featuredTeamPost'));
+        self::assertInstanceOf(RelTeamPost::class, $loaded->featuredTeamPost()->getResults()->first());
     }
 
     /**
@@ -651,8 +665,9 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $users->load('posts');
 
+        self::assertNotNull($users[0]);
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->getRelation('posts'));
+        self::assertCount(2, $users[0]->posts()->getResults());
     }
 
     /**
@@ -664,10 +679,12 @@ final class RelationsE2ETest extends DatabaseTestCase
         ['user' => $user] = $this->seed();
 
         $users = RelUser::all();
+        self::assertNotNull($users[0]);
         $users[0]->email = 'changed-in-memory@example.com';
 
         $users->fresh();
 
+        self::assertNotNull($users[0]);
         self::assertSame('alicia@example.com', $users[0]->email, 'fresh() re-reads from the database');
         self::assertSame($user->id, $users[0]->id);
     }

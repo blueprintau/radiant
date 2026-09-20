@@ -256,7 +256,8 @@ class HasManyThrough extends Relation
      *
      * @return Collection<TRelated> The related models.
      */
-    public function getResults(): Collection
+    #[\Override]
+    protected function executeResults(): Collection
     {
         return $this->query->get();
     }
@@ -283,6 +284,7 @@ class HasManyThrough extends Relation
      *        scalars, or column => value maps for a composite key.
      * @return EagerResult<TRelated> The models plus the per-row parent keys.
      */
+    #[\Override]
     public function eagerLoad(array $parentKeys): EagerResult
     {
         if ($parentKeys === []) {

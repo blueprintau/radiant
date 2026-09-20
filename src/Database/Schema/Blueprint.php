@@ -394,6 +394,40 @@ final class Blueprint
     }
 
     /**
+     * Add a polymorphic (morph) column pair: `{name}_type` + `{name}_id`.
+     *
+     * The ONE emission path for morph columns — the `#[Morphs]` attribute
+     * folds into this exact call sequence via `Blueprint::fromMetadata()`,
+     * so a metadata-driven table and a hand-built one always produce
+     * identical DDL.
+     *
+     * The pair carries NO foreign key: `{name}_type` names the target
+     * table at runtime (the related model's class-string), so no static
+     * FK can express the reference — the integrity is the relation's job,
+     * not the schema's. `{name}_type` is a 255-char string (room for a
+     * full class-string); `{name}_id` is a bigint (the conventional PK
+     * type of the target tables).
+     *
+     * @param string $name The morph alias prefix — emits `{name}_type` and
+     *        `{name}_id`.
+     * @param bool $nullable Whether both columns allow null (an optional
+     *        polymorphic relation).
+     * @return $this
+     * @throws \InvalidArgumentException When `$name` is empty.
+     */
+    public function morphs(string $name, bool $nullable = false): static
+    {
+        if ($name === '') {
+            throw new \InvalidArgumentException('A morph pair requires a non-empty name.');
+        }
+
+        $this->column(ColumnType::String, $name . '_type', nullable: $nullable, length: 255);
+        $this->column(ColumnType::BigInt, $name . '_id', nullable: $nullable);
+
+        return $this;
+    }
+
+    /**
      * Foreign-key constraints — single-column via `foreignId()` are inline;
      * this holds table-level (composite) constraints.
      *
@@ -738,6 +772,14 @@ final class Blueprint
             // semantics to filter on).
             $blueprint->check($check->expression, $check->name);
         }
+
+        // Class-level #[Morphs] attributes need NO separate pass here: the
+        // metadata factory injects the `{name}_type`/`{name}_id` synthetic
+        // mappings into $metadata->properties, so the properties loop above
+        // already emitted them as ordinary columns — with the exact shapes
+        // morphs() produces (string 255 + bigint, same nullability). That
+        // IS the one-emission-path guarantee: a metadata-driven table and a
+        // hand-built `morphs()` call compile identical DDL.
 
         // MTI children: the factory-emitted FK to the parent table. The
         // shared primary key IS the table link — the child declares no key

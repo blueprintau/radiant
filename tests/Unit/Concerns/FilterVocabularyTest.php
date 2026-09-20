@@ -160,6 +160,8 @@ final class FilterVocabularyTest extends DatabaseTestCase
             ->get();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
         self::assertSame('alicia', $rows[0]->name);
         self::assertSame('ben', $rows[1]->name);
     }
@@ -172,6 +174,8 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $rows = FvUser::whereIn('name', ['alicia', 'cara'])->orderBy('id')->get();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
         self::assertSame('alicia', $rows[0]->name);
         self::assertSame('cara', $rows[1]->name);
     }
@@ -184,6 +188,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $rows = FvUser::whereNotIn('name', ['alicia', 'ben'])->get();
 
         self::assertCount(1, $rows);
+        self::assertNotNull($rows[0]);
         self::assertSame('cara', $rows[0]->name);
     }
 
@@ -194,11 +199,14 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         $nulls = FvUser::whereNull('age')->get();
         self::assertCount(1, $nulls);
+        self::assertNotNull($nulls[0]);
         self::assertSame('cara', $nulls[0]->name);
         self::assertNull($nulls[0]->age);
 
         $notNulls = FvUser::whereNotNull('age')->orderBy('id')->get();
         self::assertCount(2, $notNulls);
+        self::assertNotNull($notNulls[0]);
+        self::assertNotNull($notNulls[1]);
         self::assertSame('alicia', $notNulls[0]->name);
         self::assertSame('ben', $notNulls[1]->name);
     }
@@ -212,10 +220,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         $between = FvUser::whereBetween('age', [30, 39])->get();
         self::assertCount(1, $between);
+        self::assertNotNull($between[0]);
         self::assertSame('alicia', $between[0]->name);
 
         $outside = FvUser::whereNotBetween('age', [30, 39])->orderBy('id')->get();
         self::assertCount(1, $outside);
+        self::assertNotNull($outside[0]);
         self::assertSame('ben', $outside[0]->name);
     }
 
@@ -229,6 +239,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $page = FvUser::orderBy('id')->offset(1)->limit(1)->get();
 
         self::assertCount(1, $page);
+        self::assertNotNull($page[0]);
         self::assertSame('ben', $page[0]->name);
     }
 
@@ -242,8 +253,10 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $rows = FvUser::select('name')->orderBy('id')->getRaw();
 
         self::assertCount(3, $rows);
-        self::assertSame(['id', 'name'], array_keys(get_object_vars($rows[0])));
-        self::assertSame('alicia', $rows[0]->name);
+        $row = $rows[0] ?? null;
+        self::assertNotNull($row);
+        self::assertSame(['id', 'name'], array_keys(get_object_vars($row)));
+        self::assertSame('alicia', $row->name);
     }
 
     /**
@@ -257,7 +270,9 @@ final class FilterVocabularyTest extends DatabaseTestCase
             ->getRaw();
 
         self::assertCount(1, $counts, 'only alicia (id 1) has more than one post');
-        self::assertSame(1, $counts[0]->user_id);
+        $countRow = $counts[0] ?? null;
+        self::assertNotNull($countRow);
+        self::assertSame(1, $countRow->user_id);
     }
 
     // ---- Instance trait (relation) ----
@@ -271,10 +286,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
 
         $in = $user->posts()->whereIn('title', ['A1', 'B1'])->getResults();
         self::assertCount(1, $in);
+        self::assertNotNull($in[0]);
         self::assertSame('A1', $in[0]->title);
 
         $notIn = $user->posts()->whereNotIn('title', ['A1'])->getResults();
         self::assertCount(1, $notIn);
+        self::assertNotNull($notIn[0]);
         self::assertSame('A2', $notIn[0]->title);
     }
 
@@ -298,10 +315,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
 
         $low = $user->posts()->whereBetween('views', [0, 150])->getResults();
         self::assertCount(1, $low);
+        self::assertNotNull($low[0]);
         self::assertSame('A1', $low[0]->title);
 
         $high = $user->posts()->whereNotBetween('views', [0, 150])->getResults();
         self::assertCount(1, $high);
+        self::assertNotNull($high[0]);
         self::assertSame('A2', $high[0]->title);
     }
 
@@ -330,6 +349,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $page = $user->posts()->orderBy('title')->offset(1)->limit(1)->getResults();
 
         self::assertCount(1, $page);
+        self::assertNotNull($page[0]);
         self::assertSame('A2', $page[0]->title);
     }
 
@@ -350,6 +370,8 @@ final class FilterVocabularyTest extends DatabaseTestCase
             ->getRaw();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
         self::assertSame('A1', $rows[0]->title);
         self::assertSame('A2', $rows[1]->title);
     }

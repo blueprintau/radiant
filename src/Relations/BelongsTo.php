@@ -71,7 +71,8 @@ final class BelongsTo extends Relation
      *
      * @return Collection<TRelated> A one-element (or empty) collection.
      */
-    public function getResults(): Collection
+    #[\Override]
+    protected function executeResults(): Collection
     {
         if ($this->isComposite()) {
             if (in_array(null, $this->parentKeyValues($this->getForeignKeys()), true)) {

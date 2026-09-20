@@ -9,6 +9,8 @@ return relation objects; the method name is the relation's key.
 - [Eager loading](#eager-loading)
 - [The model Collection](#the-model-collection)
 - [Through relations](#through-relations)
+- [Polymorphic relations](#polymorphic-relations)
+- [Many-to-many relations](#many-to-many-relations)
 - [Portability and semantics](#portability-and-semantics)
 
 ## Declaring a relation
@@ -62,6 +64,11 @@ first related model or throws
 relation matches none, and `sole()` requires exactly one match (more than
 one throws `MultipleRecordsFoundException`).
 
+`getResults()` and the fail-fast reads differ in one way: `getResults()`
+is cache-aware (see [Eager loading](#eager-loading) — after `with()`, the
+unfiltered read returns the loaded result), while `firstOrFail()` and
+`sole()` always execute against the database.
+
 ## Key conventions
 
 FK/local-key defaults follow the snake_case convention (`user_id`, the
@@ -92,8 +99,14 @@ $users = User::with('posts.comments')->get();      // dot-notation nests
 
 An unknown relation name throws **at the `with()` call** — the typo is
 caught at the call site. Loaded relations are cached on the instance
-(`relationLoaded()` / `getRelation()`); lazy access through the relation
-method always executes fresh.
+(`relationLoaded()` checks); the relation METHOD reads that cache —
+`$user->posts()->getResults()` returns the eagerly-loaded result without
+re-querying, and is typed by the method's declared return. The cache path
+disengages when it must: a composed chain (`$user->posts()->where(...)`,
+or `withPivot()` on a many-to-many) executes fresh (the cache was loaded
+unfiltered, and pivot columns change the select shape), and a relation
+not loaded on the instance always executes (lazy access is never stale).
+The fail-fast reads `firstOrFail()`/`sole()` never consult the cache.
 
 Result shapes: eager-loaded `HasOne`/`BelongsTo` results are a single
 model or `null`; `HasMany` results are a `Collection`. Dot-notation nests
@@ -153,10 +166,163 @@ intermediate row legitimately has no through-result. Composite keys are
 supported on both hops; the two hop keys must agree in shape (both scalar
 or both composite with matching arity), or construction throws.
 
+## Polymorphic relations
+
+A polymorphic relation lets one child table belong to models of MANY
+classes. The child carries a `(type, key)` pair — `{name}_type` holds the
+parent's class-string (the **morph alias**), `{name}_id` its key value.
+
+Declare the columns with the `#[Morphs]` class attribute (synthetic
+columns — no PHP properties needed; values ride the model's attribute
+store):
+
+```php
+use BlueprintAU\Radiant\Attributes\Morphs;
+
+#[Morphs(name: 'commentable', nullable: true)]
+class Comment extends Model
+{
+    public function commentable(): MorphTo
+    {
+        return $this->morphTo('commentable');   // columns: commentable_type, commentable_id
+    }
+}
+
+class Post extends Model
+{
+    public function comments(): MorphMany
+    {
+        return $this->morphMany(Comment::class, 'commentable');
+    }
+
+    public function image(): MorphOne
+    {
+        return $this->morphOne(Image::class, 'imageable');
+    }
+}
+```
+
+The morph alias is the parent model's **full class-string** — unambiguous
+across namespaces. Renaming a class changes the stored alias; migrating
+the column values is the host's data-migration concern.
+
+Eager loading dispatches **per type**: parents are grouped by their type
+value and one chunked `IN` query runs per distinct class, so each type's
+rows hydrate through its own model.
+
+**Static typing.** Without an allowlist, `morphTo` results are the honest
+`Model|null` (the related class is dynamic) — narrow with a local
+`instanceof` after reading `commentable()->getResults()->first()`. With
+an allowlist, the relation narrows statically: declare the list in the
+relation method and the reads deliver exactly those classes,
+
+```php
+use BlueprintAU\Radiant\Relations\MorphTo;
+
+class Comment extends Model
+{
+    /**
+     * @return MorphTo<Post|Video> Reads type as (Post|Video)|null —
+     *         no local instanceof needed.
+     */
+    public function commentable(): MorphTo
+    {
+        return $this->morphTo('commentable', types: [Post::class, Video::class]);
+    }
+}
+```
+
+The template is backed by the runtime: any type value outside the list
+still fails fast at resolution. The narrowing can also ride a helper —
+a method taking `list<class-string<T>>` and returning `MorphTo<T>`
+infers `T` from the caller's list, so one shared helper serves every
+allowlisted morph.
+
+Fail-fast semantics: a null type column resolves empty (an optional morph
+target); an unknown class, a non-model class, or a non-string type value
+throws.
+
+## Many-to-many relations
+
+`belongsToMany` links two models through a pivot table:
+
+```php
+class Post extends Model
+{
+    public function tags(): BelongsToMany
+    {
+        return $this->belongsToMany(Tag::class);
+        // pivot: posts_tags (deterministic {parentTable}_{relatedTable});
+        // keys: posts_id, tags_id — all overridable.
+    }
+}
+```
+
+The relation query INNER JOINs the pivot (SQL-only). Pivot data rides the
+select: `withPivot('position')` carries the column onto each related
+model, readable through `$tag->pivotValue('position')`;
+`withTimestamps()` is sugar for the `created_at`/`updated_at` pair.
+
+**Reserved prefix.** Column names starting with `radiant_` are reserved —
+the ORM namespaces its internal select aliases there
+(`radiant_pivot_{column}`, `radiant_pivot_parent_{table}`,
+`radiant_scalar`, `radiant_through_parent_{table}`), and the hydration
+lift treats any row field with that prefix as internal state. `withPivot()`
+fails fast on a reserved pivot column name; a declared model column with
+the prefix collides the same way the moment it rides a reserved alias —
+name your columns anything else.
+
+The write API operates on the pivot directly:
+
+```php
+$post->tags()->attach(3);                       // or a list, or id => attributes
+$post->tags()->detach(3);                       // null detaches all
+$post->tags()->sync([2, 3]);                    // → ['attached' => [3], 'detached' => [1], 'updated' => []]
+$post->tags()->toggle([2, 3]);
+$post->tags()->syncWithoutDetaching([3]);
+```
+
+`sync()` runs inside a transaction and computes the exact diff; a list
+input applies no attributes, a map input (`[1 => ['position' => 'x'], 2]`)
+attaches/updates per id. Both models must declare a single named primary
+key — pivot keys are scalar-only.
+
+**Polymorphic many-to-many** shares one pivot across parent classes: the
+pivot's parent side is a `(type, key)` pair.
+
+```php
+#[Morphs(name: 'taggable')]
+class Post extends Model
+{
+    public function tags(): MorphToMany
+    {
+        return $this->morphToMany(Tag::class, 'taggable');
+        // pivot: taggable (the morph name itself — identical across all
+        // directions and parent classes); columns: taggable_id,
+        // taggable_type, tags_id.
+    }
+}
+
+class Tag extends Model
+{
+    public function posts(): MorphToMany
+    {
+        return $this->morphedByMany(Post::class, 'taggable');  // the inverse direction
+    }
+}
+```
+
+Every query filters the pivot's type column to the parent's class-string,
+and `attach()`/`sync()` stamp the alias onto every inserted row.
+
 ## Portability and semantics
 
-HasOne/HasMany/BelongsTo ride the portable core (`whereIn` + `select`) and
-work on any backend, CSV included.
+HasOne/HasMany/BelongsTo and the polymorphic family (MorphOne/MorphMany/
+MorphTo) ride the portable core (`whereIn` + `select`) and work on any
+backend, CSV included. Through relations, `belongsToMany`, and
+`morphToMany` need joins and are SQL-only — a non-SQL connection throws
+`UnsupportedFeatureException` at execution (the pivot write API fails the
+same way).
 
 Fail-fast semantics:
 

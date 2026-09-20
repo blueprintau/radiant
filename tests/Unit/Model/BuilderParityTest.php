@@ -272,6 +272,8 @@ final class BuilderParityTest extends DatabaseTestCase
         $rows = BpUser::newQuery()->whereIn('name', ['h1', 'h2'])->orderBy('name')->get();
 
         self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
         self::assertInstanceOf(\Carbon\Carbon::class, $rows[0]->signedUpAt);
         self::assertSame(['b' => 2], $rows[1]->meta);
     }

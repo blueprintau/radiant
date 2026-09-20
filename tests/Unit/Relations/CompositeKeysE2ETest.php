@@ -155,8 +155,10 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         ['alpha' => $alpha, 'beta' => $beta] = $this->seed();
 
         self::assertCount(1, $alpha->shipments()->getResults());
+        self::assertNotNull($alpha->shipments()->getResults()[0]);
         self::assertSame('First', $alpha->shipments()->getResults()[0]->title);
         self::assertCount(1, $beta->shipments()->getResults());
+        self::assertNotNull($beta->shipments()->getResults()[0]);
         self::assertSame('Second', $beta->shipments()->getResults()[0]->title);
     }
 
@@ -231,6 +233,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $shipment = $alpha->primaryShipment()->getResults();
         self::assertCount(1, $shipment);
+        self::assertNotNull($shipment[0]);
         self::assertSame('First', $shipment[0]->title);
     }
 
@@ -246,6 +249,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $region = $shipment->region()->getResults();
         self::assertCount(1, $region);
+        self::assertNotNull($region[0]);
         self::assertSame('Beta', $region[0]->name);
     }
 
@@ -260,14 +264,16 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $regions = CmpRegion::with('shipments')->orderBy('country')->get();
 
         self::assertCount(2, $regions);
-        // The class arg NARROWS statically — no local instanceof dance:
-        // getRelation('shipments', CmpShipment::class) is
-        // Collection<CmpShipment>|null, so ->first() is CmpShipment|null
+        self::assertNotNull($regions[0]);
+        self::assertNotNull($regions[1]);
+        // The typed relation method narrows statically — no local
+        // instanceof dance: shipments()->getResults() is
+        // Collection<CmpShipment>, so ->first() is CmpShipment|null
         // and property access type-checks after the null assert.
-        $deShipments = $regions[0]->getRelation('shipments', CmpShipment::class);
-        $usShipments = $regions[1]->getRelation('shipments', CmpShipment::class);
-        self::assertNotNull($deShipments);
-        self::assertNotNull($usShipments);
+        $deShipments = $regions[0]->shipments()->getResults();
+        $usShipments = $regions[1]->shipments()->getResults();
+        self::assertInstanceOf(Collection::class, $deShipments);
+        self::assertInstanceOf(Collection::class, $usShipments);
         $deShipment = $deShipments->first();
         $usShipment = $usShipments->first();
         self::assertNotNull($deShipment);
@@ -287,8 +293,10 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $shipments = CmpShipment::with('region')->orderBy('country')->get();
 
         self::assertCount(2, $shipments);
-        $deRegion = $shipments[0]->getRelation('region');
-        $usRegion = $shipments[1]->getRelation('region');
+        self::assertNotNull($shipments[0]);
+        self::assertNotNull($shipments[1]);
+        $deRegion = $shipments[0]->region()->getResults()->first();
+        $usRegion = $shipments[1]->region()->getResults()->first();
         self::assertInstanceOf(CmpRegion::class, $deRegion);
         self::assertInstanceOf(CmpRegion::class, $usRegion);
         self::assertSame('Beta', $deRegion->name);
@@ -311,7 +319,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $shipments = CmpShipment::with('region')->orderBy('id')->get();
         self::assertCount(3, $shipments);
-        self::assertNull($shipments[2]->getRelation('region'));
+        self::assertNotNull($shipments[2]);
+        self::assertCount(0, $shipments[2]->region()->getResults());
     }
 
     /**
@@ -343,7 +352,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         // Eager BelongsTo: same empty result, no crash.
         $eager = CmpShipment::with('region')->orderBy('id')->get();
-        self::assertNull($eager[2]->getRelation('region'));
+        self::assertNotNull($eager[2]);
+        self::assertCount(0, $eager[2]->region()->getResults());
 
         // And the OTHER direction: shipments() under a region with a NULL
         // part in its tuple — the region cannot own a partial match.
@@ -435,28 +445,32 @@ class CompositeKeysE2ETest extends DatabaseTestCase
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'cmp_regions'",
         );
 
-        self::assertStringContainsString('PRIMARY KEY', $rows[0]->sql);
-        self::assertStringNotContainsString('id" integer NOT NULL PRIMARY KEY', $rows[0]->sql);
+        $ddlRow = $rows[0] ?? null;
+        self::assertNotNull($ddlRow);
+        self::assertStringContainsString('PRIMARY KEY', $ddlRow->sql);
+        self::assertStringNotContainsString('id" integer NOT NULL PRIMARY KEY', $ddlRow->sql);
     }
 
     /**
-     * getRelation() with the expected class hands back a NARROWED model —
-     * the caller skips the local instanceof dance.
+     * The typed relation method hands back a NARROWED model — the caller
+     * skips the local instanceof dance (the cache-backed read).
      */
     public function testGetRelationNarrowedByClass(): void
     {
         $this->seed();
 
         $shipments = CmpShipment::with('region')->orderBy('country')->get();
-        $region = $shipments[1]->getRelation('region', CmpRegion::class);
+        self::assertNotNull($shipments[1]);
+        $region = $shipments[1]->region()->getResults()->first();
 
         self::assertInstanceOf(CmpRegion::class, $region);
         self::assertSame('Alpha', $region->name);
     }
 
     /**
-     * getRelation() with a class on a NULL relation stays null — the
-     * null contract survives the narrowing parameter.
+     * The typed relation method on a NULL relation resolves empty — the
+     * null contract survives the cache-backed read (a null cache entry
+     * wraps to an empty collection).
      */
     public function testGetRelationNarrowedNullStaysNull(): void
     {
@@ -470,39 +484,23 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $shipment = CmpShipment::find(99);
         self::assertNotNull($shipment);
-        self::assertNull($shipment->getRelation('region', CmpRegion::class));
+        self::assertCount(0, $shipment->region()->getResults());
     }
 
     /**
-     * getRelation() with a WRONG expected class fails fast — a name/class
-     * mismatch is a caller bug, not an empty result.
+     * A COMPOSED relation chain never serves the cache — the filters must
+     * reach the database even when the relation is eagerly loaded.
      */
-    public function testGetRelationNarrowedMismatchThrows(): void
+    public function testComposedRelationIgnoresCache(): void
     {
         $this->seed();
 
-        $shipments = CmpShipment::with('region')->get();
+        $shipments = CmpShipment::with('region')->orderBy('country')->get();
         $shipment = $shipments[0];
+        self::assertNotNull($shipment);
 
-        try {
-            $this->relationWrongClass($shipment, 'region', CmpShipment::class);
-            self::fail('Expected the class mismatch to throw.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('holds a [', $e->getMessage());
-            self::assertStringContainsString('CmpShipment] was expected', $e->getMessage());
-        }
-    }
-
-    /**
-     * Call getRelation() with the boundary parameters under test.
-     *
-     * @param Model $model The model holding the relation.
-     * @param string $name The relation name.
-     * @param class-string<\BlueprintAU\Radiant\Model> $related The expected class.
-     * @return \BlueprintAU\Radiant\Model|\BlueprintAU\Radiant\Collection<\BlueprintAU\Radiant\Model>|null
-     */
-    private function relationWrongClass(Model $model, string $name, string $related): Model|Collection|null
-    {
-        return $model->getRelation($name, $related);
+        // The unfiltered read rides the cache; the filtered read re-queries.
+        self::assertCount(1, $shipment->region()->getResults());
+        self::assertCount(0, $shipment->region()->where('name', '=', 'No Such Region')->getResults());
     }
 }

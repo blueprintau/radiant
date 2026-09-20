@@ -67,7 +67,8 @@ final class HasOne extends HasMany
      *
      * @return Collection<TRelated> A one-element (or empty) collection.
      */
-    public function getResults(): Collection
+    #[\Override]
+    protected function executeResults(): Collection
     {
         $first = $this->query->first();
 

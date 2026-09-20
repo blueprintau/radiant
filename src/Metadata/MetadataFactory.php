@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
+use BlueprintAU\Radiant\Attributes\Morphs;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\SoftDeletes;
 use BlueprintAU\Radiant\Attributes\Index;
@@ -151,6 +152,7 @@ final class MetadataFactory
 
         $properties = self::collectProperties($reflection, $class);
         $softDeleteColumn = self::applySoftDeletes($reflection, $class, $properties);
+        self::applyMorphs($reflection, $class, $properties);
         [$tableName, $parentModel] = self::resolveTableName($reflection, $class, $properties);
 
         [$uniques, $indexes, $foreignKeys, $checks] = self::collectConstraints($reflection, $class, $properties);
@@ -233,6 +235,12 @@ final class MetadataFactory
             // emission, query building) reads a concrete `$column->name`
             // instead of re-deriving the property-name default.
             $column->name ??= $property->getName();
+
+            // The reserved `radiant_` prefix is the ORM's internal alias
+            // namespace — a declared column with it would collide with the
+            // row lift the moment the column rides an alias-bearing select.
+            // Fail fast HERE, at build, not at first pivot load.
+            Model::assertNotReservedPrefix($column->name, 'column');
 
             $mapping = new PropertyMapping(
                 propertyName: $property->getName(),
@@ -320,6 +328,149 @@ final class MetadataFactory
         }
 
         return $columnName;
+    }
+
+    /**
+     * Inject the synthetic morph columns declared by class-level
+     * `#[Morphs]` attributes.
+     *
+     * Each attribute emits TWO synthetic mappings — `{name}_type` (string)
+     * and `{name}_id` (bigint) — the same synthetic-mapping mechanism the
+     * soft-delete column uses (no PHP property backs them; values live on
+     * the model's runtime attribute store). A user-declared `#[Column]`
+     * with the same name WINS (the attribute never shadows a real
+     * declaration — the same precedence `applySoftDeletes()` applies), but
+     * a declared column whose type cannot hold the morph value fails fast:
+     * a non-string `{name}_type` or non-bigint/int `{name}_id` would
+     * round-trip garbage through the relations.
+     *
+     * Duplicate morph names across attributes are a build error — two
+     * `#[Morphs(name: 'commentable')]` on one class would emit the same
+     * column pair twice.
+     *
+     * @param \ReflectionClass<Model> $reflection The leaf class.
+     * @param class-string<Model> $class The leaf class name.
+     * @param PropertyMapping[] $properties The merged mappings (mutated in
+     *        place when synthetic columns are injected).
+     * @return void
+     * @throws \InvalidArgumentException On a duplicate morph name, an
+     *         empty morph name, or a declared column with an incompatible
+     *         type.
+     */
+    private static function applyMorphs(\ReflectionClass $reflection, string $class, array &$properties): void
+    {
+        $attributes = $reflection->getAttributes(Morphs::class);
+
+        if ($attributes === []) {
+            return;
+        }
+
+        $seen = [];
+
+        foreach ($attributes as $attribute) {
+            /** @var Morphs $morphs */
+            $morphs = $attribute->newInstance();
+
+            if ($morphs->name === '') {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[Morphs] with an empty name; "
+                    . 'a morph pair requires a non-empty name.'
+                );
+            }
+
+            if (isset($seen[$morphs->name])) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[Morphs(name: '{$morphs->name}')] twice; "
+                    . 'a morph name must be unique per class.'
+                );
+            }
+
+            $seen[$morphs->name] = true;
+
+            self::injectMorphColumn($class, $properties, $morphs->typeColumn(), ColumnType::String, 255, 'string', $morphs->nullable);
+            self::injectMorphColumn($class, $properties, $morphs->keyColumn(), ColumnType::BigInt, null, 'bigint', $morphs->nullable);
+        }
+    }
+
+    /**
+     * Inject (or validate) ONE morph column on the class.
+     *
+     * @param class-string<Model> $class The leaf class name.
+     * @param PropertyMapping[] $properties The merged mappings (mutated in
+     *        place when the synthetic column is injected).
+     * @param string $columnName The column to inject (`{name}_type` or
+     *        `{name}_id`).
+     * @param ColumnType $type The required column type.
+     * @param int|null $length The required string length (string columns
+     *        only).
+     * @param string $typeLabel The human-readable type for error messages.
+     * @param bool $nullable Whether the synthetic column allows null (the
+     *        `#[Morphs]` attribute's flag — must match what `morphs()`
+     *        emits so both paths compile identical DDL).
+     * @return void
+     * @throws \InvalidArgumentException When a declared column of that
+     *         name has an incompatible type or length.
+     */
+    private static function injectMorphColumn(
+        string $class,
+        array &$properties,
+        string $columnName,
+        ColumnType $type,
+        ?int $length,
+        string $typeLabel,
+        bool $nullable,
+    ): void {
+        foreach ($properties as $mapping) {
+            if ($mapping->columnName !== $columnName) {
+                continue;
+            }
+
+            // A user declaration wins — but only if it can actually hold
+            // the morph value. A morph relation writes class-strings and
+            // PK values through these columns; a wrong type would corrupt
+            // every round-trip.
+            if ($mapping->column->type !== $type) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares column [{$columnName}] as "
+                    . "[{$mapping->column->type->value}], but the #[Morphs] pair "
+                    . "requires {$typeLabel}."
+                );
+            }
+
+            if ($type === ColumnType::String && ($mapping->column->length ?? 0) < ($length ?? 0)) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares column [{$columnName}] with length "
+                    . '[{$mapping->column->length}]; the #[Morphs] type column requires '
+                    . "a length of at least {$length} (a full class-string must fit)."
+                );
+            }
+
+            return;
+        }
+
+        $column = new Column(
+            type: $type,
+            name: $columnName,
+            nullable: $nullable,
+            length: $length,
+        );
+
+        // No PHP property exists for a synthetic column — pin the property
+        // type to the column type so the cast pipeline sees a consistent
+        // scalar (the same convention applySoftDeletes() applies).
+        $column->propertyType = $type->value;
+
+        // The morph name is caller-supplied (`#[Morphs(name: ...)]`) — the
+        // same reserved-prefix guard as declared columns applies.
+        Model::assertNotReservedPrefix($columnName, 'morph column');
+
+        $properties[$columnName] = new PropertyMapping(
+            propertyName: $columnName,
+            columnName: $columnName,
+            column: $column,
+            property: null,
+            owner: $class,
+        );
     }
 
     /**

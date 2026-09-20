@@ -131,7 +131,10 @@ final class Collection extends BaseCollection
             return $this;
         }
 
-        $query = $this->first()->newQuery();
+        /** @var TValue $first */
+        $first = $this->first();
+
+        $query = $first->newQuery();
 
         foreach ($relations as $path) {
             $query->loadRelationPath($this, $path);
@@ -165,7 +168,10 @@ final class Collection extends BaseCollection
             return $this;
         }
 
-        $query = $this->first()->newQuery()->withTrashed();
+        /** @var TValue $first */
+        $first = $this->first();
+
+        $query = $first->newQuery()->withTrashed();
 
         /** @var list<KeyValue> $keys */
         $keys = [];

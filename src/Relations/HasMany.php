@@ -61,7 +61,8 @@ class HasMany extends Relation
      *
      * @return Collection<TRelated> Every related model matching the parent's key.
      */
-    public function getResults(): Collection
+    #[\Override]
+    protected function executeResults(): Collection
     {
         return $this->query->get();
     }

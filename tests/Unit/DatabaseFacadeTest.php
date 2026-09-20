@@ -94,7 +94,9 @@ final class DatabaseFacadeTest extends TestCase
 
         $rows = Database::select('select * from users');
         self::assertCount(1, $rows);
-        self::assertSame('Alice', $rows->first()->name);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame('Alice', $first->name);
     }
 
     /**

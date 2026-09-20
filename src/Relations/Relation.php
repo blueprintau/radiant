@@ -67,10 +67,37 @@ abstract class Relation
     protected ModelQueryBuilder $query;
 
     /**
+     * The relation-method name this relation was built from — the cache
+     * key {@see getResults()} consults. Stamped by the model factories
+     * (the calling relation method's name); null when a factory was
+     * reached outside a relation method, in which case the cache path is
+     * skipped and every read executes.
+     *
+     * @var string|null
+     */
+    private ?string $name = null;
+
+    /**
+     * Whether a filter has been composed onto the relation since
+     * construction. A composed relation's {@see getResults()} executes
+     * fresh — the cached eager result was loaded for the UNFILTERED
+     * constraint, and serving it to a filtered chain would silently
+     * ignore the filters.
+     *
+     * @var bool
+     */
+    private bool $composed = false;
+
+    /**
      * Create a relation.
      *
      * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class.
+     * @param class-string<TRelated> $related The related model class. For
+     *        the DYNAMIC-related {@see MorphTo} the abstract
+     *        {@see Model::class} marker passes through a documented
+     *        narrowing in its constructor — no fixed class exists, the
+     *        real one resolves per row, and MorphTo's own template (bound
+     *        to its allowlist) carries the static type.
      * @param string|list<string> $foreignKey The FK column carrying the
      *        link — or the composite column list.
      * @param string|list<string> $localKey The parent-side key column —
@@ -105,8 +132,77 @@ abstract class Relation
             );
         }
 
+        // A deferring subclass (MorphTo) has no resolved related class yet —
+        // the constrained builder and the constraint both need one. It
+        // constructs through this ctor with the abstract Model::class marker
+        // and builds its query lazily per resolved type.
+        if ($this->defersConstraints()) {
+            return;
+        }
+
         $this->query = $this->related::newQuery();
         $this->addConstraints();
+    }
+
+    /**
+     * Whether the subclass defers the base constructor's query build.
+     *
+     * False by default — every fixed-related relation builds its constrained
+     * builder in the constructor. {@see MorphTo} overrides this to true: its
+     * related class resolves per parent from the type column, so neither the
+     * builder nor the constraint can exist at construction. The base ctor
+     * still assigns the promoted properties (the marker included) before the
+     * early return, so the subclass starts from a fully-initialized base.
+     *
+     * @return bool True to skip the query build + addConstraints() pass.
+     */
+    protected function defersConstraints(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Stamp the relation-method name this relation was built from.
+     *
+     * Called by the model factories right after construction — the name
+     * is the cache key the eager loader writes (via match()) and
+     * {@see getResults()} reads. Per-instance state is safe here: the
+     * LAZY path builds a fresh relation per access, and the loader's
+     * cached prototype relation never reaches getResults().
+     *
+     * A null arg is a NO-OP, not an un-stamp: the factories pass
+     * `relationName()`, whose null means "not built from a relation
+     * method" — erasing a stamp nothing wrote would only widen the
+     * surface for accidental un-caching. A caller who wants an
+     * always-fresh read bypasses the cache by composing a filter (any
+     * filter marks the relation composed) or reading the builder directly
+     * ({@see getQuery()} → get()); withName stays single-purpose.
+     *
+     * @param string|null $name The relation method's name (null changes
+     *        nothing — an unstamped relation simply has no cache path).
+     * @return static The relation (chainable).
+     */
+    final public function withName(?string $name): static
+    {
+        if ($name !== null) {
+            $this->name = $name;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Mark the relation as composed — for subclasses whose modifiers
+     * change what a fresh read would return without riding the where
+     * sinks ({@see BelongsToMany::withPivot()} widens the select, so a
+     * cache loaded WITHOUT pivot columns must not serve a withPivot
+     * chain).
+     *
+     * @return void
+     */
+    protected function markComposed(): void
+    {
+        $this->composed = true;
     }
 
     /**
@@ -151,7 +247,12 @@ abstract class Relation
      * per chunk, with results merged in encounter order.
      *
      * @param list<KeyValue> $parentKeys The parents' local-key values —
-     *        scalars, or column => value maps for a composite key.
+     *        scalars, or column => value maps for a composite key. A
+     *        relation whose eager strategy needs per-parent state beyond
+     *        the key values folds that state INTO the key tuple
+     *        ({@see MorphTo::eagerKeyColumn()} adds the type column, so
+     *        the (type, key) pair travels with the keys) — the eager
+     *        contract stays key-shaped, and no parent objects cross it.
      * @return EagerResult<TRelated> The related models, with (for through relations)
      *         the per-row parent key that {@see match()} distributes by.
      */
@@ -239,12 +340,71 @@ abstract class Relation
     }
 
     /**
-     * Run the constrained query and return the related models.
+     * Run the constrained query and return the related models — or the
+     * eagerly-loaded cache when it applies.
+     *
+     * The cache path engages only when ALL of these hold: the relation
+     * was stamped with its method name (the model factories do this), no
+     * filter has been composed onto it, and the parent has the relation
+     * loaded (an eager `with()` ran). A single-valued cache entry
+     * (HasOne/BelongsTo/MorphTo store a model or null) wraps into the
+     * same one-element-or-empty collection the lazy path returns, so both
+     * paths share one shape.
+     *
+     * Everything else executes fresh: an unstamped relation, a composed
+     * chain (`->where(...)` — the cache was loaded unfiltered), a
+     * relation not loaded on this instance (lazy access always
+     * executes), and the fail-fast reads {@see firstOrFail()}/{@see sole()}
+     * (they delegate to the builder directly, never the cache).
      *
      * @return Collection<TRelated> The related models (a single model wraps
      *         in a one-element collection; HasOne unwraps at the accessor).
      */
-    public function getResults(): Collection
+    final public function getResults(): Collection
+    {
+        if ($this->name !== null && !$this->composed && $this->parent->relationLoaded($this->name)) {
+            return self::wrapCached($this->parent->cachedRelation($this->name));
+        }
+
+        return $this->executeResults();
+    }
+
+    /**
+     * Wrap a cached relation value into {@see getResults()}'s collection
+     * shape.
+     *
+     * The template rides the PARAMETER (not the return): PHPStan infers
+     * `TCached` from the argument's runtime union, and the union's
+     * collection arm is `Collection<Model>` — so the inferred element
+     * type is `Model`, which is exactly what the cache holds (the cache
+     * is keyed by name, not by relation template). The declared
+     * `Collection<TRelated>` return of {@see getResults()} is satisfied
+     * because every cached entry for a relation name was produced by that
+     * relation's own match() — the runtime guarantee the type describes.
+     *
+     * @param Model|Collection<Model>|null $value The cached entry — a
+     *        model (single-valued relations), a collection (to-many), or
+     *        null (an empty single-valued relation).
+     * @return Collection<TRelated> The wrapped shape.
+     */
+    private function wrapCached(Model|Collection|null $value): Collection
+    {
+        if ($value instanceof Model) {
+            /** @var Collection<TRelated> */
+            return Collection::make([$value]);
+        }
+
+        /** @var Collection<TRelated> */
+        return $value ?? Collection::make([]);
+    }
+
+    /**
+     * Run the constrained query — the always-executes read behind
+     * {@see getResults()}'s cache path.
+     *
+     * @return Collection<TRelated> The related models.
+     */
+    protected function executeResults(): Collection
     {
         return $this->query->get();
     }
@@ -315,6 +475,7 @@ abstract class Relation
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
+        $this->composed = true;
         $this->query->where($column, $operator, $value, $boolean);
 
         return $this;
@@ -333,6 +494,7 @@ abstract class Relation
         callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
+        $this->composed = true;
         $this->query->whereNested($callback, $boolean);
 
         return $this;
@@ -348,6 +510,7 @@ abstract class Relation
      */
     public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
+        $this->composed = true;
         $this->query->orderBy($column, $direction);
 
         return $this;
@@ -361,6 +524,7 @@ abstract class Relation
      */
     public function limit(int $limit): static
     {
+        $this->composed = true;
         $this->query->limit($limit);
 
         return $this;
@@ -374,6 +538,7 @@ abstract class Relation
      */
     public function offset(int $offset): static
     {
+        $this->composed = true;
         $this->query->offset($offset);
 
         return $this;
@@ -389,6 +554,7 @@ abstract class Relation
     {
         // No args → the default `['*']` select (a variadic list cannot have
         // a default, so the empty case is handled here).
+        $this->composed = true;
         $this->query->select(...$columns);
 
         return $this;
@@ -402,6 +568,7 @@ abstract class Relation
      */
     public function groupBy(string|array $columns): static
     {
+        $this->composed = true;
         $this->query->groupBy($columns);
 
         return $this;
@@ -417,6 +584,7 @@ abstract class Relation
      */
     public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
+        $this->composed = true;
         $this->query->having($column, $operator, $value);
 
         return $this;
@@ -430,6 +598,23 @@ abstract class Relation
     final public function getRelated(): string
     {
         return $this->related;
+    }
+
+    /**
+     * The related classes a dotted path's DEEPER segments resolve against.
+     *
+     * A single-element list for every fixed-related relation (the base
+     * and all but the polymorphic inverse). An EMPTY list means the
+     * related set is dynamic ({@see MorphTo} resolves per row) — the
+     * path validator stops there and the runtime recursion resolves the
+     * deeper segments off the actually-loaded models.
+     *
+     * @return list<class-string<Model>> The related classes, or [] when
+     *         dynamic.
+     */
+    public function relatedClasses(): array
+    {
+        return [$this->related];
     }
 
     /**

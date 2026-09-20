@@ -13,7 +13,7 @@ Radiant is the database layer split out of the Lucent restructure.
 | --- | --- |
 | [Database layer](docs/database.md) | Connections, drivers, query builder, writes, transactions, streaming |
 | [The ORM](docs/orm.md) | Models, `#[Column]`, constraints, soft deletes, multi-table inheritance |
-| [Relations](docs/relations.md) | HasOne/HasMany/BelongsTo, eager loading, through relations |
+| [Relations](docs/relations.md) | HasOne/HasMany/BelongsTo, polymorphic (morphTo/MorphOne/MorphMany — allowlist-typed), many-to-many (BelongsToMany/MorphToMany), typed cache-aware reads, eager loading, through relations |
 | [Schema & sync](docs/schema.md) | Blueprints, the differ, plan → show → apply, cross-process locking |
 | [CSV backend](docs/csv-backend.md) | The portable non-SQL connection and its limits |
 | [Safety](docs/safety.md) | Injection-proofing, log-safe failures, fail-fast guarantees |

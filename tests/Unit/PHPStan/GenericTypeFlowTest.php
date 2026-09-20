@@ -75,19 +75,22 @@ final class GenericTypeFlowTest extends DatabaseTestCase
         foreach ($posts as $post) {
             self::assertInstanceOf(TypeFlowPost::class, $post);
         }
+        self::assertNotNull($posts[0]);
+        self::assertNotNull($posts[1]);
         self::assertSame('one', $posts[0]->title);
         self::assertSame('two', $posts[1]->title);
     }
 
     /**
-     * The eager loader delivers the declared related type onto the parent.
+     * The eager loader delivers the declared related type onto the parent —
+     * read back through the typed relation method (the cache-backed path).
      */
     public function testEagerLoadDeliversDeclaredRelatedType(): void
     {
         $user = TypeFlowUser::with('posts')->first();
         self::assertNotNull($user);
 
-        $posts = $user->getRelation('posts');
+        $posts = $user->posts()->getResults();
         self::assertInstanceOf(Collection::class, $posts);
         foreach ($posts as $post) {
             self::assertInstanceOf(TypeFlowPost::class, $post);
