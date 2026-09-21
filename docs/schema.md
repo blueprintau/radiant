@@ -121,11 +121,17 @@ $conn->withLock(function () use ($differ, $desired, $conn): void {
 ```
 
 Each returned `SchemaChange` carries the table, the operation
-(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`/`AlterIndexes`), a
-`destructive` flag (anything that can lose data), and a human-readable
-`description` for dry-run output. Changes are ordered **creates → alters
-→ drops**, so a rename (drop + create) never destroys data before its
-replacement exists.
+(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`/`AlterIndexes`/
+`RenameTable`/`RenameColumn`/`ModifyColumn`/`AddForeignKey`/
+`DropForeignKey`/`AddCheck`/`DropCheck`), a `destructive` flag (anything
+that can lose data), and a human-readable `description` for dry-run
+output. Changes are ordered **creates → renames → alters → drops**;
+creates are **dependency-ordered** (referenced tables first — `posts`
+with an FK to `users` is created after `users` even when declared
+first), and drops are **reverse-dependency-ordered** (children before
+parents). A circular FK dependency fails fast with the cycle path named.
+
+### Renames: declared, not guessed
 
 Rename-shaped diffs are **flagged, never rewritten**: a column add+drop
 pair on one table, or a create+drop table pair sharing at least half their
@@ -133,19 +139,79 @@ columns, is marked `possibleRename` / `renameOf` so the host can ask "is
 this a rename?" — a wrong guess executing `RENAME COLUMN` between
 unrelated columns would corrupt data.
 
-The differ is **presence-level plus index-option drift**: it detects
-whole-table creates/drops, column adds/drops, and index *option* drift —
-a live index whose partial predicate or `NULLS NOT DISTINCT` no longer
-matches the declaration is reported as a non-destructive `AlterIndexes`
-rebuild (drop + re-create; rows are never touched).
+To get an **executable** rename, declare it — the declaration is the
+decision:
 
-**Content drift is NOT detected yet** (v1 scope): a column whose type,
-nullable flag, or default changed on the live table passes as "present" —
-no re-add is reported and no in-place modify is planned. Until signature
-comparison lands, review your schema with an inspector or manage content
-changes as explicit drop+add migrations. A declared index absent from the
-live table is a deployment gap the differ does not create. FK and CHECK
-changes are not diffed yet. Review the plan before applying.
+```php
+$blueprint = new Blueprint('users');
+$blueprint->renamedFrom('legacy_users');   // table rename
+$blueprint->renameColumn('name', 'full_name'); // column rename
+```
+
+The differ verifies the declaration against the live schema (old exists,
+new absent) and emits a real `RenameTable` / `RenameColumn` change —
+non-destructive, data travels with the rename. A declaration that does
+not match reality falls through to the usual create/drop handling with
+the advisory flags. A column rename plus a shape change sequences two
+changes: `RenameColumn` first, then `ModifyColumn`.
+
+### Content drift: ModifyColumn
+
+A column present on both sides with a changed type, nullability, or
+default is detected as a `ModifyColumn` change — destructive when the
+change tightens nullability (existing rows may violate the new shape),
+non-destructive for a default-only change. MySQL compiles `ALTER TABLE
+... MODIFY`; Postgres compiles the split clauses (`TYPE` / `SET NOT
+NULL` / `SET DEFAULT`); **SQLite has no in-place form**, so the change
+routes through a **table rebuild** — the data-preserving sequence
+(create temp → copy rows → drop old → rename → re-create indexes →
+`foreign_key_check` gate), executed inside a transaction so a failure
+rolls the whole rebuild back.
+
+### FK and CHECK drift
+
+Foreign keys are matched **shape-first**: a live constraint with an
+identical shape (columns + references + actions) is in sync regardless
+of its name — pre-existing auto-named constraints never churn as
+drop+re-add. A declared FK missing live is an `AddForeignKey`; an extra
+live FK is a `DropForeignKey` (the live constraint name is the drop
+handle). MySQL and Postgres compile in-place `ADD CONSTRAINT` /
+`DROP CONSTRAINT`; SQLite routes through the table rebuild.
+
+CHECK constraints diff by name; a same-name different-expression
+mismatch is **advisory-only** — reported in the description, never
+auto-executed.
+
+### The synchronizer
+
+The three-step loop is available as one call —
+`BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer`:
+
+```php
+use BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer;
+
+$synchronizer = new SchemaSynchronizer($conn);
+
+$applied = $synchronizer->sync(
+    $desired,
+    confirm: fn (SchemaChange $change) => confirmWithUser($change->description),
+);
+```
+
+Under the `'radiant:schema'` lock: diff → gate destructive changes
+through `$confirm` (null means fail-fast: the first destructive change
+throws) → apply in order → return the applied changes. The confirm
+callback is the applier's decision point — the same `SchemaChange` data
+a CLI consumes directly.
+
+### Remaining limits
+
+A declared index absent from the live table is a deployment gap the
+differ does not create. A CHECK whose expression changed but kept its
+name is reported as an advisory, not an executable change. The SQLite
+rebuild loses triggers and views on the table (Radiant does not manage
+them) and re-seeds `AUTOINCREMENT` from the max rowid. Review the plan
+before applying.
 
 ## Locking
 

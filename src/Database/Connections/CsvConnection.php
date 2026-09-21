@@ -111,6 +111,107 @@ final class CsvConnection implements ConnectionInterface
         // compute one row per group, carrying the group field values
         // alongside the aggregates — the same shape the SQL backend
         // produces. LIMIT/OFFSET apply *after* aggregation, matching SQL.
+        $out = $this->aggregateRows($query, $rows, $aggregates);
+
+        return Collection::make(array_map(
+            fn (array $row) => (object) $row,
+            $this->applyLimit($query, $out),
+        ));
+    }
+
+    /**
+     * Run the query and return the FIRST selected column's values.
+     *
+     * The dataset already lives fully in memory, so there is no driver
+     * columnar fetch to exploit — the win here is only skipping the
+     * per-row `(object)` casts {@see select()} performs. The evaluation
+     * pipeline is IDENTICAL (wheres → orders → limit/aggregates, the same
+     * feature gate); the projected rows are then reduced to the first
+     * field's values positionally.
+     *
+     * @param QueryBuilder $query The query to run.
+     * @return Collection<int, mixed> The first selected column's values, one per row.
+     * @throws UnsupportedFeatureException When the query uses any feature
+     *         outside the CSV-supported set (only aggregates supported).
+     */
+    #[Override]
+    public function selectColumn(QueryBuilder $query): Collection
+    {
+        $query->assertSupports(
+            SqlFeature::Aggregates,
+        );
+
+        $rows = $this->applyWheres($query, $this->readRows());
+        $rows = $this->applyOrders($query, $rows);
+
+        [$fields, $aggregates] = $this->splitColumns($query->getColumns());
+
+        if ($aggregates === []) {
+            $rows = $this->applyLimit($query, $rows);
+            $first = $fields[0] ?? null;
+
+            if ($first === null || $first === '*') {
+                throw new \InvalidArgumentException(
+                    'selectColumn() requires a single named column; got '
+                    . ($first === null ? 'an empty select list.' : "a wildcard select [{$first}]."),
+                );
+            }
+
+            $out = [];
+            foreach ($rows as $row) {
+                if (!array_key_exists($first, $row)) {
+                    throw new \InvalidArgumentException("Unknown column [{$first}] on CSV connection.");
+                }
+                $out[] = $row[$first];
+            }
+            return Collection::make($out);
+        }
+
+        // Aggregates: the first selected column IS the aggregate (the
+        // builders' scalar reads select exactly one). Run the same
+        // group → compute → order pipeline as select(), then read the
+        // aggregate's alias positionally.
+        $out = $this->aggregateRows($query, $rows, $aggregates);
+        $out = $this->applyLimit($query, $out);
+
+        $first = array_key_first($out[0] ?? []);
+        if ($first === null) {
+            throw new \InvalidArgumentException(
+                'selectColumn() requires a single named column; got an empty select list.',
+            );
+        }
+
+        $values = [];
+        foreach ($out as $row) {
+            $values[] = $row[$first];
+        }
+        return Collection::make($values);
+    }
+
+    /**
+     * Group the filtered rows and compute the aggregates — the shared
+     * aggregate pipeline behind {@see select()} and {@see selectColumn()}.
+     *
+     * One row per group, carrying the group field values alongside the
+     * aggregates — the same shape the SQL backend produces. SQL's ungrouped
+     * aggregate ALWAYS returns exactly one row — an empty filtered dataset
+     * yields one row of neutral values (count 0, max/min/avg null, sum 0),
+     * not zero rows; that row is synthesized here.
+     *
+     * SQL orders AFTER grouping: the declared order-by applies to the
+     * AGGREGATED rows (whose keys are group columns and aggregate aliases
+     * like `count(*)`), not to the pre-sort of the raw rows. applyOrders()
+     * handles aliases because the order column is looked up on the computed
+     * row, where the alias IS a key.
+     *
+     * @param QueryBuilder $query The query (for groups + post-aggregate orders).
+     * @param list<array<string,mixed>> $rows The filtered, pre-ordered rows.
+     * @param array<string, array{0: string, string|Expression}> $aggregates
+     *        Alias → [function, column] from splitColumns().
+     * @return list<array<string,mixed>> One computed row per group, ordered.
+     */
+    private function aggregateRows(QueryBuilder $query, array $rows, array $aggregates): array
+    {
         $groups = $query->getGroups();
         $buckets = [];
         foreach ($rows as $row) {
@@ -127,25 +228,11 @@ final class CsvConnection implements ConnectionInterface
             $out[] = $computed;
         }
 
-        // SQL's ungrouped aggregate ALWAYS returns exactly one row — an
-        // empty filtered dataset yields one row of neutral values (count 0,
-        // max/min/avg null, sum 0), not zero rows. Synthesize it here so
-        // the CSV backend matches that contract.
         if ($out === [] && $groups === []) {
             $out[] = $this->computeAggregates([], $aggregates);
         }
 
-        // SQL orders AFTER grouping: the declared order-by must apply to
-        // the AGGREGATED rows (whose keys are group columns and aggregate
-        // aliases like `count(*)`), not be inherited from the pre-sort of
-        // the raw rows. applyOrders() handles aliases because the order
-        // column is looked up on the computed row, where the alias IS a key.
-        $out = $this->applyOrders($query, $out);
-
-        return Collection::make(array_map(
-            fn (array $row) => (object) $row,
-            $this->applyLimit($query, $out),
-        ));
+        return $this->applyOrders($query, $out);
     }
 
     /**

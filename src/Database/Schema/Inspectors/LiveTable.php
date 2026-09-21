@@ -25,15 +25,23 @@ final class LiveTable
      *        `where` is the partial-index predicate (parsed from the
      *        dialect's definition text); `nullsNotDistinct` mirrors the
      *        declared option (Postgres only).
-     * @param list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> $foreignKeys
+     * @param list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name?: string|null}> $foreignKeys
      *        The live foreign-key constraints. `deferrable` mirrors the
-     *        declared option (Postgres only; others always false).
+     *        declared option (Postgres only; others always false). `name`
+     *        is the live constraint name (the drop handle) when the
+     *        dialect exposes one.
+     * @param list<array{name: string|null, expression: string|null}> $checks
+     *        The live CHECK constraints. `expression` is the live
+     *        predicate text when the dialect exposes it parseable, null
+     *        otherwise (an unparseable expression never matches — the
+     *        conservative default).
      */
     public function __construct(
         public readonly string $name,
         public readonly array $columns,
         public readonly array $indexes = [],
         public readonly array $foreignKeys = [],
+        public readonly array $checks = [],
     ) {
     }
 }

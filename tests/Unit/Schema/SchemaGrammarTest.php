@@ -384,7 +384,8 @@ final class SchemaGrammarTest extends TestCase
     // ---- CHECK constraints ----
 
     /**
-     * A named CHECK constraint renders with its final name, portably.
+     * A named CHECK constraint renders with its name VERBATIM (the same
+     * rule as index(): the given name IS the whole final name), portably.
      */
     public function testNamedCheckConstraint(): void
     {
@@ -393,13 +394,15 @@ final class SchemaGrammarTest extends TestCase
             ->check('price >= 0', 'price_positive');
         $sql = (new MySqlSchemaGrammar())->compileCreate($blueprint);
         self::assertSame(
-            'CREATE TABLE `products` (`price` double NOT NULL, CONSTRAINT `products_price_positive_check` CHECK (price >= 0))',
+            'CREATE TABLE `products` (`price` double NOT NULL, CONSTRAINT `price_positive` CHECK (price >= 0))',
             $sql,
         );
     }
 
     /**
-     * An unnamed CHECK renders the dialect default (bare CHECK).
+     * An UNNAMED CHECK constraint derives its final name
+     * (`{table}_{columns}_check` — same rule as indexes) so it is
+     * diffable by name like every other constraint.
      */
     public function testUnnamedCheckConstraint(): void
     {
@@ -408,7 +411,7 @@ final class SchemaGrammarTest extends TestCase
             ->check("status IN ('draft', 'published')");
         $sql = (new PostgresSchemaGrammar())->compileCreate($blueprint);
         self::assertSame(
-            "CREATE TABLE \"products\" (\"status\" varchar(20) NOT NULL, CHECK (status IN ('draft', 'published')))",
+            "CREATE TABLE \"products\" (\"status\" varchar(20) NOT NULL, CONSTRAINT \"products_status_check\" CHECK (status IN ('draft', 'published')))",
             $sql,
         );
     }

@@ -754,8 +754,9 @@ final class SchemaSyncTest extends DatabaseTestCase
     }
 
     /**
-     * A class-level #[Check] flows through fromMetadata() with its FINAL
-     * name ({table}_{name}_check) and compiles into the CREATE TABLE.
+     * A class-level #[Check] flows through fromMetadata() with its name
+     * VERBATIM (the attribute's name IS the final name — same rule as
+     * #[Index]) and compiles into the CREATE TABLE.
      */
     public function testCheckAttributeFlowsThroughFromMetadata(): void
     {
@@ -764,7 +765,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $checks = $blueprint->getChecks();
 
         self::assertCount(1, $checks);
-        self::assertSame('sync_meta_check_price_positive_check', $checks[0]['name']);
+        self::assertSame('price_positive', $checks[0]['name']);
         self::assertSame('price >= 0', $checks[0]['expression']);
 
         // Live: created, inspected, enforced.

@@ -69,8 +69,11 @@ SQL is compiled.
 ## The portable core
 
 The generic `ConnectionInterface` runs a structured query against any
-backend (SQL, CSV, …): `table()`, `select()`, `insert()`, `update()`,
-`delete()`, `cursor()`. The ORM's core CRUD works on all of them.
+backend (SQL, CSV, …): `table()`, `select()`, `selectColumn()`,
+`insert()`, `update()`, `delete()`, `cursor()`. The ORM's core CRUD works
+on all of them. Scalar reads (`value()`/`pluck()`) ride `selectColumn()`,
+which fetches the single column directly on SQL backends
+(`PDO::FETCH_COLUMN`) instead of materializing one row object per record.
 
 Features that only make sense with a real SQL engine — joins, raw SQL,
 transactions, schema changes — live on `SqlConnection` and throw

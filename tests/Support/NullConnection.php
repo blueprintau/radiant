@@ -40,6 +40,17 @@ class NullConnection implements ConnectionInterface
     }
 
     /**
+     * Run the query and return the first selected column's values.
+     *
+     * @param QueryBuilder $query The query to run.
+     * @return Collection<int, mixed> The column values.
+     */
+    public function selectColumn(QueryBuilder $query): Collection
+    {
+        throw new \LogicException('Not used in compile-only tests.');
+    }
+
+    /**
      * Run the query and yield each matching row.
      *
      * @param QueryBuilder $query The query to run.

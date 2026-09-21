@@ -6,9 +6,63 @@ namespace BlueprintAU\Radiant\Database\Schema\Inspectors;
 
 /**
  * Reads the live schema on MySQL — `information_schema` tables.
+ *
+ * @extends SchemaInspector<\BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar>
  */
 final class MySqlSchemaInspector extends SchemaInspector
 {
+    /**
+     * The dialect's schema grammar (the factory hook).
+     *
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar The grammar.
+     */
+    protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+    {
+        return new \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar();
+    }
+
+    /**
+     * Whether a live column's native type text matches the declared
+     * logical type — the MySQL mapping.
+     *
+     * The live text is compared against the native text the MySQL grammar
+     * renders for the declared type (the round-trip guarantee). MySQL's
+     * `information_schema` reports types like `varchar(100)`, `bigint`,
+     * `tinyint(1)` — exactly what the grammar renders.
+     *
+     * @param string $liveType The live column's native type text.
+     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
+     * @param int|null $declaredLength The declared length (strings).
+     * @return bool True when the live type matches the declaration.
+     */
+    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
+    {
+        return strtolower($liveType) === strtolower($this->schemaGrammar->type($declaredType, $declaredLength));
+    }
+
+    /**
+     * The live tables that declare a foreign key INTO the given table —
+     * one `information_schema` query.
+     *
+     * @param string $table The referenced table.
+     * @return list<string> The referencing table names.
+     */
+    public function referencingTables(string $table): array
+    {
+        $statement = $this->pdo->prepare(
+            'SELECT DISTINCT table_name FROM information_schema.key_column_usage '
+            . 'WHERE table_schema = DATABASE() AND referenced_table_name = ? '
+            . 'AND referenced_table_name IS NOT NULL',
+        );
+        $statement->execute([$table]);
+
+        $tables = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            $tables[] = (string) $name;
+        }
+
+        return $tables;
+    }
     /**
      * Every table name in the live schema (the connection's default database).
      *
@@ -150,7 +204,7 @@ final class MySqlSchemaInspector extends SchemaInspector
      * MySQL has no DEFERRABLE — the field is always false.
      *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
@@ -184,7 +238,7 @@ final class MySqlSchemaInspector extends SchemaInspector
 
         $constraints = [];
 
-        foreach ($groups as $group) {
+        foreach ($groups as $constraintName => $group) {
             $constraints[] = [
                 'columns' => $group['columns'],
                 'referencesTable' => $group['referencesTable'],
@@ -193,6 +247,8 @@ final class MySqlSchemaInspector extends SchemaInspector
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
                 // MySQL has no DEFERRABLE — always false.
                 'deferrable' => false,
+                // The live constraint name — the drop handle.
+                'name' => $constraintName,
             ];
         }
 

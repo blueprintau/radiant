@@ -35,7 +35,7 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * @param int|null $length The column length, if any.
      * @return string The Postgres type.
      */
-    protected function type(ColumnType $type, ?int $length = null): string
+    public function type(ColumnType $type, ?int $length = null): string
     {
         return match ($type) {
             ColumnType::String => 'varchar(' . $this->requireLength($length) . ')',
@@ -131,6 +131,127 @@ final class PostgresSchemaGrammar extends SchemaGrammar
             fn (string $column) => $this->wrap($column),
             $columns,
         ));
+    }
+
+    /**
+     * Compile the `ALTER TABLE ... ALTER COLUMN` statements — Postgres'
+     * in-place content-drift form.
+     *
+     * Postgres splits the facets into SEPARATE clauses, so one modified
+     * column compiles to up to three statements, in a fixed order:
+     * `TYPE` (when the type changed), `SET/DROP NOT NULL` (when
+     * nullability changed), `SET/DROP DEFAULT` (when the default
+     * changed). The caller (the differ) passes the drift facets via the
+     * blueprint: the desired shape is authoritative, and each statement
+     * is emitted only when that facet actually differs from the live
+     * column — the blueprint's column list carries the desired shapes.
+     *
+     * Because the differ may target a subset of facets, the blueprint's
+     * columns carry the desired shape and the statements are derived
+     * from it directly: TYPE always (the type text is the identity of
+     * the change), NOT NULL per the desired `nullable` flag, DEFAULT per
+     * the desired `default` value (null default → `DROP DEFAULT`).
+     *
+     * @param Blueprint $blueprint The table-bound blueprint carrying the
+     *        desired column shapes.
+     * @return list<string> The statements, in execution order.
+     */
+    public function compileModifyColumn(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+        $columns = $blueprint->getColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot modify columns with no columns defined.');
+        }
+
+        $statements = [];
+
+        foreach ($columns as $column) {
+            $name = $this->wrap($column['name']);
+            $base = 'ALTER TABLE ' . $this->wrap($table) . ' ALTER COLUMN ' . $name;
+
+            // TYPE first: the type text is the identity of the change, and
+            // a type change must land before constraints that depend on it.
+            $statements[] = $base . ' TYPE ' . $this->type($column['type'], $column['length']);
+
+            // Nullability second: SET NOT NULL validates existing rows, so
+            // it must come after the type conversion.
+            $statements[] = $column['nullable'] ? $base . ' DROP NOT NULL' : $base . ' SET NOT NULL';
+
+            // Default last: a null desired default means DROP DEFAULT (the
+            // column carries no default); anything else renders the literal.
+            $statements[] = $column['default'] === null
+                ? $base . ' DROP DEFAULT'
+                : $base . ' SET DEFAULT ' . $this->compileDefault($column['default']);
+        }
+
+        return $statements;
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`
+     * statement — Postgres' in-place FK-add form.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
+     *        The constraint shape.
+     * @param string $name The constraint name (the drop handle).
+     * @return string The compiled SQL.
+     */
+    public function compileAddForeignKey(string $table, array $foreignKey, string $name): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ADD CONSTRAINT ' . $this->wrap($name) . ' '
+            . $this->compileForeignKeyConstraint($foreignKey);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement — Postgres'
+     * in-place constraint-drop form (covers FKs AND CHECKs; Postgres
+     * treats both as named constraints).
+     *
+     * @param string $table The table the constraint is on.
+     * @param string $name The live constraint name (the drop handle).
+     * @return string The compiled SQL.
+     */
+    public function compileDropForeignKey(string $table, string $name): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' DROP CONSTRAINT ' . $this->wrap($name);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... CHECK` statement —
+     * Postgres' in-place CHECK-add form.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param string $name The constraint name (the drop handle).
+     * @param string $expression The CHECK predicate, spliced verbatim.
+     * @return string The compiled SQL.
+     */
+    public function compileAddCheck(string $table, string $name, string $expression): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ADD CONSTRAINT ' . $this->wrap($name)
+            . ' CHECK (' . $expression . ')';
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement for a CHECK
+     * — Postgres' in-place CHECK-drop form (same syntax as FK drops).
+     *
+     * @param string $table The table the constraint is on.
+     * @param string $name The live constraint name (the drop handle).
+     * @return string The compiled SQL.
+     */
+    public function compileDropCheck(string $table, string $name): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' DROP CONSTRAINT ' . $this->wrap($name);
     }
 
     /**

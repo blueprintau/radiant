@@ -51,6 +51,34 @@ final class Blueprint
     private readonly string $table;
 
     /**
+     * The table this blueprint RENAMES, when the blueprint declares a
+     * table rename — the differ turns a declared rename into a real
+     * `RenameTable` change instead of a create+drop pair.
+     *
+     * **A rename is a decision, not a guess.** The differ's heuristic
+     * (column-overlap scoring) stays advisory-only; the ONLY path to an
+     * executable rename is the host declaring the old name here. Doctrine:
+     * "rename advisories are data, never decisions" — the declaration IS
+     * the decision.
+     *
+     * @var string|null
+     */
+    private string|null $renamedFrom = null;
+
+    /**
+     * Column renames declared on this blueprint, in declaration order.
+     *
+     * Same doctrine as {@see $renamedFrom}: the host declares the mapping
+     * (`renameColumn('name', 'full_name')`), the differ emits a real
+     * `RenameColumn` change and suppresses the add+drop rename advisory
+     * for those columns — a declared rename is never re-flagged as a
+     * possible data-losing alter.
+     *
+     * @var list<array{from: string, to: string}>
+     */
+    private array $columnRenames = [];
+
+    /**
      * Create a table-bound blueprint.
      *
      * The table is REQUIRED: the blueprint owns the table name (index
@@ -77,6 +105,126 @@ final class Blueprint
     }
 
     /**
+     * A copy of this blueprint bound to a DIFFERENT table name.
+     *
+     * The one legitimate re-binding site is the SQLite rebuild's temp
+     * table: the desired shape must render against `users__radiant_new`
+     * before the rename makes it `users` again. Everything else on the
+     * blueprint (columns, FKs, CHECKs, renames) carries over verbatim —
+     * EXCEPT the indexes, which are deliberately dropped: derived index
+     * names embed the bound table name, and the rebuild re-creates them
+     * from the ORIGINAL blueprint after the rename, so a temp-bound copy
+     * must never carry them (a temp name leaking into a derived index
+     * name would leave the index named after a table that no longer
+     * exists).
+     *
+     * The sub-arrays are DEEP-copied: the blueprint's state is a list of
+     * associative arrays, and a shallow copy would share the inner arrays
+     * — a later mutation of the copy's nested data (e.g. a column entry)
+     * would leak into the original. The lists themselves are rebuilt with
+     * fresh inner arrays; the VALUES are scalars/enums/immutables, so a
+     * value-level copy is a full copy.
+     *
+     * @param string $table The new table name.
+     * @return static A copy bound to `$table`, without indexes.
+     */
+    public function forTable(string $table): static
+    {
+        $copy = new static($table);
+
+        // Deep-copy each list of associative arrays — one level DEEPER
+        // where the shape nests lists: a FK entry carries `columns` and
+        // `references` (list<string>) INSIDE it, so `[...$fk]` alone would
+        // still share those inner lists. The values themselves are
+        // scalars/enums, so copying the nested lists completes the copy.
+        $copy->columns = array_map(fn (array $column) => [...$column], $this->columns);
+        $copy->foreignKeys = array_map(
+            fn (array $fk) => [...$fk, 'columns' => [...$fk['columns']], 'references' => [...$fk['references']]],
+            $this->foreignKeys,
+        );
+        $copy->checks = array_map(fn (array $check) => [...$check], $this->checks);
+        $copy->columnRenames = array_map(fn (array $rename) => [...$rename], $this->columnRenames);
+        $copy->renamedFrom = $this->renamedFrom;
+
+        return $copy;
+    }
+
+    /**
+     * Declare that this blueprint RENAMES an existing table.
+     *
+     * The blueprint's own table ({@see getTable()}) is the NEW name; the
+     * declared value is the OLD (live) name the rename starts from. The
+     * differ verifies the declaration against the live schema (old exists,
+     * new absent) before emitting an executable `RenameTable` change — a
+     * declaration that does not match reality falls through to the usual
+     * create/drop handling with the advisory flags, never a wrong rename.
+     *
+     * @param string $oldTable The live table name being renamed.
+     * @return $this
+     * @throws \InvalidArgumentException When the old name is empty.
+     */
+    public function renamedFrom(string $oldTable): static
+    {
+        if (trim($oldTable) === '') {
+            throw new \InvalidArgumentException('A table rename requires a non-empty old table name.');
+        }
+
+        $this->renamedFrom = $oldTable;
+        return $this;
+    }
+
+    /**
+     * The table this blueprint renames, or null when it is not a rename.
+     *
+     * @return string|null The old (live) table name, or null.
+     */
+    final public function getRenamedFrom(): string|null
+    {
+        return $this->renamedFrom;
+    }
+
+    /**
+     * Declare a column rename: the live column `$from` becomes `$to`.
+     *
+     * The differ emits an executable `RenameColumn` change for each
+     * declared rename (after verifying the old column exists live) and
+     * suppresses the add+drop rename advisory for those columns — the
+     * declaration IS the decision, so the data-losing alter shape never
+     * materializes for a declared rename.
+     *
+     * @param string $from The live column name.
+     * @param string $to The new column name.
+     * @return $this
+     * @throws \InvalidArgumentException When either name is empty or the
+     *         names are equal.
+     */
+    public function renameColumn(string $from, string $to): static
+    {
+        if (trim($from) === '' || trim($to) === '') {
+            throw new \InvalidArgumentException('A column rename requires non-empty column names.');
+        }
+
+        if ($from === $to) {
+            throw new \InvalidArgumentException(
+                "A column rename requires different names; got [{$from}] -> [{$to}]."
+            );
+        }
+
+        $this->columnRenames[] = ['from' => $from, 'to' => $to];
+        return $this;
+    }
+
+    /**
+     * The declared column renames, in declaration order.
+     *
+     * @return list<array{from: string, to: string}>
+     */
+    final public function getColumnRenames(): array
+    {
+        return $this->columnRenames;
+    }
+
+    /**
      * The columns to create, in declaration order.
      *
      * @var list<ColumnShape>
@@ -89,6 +237,22 @@ final class Blueprint
      * @var list<string>
      */
     private array $dropColumns = [];
+
+    /**
+     * Live foreign-key constraint names to drop (ALTER only) — the drop
+     * handles captured by the inspector during diffing.
+     *
+     * @var list<string>
+     */
+    private array $dropForeignKeys = [];
+
+    /**
+     * Live CHECK constraint names to drop (ALTER only) — the drop
+     * handles captured by the inspector during diffing.
+     *
+     * @var list<string>
+     */
+    private array $dropChecks = [];
 
     /**
      * Indexes (single or composite), each with its FINAL name.
@@ -118,7 +282,9 @@ final class Blueprint
      * needs the table + columns, both available HERE — not at render time.
      * Shape: `{table}_{columns}_{kind}` for plain indexes, `{table}_{columns}_unique`
      * for uniques (the kind suffix says WHAT the index is, so a unique and
-     * a plain index over the same columns can coexist).
+     * a plain index over the same columns can coexist). The shape itself
+     * is owned by {@see ConstraintNamer} — one convention, shared with
+     * every other constraint kind.
      *
      * @param list<string> $columns The covered columns.
      * @param bool $unique Whether the index is unique.
@@ -126,7 +292,7 @@ final class Blueprint
      */
     private function deriveIndexName(array $columns, bool $unique): string
     {
-        return implode('_', [$this->table, ...$columns, $unique ? 'unique' : 'index']);
+        return ConstraintNamer::derive($this->table, $columns, $unique ? 'unique' : 'index');
     }
 
     /**
@@ -431,10 +597,16 @@ final class Blueprint
      * Foreign-key constraints — single-column via `foreignId()` are inline;
      * this holds table-level (composite) constraints.
      *
+     * Every entry carries its FINAL `name` (derived at declaration via
+     * {@see ConstraintNamer} — `{table}_{columns}_foreign`), the same
+     * doctrine as indexes and checks: the name is the drop handle, final
+     * before render, so the connection and the differ read the same
+     * string the database will see.
+     *
      * `deferrable`/`initiallyDeferred` are Postgres-only options (MySQL and
      * SQLite fail fast at compile time when set).
      *
-     * @var list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
+     * @var list<array{name: string, columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
     private array $foreignKeys = [];
 
@@ -443,12 +615,14 @@ final class Blueprint
      *
      * A CHECK is portable across all three dialects. The expression is
      * spliced verbatim — the raw escape hatch, same trust model as an
-     * {@see \BlueprintAU\Radiant\Database\Query\Expression} default. Named
-     * constraints get `{table}_{name}_check` as their FINAL name (the
-     * grammar renders it verbatim); unnamed constraints render dialect-
-     * default (MySQL/SQLite generate a name, Postgres too).
+     * {@see \BlueprintAU\Radiant\Database\Query\Expression} default. The
+     * NAME follows the same rule as {@see index()}: when given it is the
+     * WHOLE final name (user-set names pass through verbatim); when
+     * omitted it is DERIVED (`{table}_{columns}_check`) — so every CHECK
+     * carries a final name and is diffable by name like every other
+     * constraint.
      *
-     * @var list<array{name: string|null, expression: string}>
+     * @var list<array{name: string, expression: string}>
      */
     private array $checks = [];
 
@@ -500,6 +674,7 @@ final class Blueprint
         }
 
         $this->foreignKeys[] = [
+            'name' => ConstraintNamer::derive($this->table, $columns, 'foreign'),
             'columns' => $columns,
             'references' => [$referencesTable, ...$referencesColumns],
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
@@ -515,13 +690,19 @@ final class Blueprint
      *
      * The expression is spliced verbatim after `CHECK` — the raw escape
      * hatch for dialect functions and predicates (e.g. `price >= 0`,
-     * `status IN ('draft', 'published')`). A named constraint gets the
-     * FINAL name `{table}_{name}_check`; unnamed constraints render the
-     * dialect default.
+     * `status IN ('draft', 'published')`).
+     *
+     * The NAME follows the same rule as {@see index()}: when given it is
+     * the WHOLE final name (user-set names pass through verbatim — no
+     * prefix, no suffix); when omitted it is DERIVED to its final form
+     * here — `{table}_{columns}_check` (the covered columns joined with
+     * underscores) — so anything downstream (the grammar, the differ)
+     * reads the same string, and the constraint is diffable by name like
+     * every other named constraint.
      *
      * @param string $expression The CHECK predicate, spliced verbatim.
-     * @param string|null $name The constraint name; `{table}_{name}_check`
-     *        is derived when null.
+     * @param string|null $name The final constraint name, or null to
+     *        derive `{table}_{columns}_check`.
      * @return $this
      * @throws \InvalidArgumentException When the expression is empty.
      */
@@ -532,17 +713,55 @@ final class Blueprint
         }
 
         $this->checks[] = [
-            'name' => $name === null ? null : $this->table . '_' . $name . '_check',
+            'name' => $name ?? $this->deriveCheckName($expression),
             'expression' => $expression,
         ];
         return $this;
     }
 
     /**
-     * The CHECK constraints — derived names are FINAL at declaration
-     * time; pure read.
+     * Derive the FINAL CHECK name from the expression's column
+     * references.
      *
-     * @return list<array{name: string|null, expression: string}>
+     * Mirrors {@see deriveIndexName()}: the derivation needs the table +
+     * the covered columns, both available HERE. The columns are the
+     * declared column names appearing in the expression (word-boundary
+     * match, longest-first so `user_id` wins over `id`); a CHECK over no
+     * declared column (e.g. `1 = 1`) falls back to a positional suffix.
+     * The shape is owned by {@see ConstraintNamer}.
+     *
+     * @param string $expression The CHECK predicate.
+     * @return string The final CHECK name.
+     */
+    private function deriveCheckName(string $expression): string
+    {
+        $declared = array_map(fn (array $column) => $column['name'], $this->columns);
+
+        // Longest-first so `user_id` matches before `id` inside it.
+        usort($declared, fn (string $a, string $b) => strlen($b) <=> strlen($a));
+
+        $covered = [];
+
+        foreach ($declared as $name) {
+            if (preg_match('/\b' . preg_quote($name, '/') . '\b/i', $expression) === 1) {
+                $covered[] = $name;
+            }
+        }
+
+        if ($covered === []) {
+            // No declared column referenced — positional suffix keeps the
+            // name unique per declaration order.
+            $covered = [(string) (count($this->checks) + 1)];
+        }
+
+        return ConstraintNamer::derive($this->table, $covered, 'check');
+    }
+
+    /**
+     * The CHECK constraints — every entry carries a FINAL name (derived
+     * at declaration time when omitted); pure read.
+     *
+     * @return list<array{name: string, expression: string}>
      */
     public function getChecks(): array
     {
@@ -556,13 +775,15 @@ final class Blueprint
      * `table.column` reference was VALIDATED at {@see column()} time);
      * explicit {@see foreignKey()} declarations (single or composite) are
      * appended after. Each entry's `references` is `[table, ...columns]`.
-     * Every entry carries the full constraint shape — derived single-column
-     * FKs always render `deferrable: false`/`initiallyDeferred: false` (a
-     * column-level `foreign:` flag has no deferrability knobs; use the
-     * class-level `#[ForeignKey(deferrable: ...)]` for those). No derivation
-     * happens here — pure read.
+     * Every entry carries the full constraint shape INCLUDING its final
+     * `name` (derived via {@see ConstraintNamer} — the same handle the
+     * SQLite inspector derives when reading live constraints back).
+     * Derived single-column FKs always render `deferrable: false`/
+     * `initiallyDeferred: false` (a column-level `foreign:` flag has no
+     * deferrability knobs; use the class-level `#[ForeignKey(deferrable: ...)]`
+     * for those). No other derivation happens here — pure read.
      *
-     * @return list<array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
+     * @return list<array{name: string, columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
     public function getForeignKeys(): array
     {
@@ -576,6 +797,7 @@ final class Blueprint
             [$table, $referenced] = explode('.', $column['foreign']);
 
             $foreignKeys[] = [
+                'name' => ConstraintNamer::derive($this->table, [$column['name']], 'foreign'),
                 'columns' => [$column['name']],
                 'references' => [$table, $referenced],
                 'onDelete' => $column['onDelete'],
@@ -601,6 +823,54 @@ final class Blueprint
     {
         $this->dropColumns[] = $name;
         return $this;
+    }
+
+    /**
+     * Drop a foreign-key constraint by its LIVE name (ALTER only).
+     *
+     * The name is the drop handle the inspector captured — the differ
+     * fills it from the live schema, so the drop addresses the constraint
+     * that actually exists.
+     *
+     * @param string $name The live constraint name.
+     * @return $this
+     */
+    public function dropForeignKey(string $name): static
+    {
+        $this->dropForeignKeys[] = $name;
+        return $this;
+    }
+
+    /**
+     * Drop a CHECK constraint by its LIVE name (ALTER only).
+     *
+     * @param string $name The live constraint name.
+     * @return $this
+     */
+    public function dropCheck(string $name): static
+    {
+        $this->dropChecks[] = $name;
+        return $this;
+    }
+
+    /**
+     * The live foreign-key constraint names to drop.
+     *
+     * @return list<string>
+     */
+    final public function getDropForeignKeys(): array
+    {
+        return $this->dropForeignKeys;
+    }
+
+    /**
+     * The live CHECK constraint names to drop.
+     *
+     * @return list<string>
+     */
+    final public function getDropChecks(): array
+    {
+        return $this->dropChecks;
     }
 
     /**

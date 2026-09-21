@@ -850,8 +850,11 @@ class QueryBuilder
                 ->radiant_scalar ?? null;
         }
 
-        [$sql, $alias] = $this->scalarColumn($column);
-        return $this->select($sql)->first()->{$alias} ?? null;
+        $sql = $this->scalarColumn($column);
+
+        // The columnar fetch: the connection reads the single column
+        // directly (no per-row object), positionally — no alias read-back.
+        return $this->connection->selectColumn($this->scopedFor($sql)->limit(1))->first();
     }
 
     /**
@@ -867,27 +870,49 @@ class QueryBuilder
      */
     public function pluck(string $column): Collection
     {
-        [$sql, $alias] = $this->scalarColumn($column);
-        return $this->select($sql)->get()->pluck($alias);
+        $sql = $this->scalarColumn($column);
+
+        // The columnar fetch: values come back positionally, one per row —
+        // no per-row object materialized, no alias read per row.
+        return $this->connection->selectColumn($this->scopedFor($sql));
     }
 
     /**
-     * Resolve a column into the SQL to select and the alias to read back.
+     * Resolve a column into the SQL to select.
      *
-     * Returns the column unchanged with its own alias when one is given
-     * (`sum(price) as total` → read `total`); otherwise the column is
-     * selected under the stable `radiant_scalar` alias so scalar reads
-     * are portable across dialects.
+     * A trailing `as alias` is STRIPPED — the scalar reads fetch the column
+     * positionally ({@see ConnectionInterface::selectColumn()}), so the
+     * result header is never read by name. Stripping also keeps the select
+     * a bare expression, which backends that project by field name (the CSV
+     * connection) can resolve directly. The alias a caller wrote is
+     * documentation, not a read-back key.
      *
      * @param string $column The column expression.
-     * @return array{0: string, 1: string} The select SQL and result alias.
+     * @return string The bare select expression.
      */
-    protected function scalarColumn(string $column): array
+    protected function scalarColumn(string $column): string
     {
-        if (preg_match('/\s+as\s+[`"]?([a-z_][a-z0-9_]*)[`"]?$/i', $column, $matches)) {
-            return [$column, $matches[1]];
-        }
-        return [$column . ' as radiant_scalar', 'radiant_scalar'];
+        return (string) preg_replace('/\s+as\s+[`"]?[a-z_][a-z0-9_]*[`"]?$/i', '', $column);
+    }
+
+    /**
+     * A clone of this builder scoped to a scalar select.
+     *
+     * `value()`/`pluck()` must run ONE column without touching this
+     * builder's state: `select()` would permanently overwrite `$columns`
+     * (a later `get()` would inherit the scalar select). The clone carries
+     * the constraints (wheres, joins, orders) but owns its own column
+     * list.
+     *
+     * @param string $sql The column expression to select.
+     * @return static The scoped clone.
+     */
+    protected function scopedFor(string $sql): static
+    {
+        $clone = clone $this;
+        $clone->columns = [$sql];
+
+        return $clone;
     }
 
     // ---- Aggregates are just select fields (built on select()) ----

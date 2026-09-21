@@ -24,6 +24,8 @@ use Override;
  * precision, matching Postgres' native `timestamp` type.
  *
  * @see SqlConnection
+ *
+ * @extends SqlConnection<\BlueprintAU\Radiant\Database\Grammars\PostgresGrammar, \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar, \BlueprintAU\Radiant\Database\Schema\Inspectors\PostgresSchemaInspector>
  */
 final class PostgresConnection extends SqlConnection
 {
@@ -76,6 +78,18 @@ final class PostgresConnection extends SqlConnection
      * @return bool True — Postgres supports `SAVEPOINT` natively.
      */
     protected function supportsSavepoints(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Postgres DDL is transactional — schema statements roll back with
+     * the transaction.
+     *
+     * @return bool True.
+     */
+    #[Override]
+    public function supportsTransactionalDdl(): bool
     {
         return true;
     }

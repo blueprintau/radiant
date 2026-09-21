@@ -4,12 +4,75 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema\Inspectors;
 
+use BlueprintAU\Radiant\Database\Schema\ConstraintNamer;
+
 /**
  * Reads the live schema on SQLite — `PRAGMA table_info`, `table_xinfo`
  * internals and the `sqlite_master` index rows.
+ *
+ * @extends SchemaInspector<\BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar>
  */
 final class SqliteSchemaInspector extends SchemaInspector
 {
+    /**
+     * The dialect's schema grammar (the factory hook).
+     *
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar The grammar.
+     */
+    protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+    {
+        return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
+    }
+
+    /**
+     * Whether a live column's native type text matches the declared
+     * logical type — the SQLite mapping.
+     *
+     * SQLite is dynamically typed, so the live text is compared against
+     * the native text the SQLite grammar renders for the declared type
+     * (the round-trip guarantee: what the grammar renders is what
+     * `PRAGMA table_info` reads back). The comparison is on the FULL
+     * text — `varchar(100)` vs `varchar(50)` is a real drift.
+     *
+     * @param string $liveType The live column's native type text.
+     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
+     * @param int|null $declaredLength The declared length (strings).
+     * @return bool True when the live type matches the declaration.
+     */
+    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
+    {
+        return strtolower($liveType) === strtolower($this->schemaGrammar->type($declaredType, $declaredLength));
+    }
+
+    /**
+     * The live tables that declare a foreign key INTO the given table —
+     * one `PRAGMA foreign_key_list` scan per table, but only the
+     * referenced-table column is read (no full snapshots).
+     *
+     * @param string $table The referenced table.
+     * @return list<string> The referencing table names.
+     */
+    public function referencingTables(string $table): array
+    {
+        $referencing = [];
+
+        foreach ($this->tables() as $candidate) {
+            $statement = $this->pdo->prepare('PRAGMA foreign_key_list(' . $this->quoteIdentifier($candidate) . ')');
+            $statement->execute();
+
+            /** @var list<array<string, mixed>> $rows */
+            $rows = $statement->fetchAll(\PDO::FETCH_ASSOC);
+
+            foreach ($rows as $row) {
+                if ((string) $row['table'] === $table) {
+                    $referencing[] = $candidate;
+                    break;
+                }
+            }
+        }
+
+        return $referencing;
+    }
     /**
      * Every table name in the live schema.
      *
@@ -59,7 +122,79 @@ final class SqliteSchemaInspector extends SchemaInspector
             $this->columns($name),
             $this->indexes($name),
             $this->foreignKeys($name),
+            $this->checks($name),
         );
+    }
+
+    /**
+     * The live CHECK constraints, parsed from the `sqlite_master` SQL.
+     *
+     * The CREATE TABLE text is the only place SQLite exposes CHECK
+     * definitions; the parse extracts `CONSTRAINT name CHECK (expr)` and
+     * bare `CHECK (expr)` forms (unnamed constraints get a null name and
+     * cannot be diffed by name). The expression is captured verbatim —
+     * the differ's conservative normalization handles the comparison.
+     *
+     * @param string $name The table name.
+     * @return list<array{name: string|null, expression: string|null}> The constraints.
+     */
+    private function checks(string $name): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        );
+        $statement->execute([$name]);
+
+        /** @var string|false $sql */
+        $sql = $statement->fetchColumn();
+
+        if ($sql === false) {
+            return [];
+        }
+
+        // Extract the parenthesized body of the CREATE TABLE, then scan
+        // for CHECK ( ... ) groups with balanced parens.
+        if (preg_match_all('/(?:CONSTRAINT\s+(\S+)\s+)?CHECK\s*\(/i', $sql, $matches, \PREG_OFFSET_CAPTURE) === 0) {
+            return [];
+        }
+
+        $checks = [];
+
+        foreach ($matches[0] as $index => $match) {
+            $nameMatch = $matches[1][$index][0] ?? null;
+            $openParen = (int) $match[1] + strlen((string) $match[0]) - 1;
+
+            // Walk to the matching close paren (balanced scan).
+            $depth = 0;
+            $end = -1;
+            $length = strlen($sql);
+
+            for ($i = $openParen; $i < $length; $i++) {
+                if ($sql[$i] === '(') {
+                    $depth++;
+                } elseif ($sql[$i] === ')') {
+                    $depth--;
+
+                    if ($depth === 0) {
+                        $end = $i;
+                        break;
+                    }
+                }
+            }
+
+            if ($end === -1) {
+                continue; // unbalanced — skip (never guess).
+            }
+
+            $expression = trim(substr($sql, $openParen + 1, $end - $openParen - 1));
+
+            $checks[] = [
+                'name' => $nameMatch === null ? null : trim($nameMatch, '"`\''),
+                'expression' => $expression,
+            ];
+        }
+
+        return $checks;
     }
 
     /**
@@ -176,7 +311,7 @@ final class SqliteSchemaInspector extends SchemaInspector
      * The live foreign keys, from `PRAGMA foreign_key_list`.
      *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string|null}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
@@ -201,7 +336,7 @@ final class SqliteSchemaInspector extends SchemaInspector
 
         $constraints = [];
 
-        foreach ($groups as $group) {
+        foreach ($groups as $id => $group) {
             $constraints[] = [
                 'columns' => $group['columns'],
                 'referencesTable' => $group['referencesTable'],
@@ -210,6 +345,14 @@ final class SqliteSchemaInspector extends SchemaInspector
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
                 // SQLite has no DEFERRABLE — always false.
                 'deferrable' => false,
+                // SQLite does not name inline FK constraints — the derived
+                // `{table}_{columns}_foreign` convention is the handle the
+                // grammar would use; null when it cannot be derived. The
+                // shape comes from the shared {@see ConstraintNamer}, so
+                // the read side can never drift from the write side.
+                'name' => $group['referencesTable'] === ''
+                    ? null
+                    : ConstraintNamer::derive($name, $group['columns'], 'foreign'),
             ];
         }
 

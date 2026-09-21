@@ -22,6 +22,8 @@ use Override;
  * back to one are real SQL statements.
  *
  * @see SqlConnection
+ *
+ * @extends SqlConnection<\BlueprintAU\Radiant\Database\Grammars\MySqlGrammar, \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar, \BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector>
  */
 final class MySqlConnection extends SqlConnection
 {

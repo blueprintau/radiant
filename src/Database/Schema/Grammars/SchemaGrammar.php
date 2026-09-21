@@ -48,11 +48,18 @@ abstract class SchemaGrammar
     /**
      * Map a logical column type to the dialect's native type.
      *
+     * PUBLIC (not protected) because it is half of the content-drift
+     * contract: the inspectors compare the live native type text against
+     * the declared type rendered through THIS mapping — the round-trip
+     * guarantee (what the grammar renders into DDL is exactly what the
+     * inspector reads back) needs the accessor, and the accessor IS the
+     * mapping. Pure read: no state, no I/O.
+     *
      * @param ColumnType $type The logical column type.
      * @param int|null $length The column length, if any.
      * @return string The dialect's native type.
      */
-    abstract protected function type(ColumnType $type, ?int $length = null): string;
+    abstract public function type(ColumnType $type, ?int $length = null): string;
 
     /**
      * Compile a `CREATE TABLE` statement.
@@ -65,7 +72,25 @@ abstract class SchemaGrammar
      */
     final public function compileCreate(Blueprint $blueprint): string
     {
-        $table = $blueprint->getTable();
+        return 'CREATE TABLE ' . $this->wrap($blueprint->getTable()) . ' (' . $this->compileTableBody($blueprint) . ')';
+    }
+
+    /**
+     * Compile the parenthesized BODY of a `CREATE TABLE` — the column
+     * definitions, table-level constraints, and CHECKs, without the
+     * `CREATE TABLE name` wrapper.
+     *
+     * The extraction exists for the SQLite rebuild: the temp table is the
+     * SAME desired shape rendered against a different name, and
+     * {@see Blueprint::forTable()} re-binds a blueprint — so the rebuild
+     * compiles `CREATE TABLE temp (body)` from the re-bound copy without
+     * duplicating the body logic here.
+     *
+     * @param Blueprint $blueprint The table and columns to create.
+     * @return string The body (column definitions + constraints).
+     */
+    final public function compileTableBody(Blueprint $blueprint): string
+    {
         $columns = $blueprint->getColumns();
         if ($columns === []) {
             throw new \InvalidArgumentException('Cannot create a table with no columns.');
@@ -98,7 +123,7 @@ abstract class SchemaGrammar
             $definitions[] = $this->compileCheckConstraint($check);
         }
 
-        return 'CREATE TABLE ' . $this->wrap($table) . ' (' . implode(', ', $definitions) . ')';
+        return implode(', ', $definitions);
     }
 
     /**
@@ -216,6 +241,183 @@ abstract class SchemaGrammar
     final public function compileDrop(string $table): string
     {
         return 'DROP TABLE ' . $this->wrap($table);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... RENAME TO` statement.
+     *
+     * Portable across MySQL, Postgres, and SQLite — the base renders it
+     * and no dialect override is needed. The rename moves the table and
+     * every row with it; indexes and constraints travel with the table.
+     *
+     * @param string $from The live table name.
+     * @param string $to The new table name.
+     * @return string The compiled SQL.
+     */
+    final public function compileRenameTable(string $from, string $to): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($from) . ' RENAME TO ' . $this->wrap($to);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... RENAME COLUMN` statement.
+     *
+     * MySQL 8.0+, Postgres, and SQLite 3.25+ all support `RENAME COLUMN`
+     * with the same syntax — the base renders it and no dialect override
+     * is needed. The column's data travels with the rename.
+     *
+     * @param string $table The table the column is on.
+     * @param string $from The live column name.
+     * @param string $to The new column name.
+     * @return string The compiled SQL.
+     */
+    final public function compileRenameColumn(string $table, string $from, string $to): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($table) . ' RENAME COLUMN '
+            . $this->wrap($from) . ' TO ' . $this->wrap($to);
+    }
+
+    /**
+     * Compile an `INSERT INTO ... SELECT` data-copy statement — the one
+     * new compile the SQLite table rebuild needs.
+     *
+     * The rebuild sequence (create temp → copy → drop old → rename) is
+     * ORCHESTRATION owned by the connection; the grammar's only job in it
+     * is this pure statement compile. The column list comes from the
+     * inspector's LIVE columns at runtime (passed in as a parameter — the
+     * grammar never touches the connection), so the copy projects exactly
+     * the columns that exist on both sides.
+     *
+     * @param string $from The source table (the live table).
+     * @param string $to The destination table (the temp table).
+     * @param list<string> $columns The columns to copy — must exist on
+     *        BOTH tables (the live column names).
+     * @return string The compiled SQL.
+     * @throws \InvalidArgumentException When no columns are given.
+     */
+    final public function compileCopyTable(string $from, string $to, array $columns): string
+    {
+        if ($columns === []) {
+            throw new \InvalidArgumentException('A table copy requires at least one column.');
+        }
+
+        $wrapped = implode(', ', array_map(fn (string $column) => $this->wrap($column), $columns));
+
+        return 'INSERT INTO ' . $this->wrap($to) . ' (' . $wrapped . ') SELECT ' . $wrapped . ' FROM ' . $this->wrap($from);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... MODIFY/ALTER COLUMN` statement — the
+     * in-place content-drift form.
+     *
+     * MySQL renders `MODIFY`; Postgres needs MULTIPLE statements (TYPE /
+     * SET NOT NULL / SET DEFAULT are separate clauses), so it overrides
+     * to return a list. SQLite has NO in-place form at all — it inherits
+     * this base throw and the connection routes the change through the
+     * table rebuild instead (the same gate pattern as
+     * {@see compileDropColumn()}).
+     *
+     * @param Blueprint $blueprint The table-bound blueprint carrying the
+     *        DESIRED column shapes (the modified columns are the ones the
+     *        change targets).
+     * @return list<string> The compiled statements, in execution order.
+     * @throws UnsupportedFeatureException Always in the base dialect
+     *         (SQLite).
+     */
+    public function compileModifyColumn(Blueprint $blueprint): array
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support modifying columns in place; the change requires a table rebuild.'
+        );
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`
+     * statement — the in-place FK-add form.
+     *
+     * MySQL and Postgres support adding a named FK constraint to an
+     * existing table; SQLite has no in-place constraint ALTER and
+     * inherits this base throw (the connection routes the change through
+     * the table rebuild instead). The constraint NAME is required — the
+     * drop handle must exist before the constraint is added, or a later
+     * drop could not address it.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param array{columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
+     *        The constraint shape (the first references element is the
+     *        referenced table).
+     * @param string $name The constraint name (the drop handle).
+     * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException Always in the base dialect
+     *         (SQLite).
+     */
+    public function compileAddForeignKey(string $table, array $foreignKey, string $name): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support adding a foreign key constraint in place; the change requires a table rebuild.'
+        );
+    }
+
+    /**
+     * Compile the `ALTER TABLE ... DROP FOREIGN KEY/CONSTRAINT` statement
+     * — the in-place FK-drop form.
+     *
+     * MySQL uses `DROP FOREIGN KEY name`; Postgres uses `DROP CONSTRAINT
+     * name` — dialects override. SQLite inherits the base throw (rebuild
+     * path).
+     *
+     * @param string $table The table the constraint is on.
+     * @param string $name The live constraint name (the drop handle).
+     * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException Always in the base dialect
+     *         (SQLite).
+     */
+    public function compileDropForeignKey(string $table, string $name): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support dropping a foreign key constraint in place; the change requires a table rebuild.'
+        );
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... CHECK` statement —
+     * the in-place CHECK-add form.
+     *
+     * MySQL and Postgres support it; SQLite inherits the base throw
+     * (rebuild path).
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param string $name The constraint name (the drop handle).
+     * @param string $expression The CHECK predicate, spliced verbatim.
+     * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException Always in the base dialect
+     *         (SQLite).
+     */
+    public function compileAddCheck(string $table, string $name, string $expression): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support adding a CHECK constraint in place; the change requires a table rebuild.'
+        );
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement — the
+     * in-place CHECK-drop form.
+     *
+     * Postgres uses `DROP CONSTRAINT name`; MySQL has no named-CHECK drop
+     * (CHECK constraints are not first-class there) so it inherits the
+     * base throw; SQLite inherits it too (rebuild path).
+     *
+     * @param string $table The table the constraint is on.
+     * @param string $name The live constraint name (the drop handle).
+     * @return string The compiled SQL.
+     * @throws UnsupportedFeatureException Always in the base dialect.
+     */
+    public function compileDropCheck(string $table, string $name): string
+    {
+        throw new UnsupportedFeatureException(
+            'This dialect does not support dropping a CHECK constraint in place; the change requires a table rebuild.'
+        );
     }
 
     /**

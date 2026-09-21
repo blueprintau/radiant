@@ -40,6 +40,26 @@ interface ConnectionInterface
     public function select(QueryBuilder $query): Collection;
 
     /**
+     * Run the query and return the FIRST selected column's values, positionally.
+     *
+     * The scalar-fetch counterpart of {@see select()}: instead of materializing
+     * every matching row as an object and reading one property off each, the
+     * backend fetches the single column directly (a SQL backend uses the
+     * driver's columnar fetch mode, a file-backed backend projects the field
+     * out of its rows). No per-row object allocation, no alias lookup — the
+     * collection holds the raw column values, one per row.
+     *
+     * The column read is the FIRST entry of the query's select list, by
+     * position — callers select exactly one column (the builders' scalar
+     * reads do). When the query selects more than one column, the extras
+     * are computed by the backend but discarded.
+     *
+     * @param QueryBuilder $query The query to run, built via {@see table()}.
+     * @return Collection<int, mixed> The first selected column's values, one per row.
+     */
+    public function selectColumn(QueryBuilder $query): Collection;
+
+    /**
      * Run the query and yield each matching row as it arrives.
      *
      * The streaming counterpart of {@see select()}: each backend materializes

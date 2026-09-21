@@ -6,9 +6,79 @@ namespace BlueprintAU\Radiant\Database\Schema\Inspectors;
 
 /**
  * Reads the live schema on Postgres — `information_schema` + `pg_catalog`.
+ *
+ * @extends SchemaInspector<\BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar>
  */
 final class PostgresSchemaInspector extends SchemaInspector
 {
+    /**
+     * The dialect's schema grammar (the factory hook).
+     *
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar The grammar.
+     */
+    protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+    {
+        return new \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar();
+    }
+
+    /**
+     * Whether a live column's native type text matches the declared
+     * logical type — the Postgres mapping.
+     *
+     * The live text is compared against the native text the Postgres
+     * grammar renders for the declared type (the round-trip guarantee).
+     * Postgres' `information_schema` reports `udt_name`-style short names
+     * (`int4`, `timestamptz`, `varchar`), so the comparison normalizes
+     * the well-known short forms to the grammar's rendering.
+     *
+     * @param string $liveType The live column's native type text.
+     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
+     * @param int|null $declaredLength The declared length (strings).
+     * @return bool True when the live type matches the declaration.
+     */
+    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
+    {
+        // information_schema's udt_name short forms → the grammar's text.
+        $normalized = match (strtolower($liveType)) {
+            'int4' => 'integer',
+            'int8' => 'bigint',
+            'float8' => 'double precision',
+            'bool' => 'boolean',
+            'timestamp' => 'timestamp',
+            'timestamptz' => 'timestamp',
+            'json' => 'jsonb',
+            default => strtolower($liveType),
+        };
+
+        return $normalized === strtolower($this->schemaGrammar->type($declaredType, $declaredLength));
+    }
+
+    /**
+     * The live tables that declare a foreign key INTO the given table —
+     * one `pg_catalog` query.
+     *
+     * @param string $table The referenced table.
+     * @return list<string> The referencing table names.
+     */
+    public function referencingTables(string $table): array
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT DISTINCT relname FROM pg_catalog.pg_constraint c "
+            . "JOIN pg_catalog.pg_class r ON r.oid = c.conrelid "
+            . "JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace "
+            . "WHERE c.contype = 'f' AND c.confrelid = (SELECT oid FROM pg_catalog.pg_class "
+            . "WHERE relname = ? AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace "
+            . "WHERE nspname = current_schema())) AND n.nspname = current_schema()",
+        );
+        $statement->execute([$table]);
+
+        $tables = [];
+        foreach ($statement->fetchAll(\PDO::FETCH_COLUMN) as $name) {
+            $tables[] = (string) $name;
+        }
+
+        return $tables;
+    }
     /**
      * Every table name in the live schema (the connection's search_path).
      *
@@ -200,7 +270,7 @@ final class PostgresSchemaInspector extends SchemaInspector
      * (deferrability from `pg_constraint`).
      *
      * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool}> The constraints.
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}> The constraints.
      */
     private function foreignKeys(string $name): array
     {
@@ -245,7 +315,7 @@ final class PostgresSchemaInspector extends SchemaInspector
 
         $constraints = [];
 
-        foreach ($groups as $group) {
+        foreach ($groups as $constraintName => $group) {
             $constraints[] = [
                 'columns' => $group['columns'],
                 'referencesTable' => $group['referencesTable'],
@@ -253,6 +323,8 @@ final class PostgresSchemaInspector extends SchemaInspector
                 'onDelete' => $this->normalizeAction($group['onDelete']),
                 'onUpdate' => $this->normalizeAction($group['onUpdate']),
                 'deferrable' => ((int) $group['deferrable']) === 1,
+                // The live constraint name — the drop handle.
+                'name' => $constraintName,
             ];
         }
 

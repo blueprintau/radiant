@@ -1072,17 +1072,17 @@ final class ModelQueryBuilder extends QueryBuilder
                 : $this->decodeScalar($column->column, $raw === null ? null : $raw->radiant_scalar);
         }
 
-        [$sql, $alias] = $this->scalarColumn($column);
+        $sql = $this->scalarColumn($column);
 
-        // Fetch the RAW row directly (mirroring first()): the hydrating
-        // first() would return a Model, which has no `radiant_scalar`
-        // property to read the aliased scalar back from. The scoped
-        // builder keeps THIS builder's select untouched — the base's
-        // `$this->select()` mutated state permanently.
-        $rows = $this->connection->select($this->scopedFor($sql)->limit(1));
-        $raw = $rows[0] ?? null;
+        // Fetch the RAW column directly (mirroring first()'s raw-row
+        // fetch): the hydrating first() would return a Model, which has no
+        // scalar property to read the value back from. The columnar fetch
+        // reads the single column positionally — no per-row object
+        // materialized. The scoped builder keeps THIS builder's select
+        // untouched.
+        $raw = $this->connection->selectColumn($this->scopedFor($sql)->limit(1))->first();
 
-        return $this->decodeScalar($column, $raw === null ? null : $raw->{$alias});
+        return $this->decodeScalar($column, $raw);
     }
 
     /**
@@ -1099,12 +1099,13 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     public function pluck(string $column): BaseCollection
     {
-        [$sql, $alias] = $this->scalarColumn($column);
+        $sql = $this->scalarColumn($column);
 
-        // No trailing values() re-index: getRaw() is a 0-based list, and
-        // pluck()/map() preserve those list keys — the result is already
-        // a list, so the re-index would be a no-op collection copy.
-        return $this->scopedFor($sql)->getRaw()->pluck($alias)->map(
+        // The columnar fetch: values come back positionally, one per row —
+        // no per-row object materialized, no alias read per row. map()
+        // preserves the 0-based list keys — the result is already a list,
+        // so no trailing values() re-index (it would be a no-op copy).
+        return $this->connection->selectColumn($this->scopedFor($sql))->map(
             fn(mixed $raw) => $this->decodeScalar($column, $raw),
         );
     }
@@ -1129,7 +1130,8 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param string|Aggregate $sql The column expression (or aggregate) to select.
      * @return static The scoped clone.
      */
-    private function scopedFor(string|Aggregate $sql): static
+    #[\Override]
+    protected function scopedFor(string|Aggregate $sql): static
     {
         $clone = clone $this;
         $clone->columns = [$sql];

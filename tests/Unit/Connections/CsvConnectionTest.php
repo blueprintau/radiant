@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Connections;
 
 use BlueprintAU\Radiant\Database\Connections\CsvConnection;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use PHPUnit\Framework\TestCase;
 
@@ -131,6 +132,102 @@ final class CsvConnectionTest extends TestCase
 
         self::assertSame(3, $count);
         self::assertSame('60', (string) $sum);
+    }
+
+    /**
+     * selectColumn() returns the first selected column's values positionally.
+     */
+    public function testSelectColumn(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+            ['id' => 3, 'name' => 'Carol', 'age' => 40],
+        ]);
+
+        $values = $csv->selectColumn(
+            $csv->table('users')->select('name')->orderBy('age', 'DESC'),
+        );
+        self::assertSame(['Carol', 'Alice', 'Bob'], $values->all());
+    }
+
+    /**
+     * selectColumn() applies wheres and limit like select() does.
+     */
+    public function testSelectColumnAppliesWheresAndLimit(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+            ['id' => 3, 'name' => 'Carol', 'age' => 40],
+        ]);
+
+        $values = $csv->selectColumn(
+            $csv->table('users')->select('name')->where('age', WhereOperator::Gt, 26)->limit(1),
+        );
+        self::assertSame(['Alice'], $values->all());
+    }
+
+    /**
+     * selectColumn() over an aggregate reads the aggregate's values.
+     */
+    public function testSelectColumnOverAggregate(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+            ['id' => 3, 'name' => 'Carol', 'age' => 40],
+        ]);
+
+        $values = $csv->selectColumn(
+            $csv->table('users')->select(new Aggregate('count', '*', 'radiant_scalar')),
+        );
+        self::assertSame([3], $values->all());
+    }
+
+    /**
+     * selectColumn() rejects a wildcard select — no single column to read.
+     */
+    public function testSelectColumnRejectsWildcard(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice'],
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('selectColumn() requires a single named column');
+
+        $csv->selectColumn($csv->table('users')->select('*'));
+    }
+
+    /**
+     * pluck() works on the CSV backend — the bare column name resolves
+     * against the file's fields (a trailing `as alias` would not).
+     */
+    public function testPluckResolvesBareColumn(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+        ]);
+
+        $values = $csv->table('users')->orderBy('age', 'DESC')->pluck('name');
+        self::assertSame(['Alice', 'Bob'], $values->all());
+    }
+
+    /**
+     * pluck() honors a user-supplied alias — the alias is stripped, the
+     * bare expression is what the backend resolves.
+     */
+    public function testPluckWithUserAlias(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice', 'age' => 30],
+            ['id' => 2, 'name' => 'Bob', 'age' => 25],
+        ]);
+
+        $values = $csv->table('users')->orderBy('age', 'DESC')->pluck('name as who');
+        self::assertSame(['Alice', 'Bob'], $values->all());
     }
 
     // ---- cursor ----

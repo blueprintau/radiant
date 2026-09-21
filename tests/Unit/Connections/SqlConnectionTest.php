@@ -258,6 +258,64 @@ final class SqlConnectionTest extends TestCase
         self::assertSame([30, 25], array_map('intval', $values->all()));
     }
 
+    /**
+     * selectColumn() returns the first selected column's values positionally.
+     */
+    public function testSelectColumnReturnsPositionalValues(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $values = $this->connection->selectColumn(
+            $this->connection->table('users')->select('name')->orderBy('age', 'DESC'),
+        );
+        self::assertSame(['Alice', 'Bob'], $values->all());
+    }
+
+    /**
+     * selectColumn() applies wheres and limit like select() does.
+     */
+    public function testSelectColumnAppliesWheresAndLimit(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+            ['name' => 'Carol', 'email' => 'c@example.com', 'age' => 40],
+        ]);
+
+        $values = $this->connection->selectColumn(
+            $this->connection->table('users')->select('name')->where('age', '>', 26)->limit(1),
+        );
+        self::assertSame(['Alice'], $values->all());
+    }
+
+    /**
+     * selectColumn() on an empty result returns an empty list.
+     */
+    public function testSelectColumnEmptyResult(): void
+    {
+        $values = $this->connection->selectColumn(
+            $this->connection->table('users')->select('name')->where('age', '>', 99),
+        );
+        self::assertSame([], $values->all());
+    }
+
+    /**
+     * selectColumnSql() is the raw-SQL counterpart of selectColumn().
+     */
+    public function testSelectColumnSql(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+        ]);
+
+        $values = $this->connection->selectColumnSql('SELECT name FROM users ORDER BY age DESC');
+        self::assertSame(['Alice', 'Bob'], $values->all());
+    }
+
     // ---- Streaming cursors ----
 
     /**

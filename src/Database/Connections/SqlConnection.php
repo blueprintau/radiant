@@ -44,6 +44,10 @@ use Override;
  *   crossing commits. Queries on the same coroutine remain unrestricted.
  *
  * @see ConnectionInterface
+ *
+ * @template TGrammar of Grammar = Grammar
+ * @template TSchemaGrammar of SchemaGrammar = SchemaGrammar
+ * @template TSchemaInspector of \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector = \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
  */
 abstract class SqlConnection implements ConnectionInterface
 {
@@ -62,14 +66,14 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Compiles query-builder state into dialect SQL.
      *
-     * @var Grammar
+     * @var TGrammar
      */
     public readonly Grammar $grammar;
 
     /**
      * Compiles schema definitions into dialect DDL.
      *
-     * @var SchemaGrammar
+     * @var TSchemaGrammar
      */
     public readonly SchemaGrammar $schemaGrammar;
 
@@ -80,7 +84,7 @@ abstract class SqlConnection implements ConnectionInterface
      * `$db->schemaInspector`; the host never constructs one and never
      * touches a PDO to do it.
      *
-     * @var \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+     * @var TSchemaInspector
      */
     public readonly \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector $schemaInspector;
 
@@ -125,7 +129,7 @@ abstract class SqlConnection implements ConnectionInterface
      * no `@var` docblock needed at the call site.
      *
      * @param ConnectionInterface $connection The connection to check.
-     * @phpstan-assert SqlConnection $connection
+     * @phpstan-assert SqlConnection<Grammar, SchemaGrammar, \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector> $connection
      */
     final public static function assertSql(ConnectionInterface $connection): void
     {
@@ -206,6 +210,27 @@ abstract class SqlConnection implements ConnectionInterface
 
         $sql = $this->grammar->compileSelect($query);
         return $this->selectSql($sql, $query->getBindings());
+    }
+
+    /**
+     * Run the query and return the FIRST selected column's values.
+     *
+     * The columnar scalar-read path: compiles exactly as {@see select()}
+     * does, but the driver fetches the single column directly
+     * (`PDO::FETCH_COLUMN`) instead of materializing one `\stdClass` per
+     * row — the allocation the builders' `value()`/`pluck()` reads used to
+     * pay per row. Values are bound through the codec, identical to
+     * {@see select()}.
+     *
+     * @param QueryBuilder $query The query to run.
+     * @return Collection<int, mixed> The first selected column's values, one per row.
+     * @throws QueryException When the statement fails to prepare or execute.
+     */
+    #[Override]
+    final public function selectColumn(QueryBuilder $query): Collection
+    {
+        $sql = $this->grammar->compileSelect($query);
+        return $this->selectColumnSql($sql, $query->getBindings());
     }
 
     /**
@@ -371,6 +396,26 @@ abstract class SqlConnection implements ConnectionInterface
     final public function selectSql(string $sql, array $bindings = []): Collection
     {
         return Collection::make($this->run($sql, $bindings, fn(\PDOStatement $stmt) => $stmt->fetchAll(\PDO::FETCH_OBJ)));
+    }
+
+    /**
+     * Run a raw SQL query and return the FIRST selected column's values.
+     *
+     * The columnar counterpart of {@see selectSql()}: the driver fetches the
+     * single column directly (`PDO::FETCH_COLUMN`), so no per-row object is
+     * materialized and no property lookup runs — the same result shape
+     * {@see selectColumn()} produces for a builder query, for ad-hoc SQL.
+     *
+     * @param string $sql The raw SQL to run.
+     * @param array<string|int, mixed> $bindings The values to bind, keyed by
+     *        column (named) or position (unnamed).
+     * @return Collection<int, mixed> The first selected column's values, one per row.
+     */
+    final public function selectColumnSql(string $sql, array $bindings = []): Collection
+    {
+        /** @var list<mixed> $column */
+        $column = $this->run($sql, $bindings, fn(\PDOStatement $stmt) => $stmt->fetchAll(\PDO::FETCH_COLUMN, 0));
+        return Collection::make($column);
     }
 
     /**
@@ -600,7 +645,7 @@ abstract class SqlConnection implements ConnectionInterface
      * provide the dialect's SQL compilation (identifier quoting, RETURNING,
      * locks, limit/offset).
      *
-     * @return Grammar The grammar used to compile queries.
+     * @return TGrammar The grammar used to compile queries.
      */
     abstract protected function getDefaultQueryGrammar(): Grammar;
 
@@ -609,7 +654,7 @@ abstract class SqlConnection implements ConnectionInterface
      * to provide the dialect's DDL compilation (identifier quoting, type
      * mapping, auto-increment clause).
      *
-     * @return SchemaGrammar The grammar used to compile schema changes.
+     * @return TSchemaGrammar The grammar used to compile schema changes.
      */
     abstract protected function getDefaultSchemaGrammar(): SchemaGrammar;
 
@@ -617,9 +662,28 @@ abstract class SqlConnection implements ConnectionInterface
      * The dialect's live-schema reader — the factory hook for
      * {@see $schemaInspector}, the read-side twin of the schema grammar.
      *
-     * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector The inspector used to read the live schema.
+     * @return TSchemaInspector The inspector used to read the live schema.
      */
     abstract protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
+
+    /**
+     * Whether this dialect's DDL is transactional — schema statements can
+     * run inside a transaction and roll back on failure.
+     *
+     * SQLite and Postgres: YES (transactional DDL — a failed multi-change
+     * apply rolls back cleanly). MySQL: NO (every DDL statement performs
+     * an implicit commit — a mid-apply failure leaves earlier changes
+     * applied, and wrapping them in a transaction would silently commit
+     * them one by one while appearing atomic).
+     *
+     * The synchronizer's `transactional` option gates on this.
+     *
+     * @return bool True when DDL can run inside a transaction.
+     */
+    public function supportsTransactionalDdl(): bool
+    {
+        return false;
+    }
 
     // ---- Schema operations (SQL-only) ----
 
@@ -691,7 +755,168 @@ abstract class SqlConnection implements ConnectionInterface
             SchemaOperation::AddColumn, SchemaOperation::DropColumn => $this->alter($change->operation, $change->blueprint),
             SchemaOperation::DropTable => $this->drop($change->table),
             SchemaOperation::AlterIndexes => $this->rebuildIndexes($change->blueprint),
+            SchemaOperation::RenameTable => $this->renameTable($change->blueprint->getRenamedFrom() ?? throw new \LogicException(
+                "A RenameTable change for [{$change->table}] carries no renamedFrom declaration."
+            ), $change->table),
+            SchemaOperation::RenameColumn => $this->applyColumnRenames($change->blueprint),
+            SchemaOperation::ModifyColumn => $this->modifyColumn($change->blueprint),
+            SchemaOperation::AddForeignKey => $this->addForeignKey($change->table, $change->blueprint),
+            SchemaOperation::DropForeignKey => $this->dropForeignKey($change->table, $change->blueprint),
+            SchemaOperation::AddCheck => $this->addCheck($change->table, $change->blueprint),
+            SchemaOperation::DropCheck => $this->dropCheck($change->table, $change->blueprint),
         };
+    }
+
+    /**
+     * Rename a table.
+     *
+     * Portable across all three dialects (`ALTER TABLE ... RENAME TO`).
+     * Non-destructive: the table and every row move together; indexes and
+     * constraints travel with the table.
+     *
+     * @param string $from The live table name.
+     * @param string $to The new table name.
+     */
+    final public function renameTable(string $from, string $to): void
+    {
+        $this->statement($this->schemaGrammar->compileRenameTable($from, $to));
+    }
+
+    /**
+     * Rename a column on a table.
+     *
+     * MySQL 8.0+, Postgres, and SQLite 3.25+ all support `RENAME COLUMN`
+     * with the same syntax. Non-destructive: the column's data travels
+     * with the rename.
+     *
+     * @param string $table The table the column is on.
+     * @param string $from The live column name.
+     * @param string $to The new column name.
+     */
+    final public function renameColumn(string $table, string $from, string $to): void
+    {
+        $this->statement($this->schemaGrammar->compileRenameColumn($table, $from, $to));
+    }
+
+    /**
+     * Apply every column rename declared on the blueprint, in declaration
+     * order — the `RenameColumn` change's execution body.
+     *
+     * @param Blueprint $blueprint The blueprint carrying the renames.
+     */
+    private function applyColumnRenames(Blueprint $blueprint): void
+    {
+        foreach ($blueprint->getColumnRenames() as $rename) {
+            $this->renameColumn($blueprint->getTable(), $rename['from'], $rename['to']);
+        }
+    }
+
+    /**
+     * Modify one or more columns in place — the content-drift path.
+     *
+     * The base executes the grammar's `compileModifyColumn()` statements
+     * (MySQL `MODIFY`, Postgres `ALTER COLUMN` clauses). Dialects without
+     * an in-place form (SQLite) OVERRIDE this method to route through
+     * {@see rebuildTable()} instead — the grammar's base throw is never
+     * reached on those dialects.
+     *
+     * @param Blueprint $blueprint The table-bound blueprint carrying the
+     *        desired (modified) column shapes.
+     */
+    public function modifyColumn(Blueprint $blueprint): void
+    {
+        foreach ($this->schemaGrammar->compileModifyColumn($blueprint) as $sql) {
+            $this->statement($sql);
+        }
+    }
+
+    /**
+     * Add a foreign-key constraint to an existing table.
+     *
+     * The base executes the grammar's `compileAddForeignKey()` (MySQL and
+     * Postgres). SQLite overrides to route through {@see rebuildTable()}.
+     * The change's blueprint carries the constraint shape AND its final
+     * name (derived at declaration — the same doctrine as indexes and
+     * checks); the connection renders it verbatim, no naming decisions.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param Blueprint $blueprint The blueprint carrying the FK shape.
+     */
+    public function addForeignKey(string $table, Blueprint $blueprint): void
+    {
+        $foreignKeys = $blueprint->getForeignKeys();
+        $first = $foreignKeys[0] ?? throw new \LogicException(
+            "An AddForeignKey change for [{$table}] carries no foreign key declaration."
+        );
+
+        $this->statement($this->schemaGrammar->compileAddForeignKey(
+            $table,
+            $first,
+            $first['name'],
+        ));
+    }
+
+    /**
+     * Drop a foreign-key constraint from an existing table.
+     *
+     * The base executes the grammar's `compileDropForeignKey()` (MySQL
+     * and Postgres). SQLite overrides to route through
+     * {@see rebuildTable()}. The blueprint carries the constraint name to
+     * drop (the live handle captured by the inspector).
+     *
+     * @param string $table The table the constraint is on.
+     * @param Blueprint $blueprint The blueprint carrying the drop target.
+     */
+    public function dropForeignKey(string $table, Blueprint $blueprint): void
+    {
+        $names = $blueprint->getDropForeignKeys();
+        $name = $names[0] ?? throw new \LogicException(
+            "A DropForeignKey change for [{$table}] carries no constraint name."
+        );
+
+        $this->statement($this->schemaGrammar->compileDropForeignKey($table, $name));
+    }
+
+    /**
+     * Add a CHECK constraint to an existing table.
+     *
+     * The base executes the grammar's `compileAddCheck()` (MySQL and
+     * Postgres). SQLite overrides to route through {@see rebuildTable()}.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param Blueprint $blueprint The blueprint carrying the CHECK shape.
+     */
+    public function addCheck(string $table, Blueprint $blueprint): void
+    {
+        $checks = $blueprint->getChecks();
+        $check = $checks[0] ?? throw new \LogicException(
+            "An AddCheck change for [{$table}] carries no CHECK declaration."
+        );
+
+        // Every CHECK carries a final name (derived at declaration when
+        // omitted) — the name is the drop handle for a later drop.
+        $name = $check['name'];
+
+        $this->statement($this->schemaGrammar->compileAddCheck($table, $name, $check['expression']));
+    }
+
+    /**
+     * Drop a CHECK constraint from an existing table.
+     *
+     * The base executes the grammar's `compileDropCheck()` (Postgres).
+     * MySQL and SQLite override or route through {@see rebuildTable()}.
+     *
+     * @param string $table The table the constraint is on.
+     * @param Blueprint $blueprint The blueprint carrying the drop target.
+     */
+    public function dropCheck(string $table, Blueprint $blueprint): void
+    {
+        $names = $blueprint->getDropChecks();
+        $name = $names[0] ?? throw new \LogicException(
+            "A DropCheck change for [{$table}] carries no constraint name."
+        );
+
+        $this->statement($this->schemaGrammar->compileDropCheck($table, $name));
     }
 
     /**

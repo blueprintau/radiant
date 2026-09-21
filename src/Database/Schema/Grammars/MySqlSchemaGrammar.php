@@ -34,7 +34,7 @@ final class MySqlSchemaGrammar extends SchemaGrammar
      * @param int|null $length The column length, if any.
      * @return string The MySQL type.
      */
-    protected function type(ColumnType $type, ?int $length = null): string
+    public function type(ColumnType $type, ?int $length = null): string
     {
         return match ($type) {
             ColumnType::String => 'varchar(' . $this->requireLength($length) . ')',
@@ -98,6 +98,85 @@ final class MySqlSchemaGrammar extends SchemaGrammar
             fn (string $column) => $this->wrap($column),
             $columns,
         ));
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... MODIFY COLUMN` statement — MySQL's
+     * in-place content-drift form.
+     *
+     * One statement per modified column, each carrying the FULL desired
+     * definition (MySQL's MODIFY replaces the whole column definition, so
+     * the desired shape is authoritative — anything omitted would be
+     * dropped from the column). The modified columns are the blueprint's
+     * declared columns; the change's blueprint carries exactly those.
+     *
+     * @param Blueprint $blueprint The table-bound blueprint carrying the
+     *        desired column shapes.
+     * @return list<string> One `MODIFY` statement per column.
+     */
+    public function compileModifyColumn(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+        $columns = $blueprint->getColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot modify columns with no columns defined.');
+        }
+
+        return array_map(
+            fn (array $column): string => 'ALTER TABLE ' . $this->wrap($table)
+                . ' MODIFY ' . $this->compileColumnDefinition($column),
+            $columns,
+        );
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`
+     * statement — MySQL's in-place FK-add form.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
+     *        The constraint shape.
+     * @param string $name The constraint name (the drop handle).
+     * @return string The compiled SQL.
+     */
+    public function compileAddForeignKey(string $table, array $foreignKey, string $name): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ADD CONSTRAINT ' . $this->wrap($name) . ' '
+            . $this->compileForeignKeyConstraint($foreignKey);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... DROP FOREIGN KEY` statement — MySQL's
+     * in-place FK-drop form (MySQL's dialect-specific syntax).
+     *
+     * @param string $table The table the constraint is on.
+     * @param string $name The live constraint name (the drop handle).
+     * @return string The compiled SQL.
+     */
+    public function compileDropForeignKey(string $table, string $name): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' DROP FOREIGN KEY ' . $this->wrap($name);
+    }
+
+    /**
+     * Compile an `ALTER TABLE ... ADD CONSTRAINT ... CHECK` statement —
+     * MySQL's in-place CHECK-add form.
+     *
+     * @param string $table The table to attach the constraint to.
+     * @param string $name The constraint name (the drop handle).
+     * @param string $expression The CHECK predicate, spliced verbatim.
+     * @return string The compiled SQL.
+     */
+    public function compileAddCheck(string $table, string $name, string $expression): string
+    {
+        $this->assertValidIdentifier($name);
+
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ADD CONSTRAINT ' . $this->wrap($name)
+            . ' CHECK (' . $expression . ')';
     }
 
     /**
