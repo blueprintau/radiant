@@ -35,7 +35,7 @@ final class HasOneThrough extends HasManyThrough
         $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $this->query->orderBy($primaryKeys[0]->name);
+            $this->query = $this->query->orderBy($primaryKeys[0]->name);
         }
     }
 
@@ -61,15 +61,17 @@ final class HasOneThrough extends HasManyThrough
      * database returned first.
      *
      * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return void
+     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
      */
-    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
         $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $query->orderBy($primaryKeys[0]->name);
+            $query = $query->orderBy($primaryKeys[0]->name);
         }
+
+        return $query;
     }
 
     /**

@@ -39,18 +39,17 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * The Grammar emits `?` placeholders in the same canonical category order, so
  * the flattened list always matches the compiled SQL.
  *
- * **Cloning is shallow by contract.** All builder state is value-type
- * arrays (wheres, bindings, orders, columns), so `clone $this` gives the
- * copy its own mutable state — the fail-fast reads (`firstOrFail()`,
- * `sole()`, the scalar `value()` path) and `scopedFor()` rely on this.
- * The only reference-type state ($connection, nested WhereBuilders inside
- * existing clauses, union/$from sub-builders, Expression/Aggregate value
- * objects) is shared — safe because no public-API mutation writes INTO an
- * existing nested clause or sub-builder (`whereNested()` always builds a
- * fresh internal builder). Callers who splice raw clauses via the
- * accessors (`getWheres()`) own aliasing themselves.
+ * **Builders are immutable.** Every filter/select/order/limit call returns
+ * a NEW builder — the original is never modified, so a builder can be
+ * shared, reused, and chained safely (`$base = ...; $a = $base->where(...)`
+ * leaves `$base` untouched). The copies are cheap: all builder state is
+ * value-type arrays (wheres, bindings, orders, columns) and PHP's
+ * copy-on-write means `clone` does not deep-copy them until a write.
+ * The only reference-type state ($connection, union/$from sub-builders,
+ * Expression/Aggregate value objects, nested clause snapshots) is shared —
+ * safe because every shared object is itself immutable.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean} | array{type: WhereType::Nested, query: WhereBuilder, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -223,23 +222,25 @@ class QueryBuilder
      * to the `['*']` default select — the explicit reset form.
      *
      * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return $this
+     * @return static A new builder with the select applied; the original is unchanged.
      */
     public function select(string|Expression|Aggregate ...$columns): static
     {
-        $this->columns = $columns === [] ? ['*'] : array_values($columns);
-        return $this;
+        $clone = clone $this;
+        $clone->columns = $columns === [] ? ['*'] : array_values($columns);
+        return $clone;
     }
 
     /**
      * Make the select distinct.
      *
-     * @return $this
+     * @return static A new builder with the distinct flag set; the original is unchanged.
      */
     final public function distinct(): static
     {
-        $this->distinct = true;
-        return $this;
+        $clone = clone $this;
+        $clone->distinct = true;
+        return $clone;
     }
 
     // ---- From ----
@@ -251,18 +252,29 @@ class QueryBuilder
      * is created, so calling this on a builder that already has a subquery
      * from fails fast.
      *
+     * The sub-builder's bindings are SNAPSHOT onto the returned clone
+     * immediately — a builder is a value, so the sub-builder is expected to
+     * be final when fromSub() is called. No compile pass ever writes to a
+     * builder: compilation stays a pure snapshot.
+     *
      * @param QueryBuilder $query The subquery to select from.
      * @param string $alias The alias the subquery is referenced by.
-     * @return $this
+     * @return static A new builder with the subquery from; the original is unchanged.
      */
     final public function fromSub(QueryBuilder $query, string $alias): static
     {
         if ($this->from instanceof QueryBuilder) {
             throw new \LogicException('The query from is already set and cannot be changed.');
         }
-        $this->from = $query;
-        $this->fromAlias = $alias;
-        return $this;
+        $clone = clone $this;
+        $clone->from = $query;
+        $clone->fromAlias = $alias;
+        // Eager capture: the sub-builder's full binding list rides the
+        // From category of the RETURNED clone (the subquery's `?`s all sit
+        // inside the compiled from clause, so their order is exactly the
+        // sub-builder's flattened order).
+        $clone->bindings[BindingCategory::From->value] = $query->getBindings();
+        return $clone;
     }
 
     // ---- Joins ----
@@ -274,7 +286,7 @@ class QueryBuilder
      * @param string $first The first column of the join condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
-     * @return $this
+     * @return static A new builder with the join appended; the original is unchanged.
      */
     public function join(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -288,7 +300,7 @@ class QueryBuilder
      * @param string $first The first column of the join condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
-     * @return $this
+     * @return static A new builder with the join appended; the original is unchanged.
      */
     public function leftJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -302,7 +314,7 @@ class QueryBuilder
      * @param string $first The first column of the join condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
-     * @return $this
+     * @return static A new builder with the join appended; the original is unchanged.
      */
     public function rightJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -313,7 +325,7 @@ class QueryBuilder
      * Add a cross join.
      *
      * @param string $table The table to join.
-     * @return $this
+     * @return static A new builder with the join appended; the original is unchanged.
      */
     final public function crossJoin(string $table): static
     {
@@ -333,7 +345,7 @@ class QueryBuilder
      * @param string $first The first column of the condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the condition.
-     * @return $this
+     * @return static A new builder with the ON condition appended; the original is unchanged.
      * @throws \LogicException When no join has been added yet.
      * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
@@ -348,7 +360,7 @@ class QueryBuilder
      * @param string $first The first column of the condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the condition.
-     * @return $this
+     * @return static A new builder with the ON condition appended; the original is unchanged.
      * @throws \LogicException When no join has been added yet.
      * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
@@ -368,7 +380,7 @@ class QueryBuilder
      * @param string $first The first column of the condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the condition.
-     * @return $this
+     * @return static A new builder with the ON condition appended; the original is unchanged.
      * @throws \LogicException When no join has been added yet.
      * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
@@ -382,14 +394,15 @@ class QueryBuilder
 
         $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
         $last = count($this->joins) - 1;
-        $this->joins[$last]['wheres'][] = [
+        $clone = clone $this;
+        $clone->joins[$last]['wheres'][] = [
             'type' => WhereType::Column,
             'first' => $first,
             'operator' => $resolved,
             'second' => $second,
             'boolean' => $boolean,
         ];
-        return $this;
+        return $clone;
     }
 
     /**
@@ -405,13 +418,14 @@ class QueryBuilder
      * @param string $first The first column of the join condition.
      * @param ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column of the join condition.
-     * @return $this
+     * @return static A new builder with the join appended; the original is unchanged.
      * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
     protected function addJoin(JoinType $type, string $table, string $first, ColumnOperator|string $operator, string $second): static
     {
         $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
-        $this->joins[] = [
+        $clone = clone $this;
+        $clone->joins[] = [
             'type' => $type,
             'table' => $table,
             'wheres' => $second === ''
@@ -424,7 +438,7 @@ class QueryBuilder
                     'boolean' => WhereBoolean::And,
                 ]],
         ];
-        return $this;
+        return $clone;
     }
 
     /**
@@ -474,7 +488,7 @@ class QueryBuilder
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector to the previous clause.
-     * @return $this
+     * @return static A new builder with the clause appended; the original is unchanged.
      */
     public function where(string|Expression $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -500,12 +514,13 @@ class QueryBuilder
             // QueryException on strict drivers, silent mis-binding on lax
             // ones). Fail fast at declaration.
             $this->assertHomogeneousList($value, 'whereIn()/whereNotIn()');
-            $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
-            array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
+            $clone = clone $this;
+            $clone->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+            array_push($clone->bindings[BindingCategory::Where->value], ...array_filter(
                 array_values($value),
                 fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
             ));
-            return $this;
+            return $clone;
         }
 
         if ($operator === WhereOperator::Between || $operator === WhereOperator::NotBetween) {
@@ -513,17 +528,19 @@ class QueryBuilder
             // scalar/Expression pair (e.g. [new Expression('NOW()'), $end])
             // desyncs placeholders from bindings identically.
             $this->assertHomogeneousList($value, 'whereBetween()/whereNotBetween()');
-            $this->wheres[] = ['type' => WhereType::Between, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
-            array_push($this->bindings[BindingCategory::Where->value], ...array_filter(
+            $clone = clone $this;
+            $clone->wheres[] = ['type' => WhereType::Between, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+            array_push($clone->bindings[BindingCategory::Where->value], ...array_filter(
                 array_values($value),
                 fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
             ));
-            return $this;
+            return $clone;
         }
 
         if ($operator === WhereOperator::Null || $operator === WhereOperator::NotNull) {
-            $this->wheres[] = ['type' => WhereType::Null, 'column' => $column, 'operator' => $operator, 'boolean' => $boolean];
-            return $this;
+            $clone = clone $this;
+            $clone->wheres[] = ['type' => WhereType::Null, 'column' => $column, 'operator' => $operator, 'boolean' => $boolean];
+            return $clone;
         }
 
         // A null value with a comparison operator can never match: SQL
@@ -539,11 +556,12 @@ class QueryBuilder
             );
         }
 
-        $this->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
         if (!$value instanceof Expression && !$value instanceof ToSqlValue) {
-            $this->bindings[BindingCategory::Where->value][] = $value;
+            $clone->bindings[BindingCategory::Where->value][] = $value;
         }
-        return $this;
+        return $clone;
     }
 
     /**
@@ -563,13 +581,14 @@ class QueryBuilder
      * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
      * @param array<int, mixed> $bindings The values to bind into the condition.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
+     * @return static A new builder with the clause appended; the original is unchanged.
      */
     public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $this->wheres[] = ['type' => WhereType::Raw, 'sql' => $sql, 'boolean' => $boolean];
-        array_push($this->bindings[BindingCategory::Where->value], ...$bindings);
-        return $this;
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::Raw, 'sql' => $sql, 'boolean' => $boolean];
+        array_push($clone->bindings[BindingCategory::Where->value], ...$bindings);
+        return $clone;
     }
 
     /**
@@ -584,14 +603,15 @@ class QueryBuilder
      * @param ColumnOperator|string $operator The comparison operator (=, !=, <, <=, >, >=).
      * @param string $second The second column.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
+     * @return static A new builder with the clause appended; the original is unchanged.
      * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
      */
     public function whereColumn(string $first, ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
         $resolved = $operator instanceof ColumnOperator ? $operator : ColumnOperator::fromChecked($operator);
-        $this->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $resolved, 'second' => $second, 'boolean' => $boolean];
-        return $this;
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $resolved, 'second' => $second, 'boolean' => $boolean];
+        return $clone;
     }
 
     /**
@@ -599,32 +619,61 @@ class QueryBuilder
      *
      * The callback receives a {@see WhereBuilder} — the where-family ONLY:
      * a parenthesized group is a filter, not a query, so it cannot JOIN,
-     * select, order, or page. The clauses land on THIS builder and are
-     * wrapped in parentheses at compile time.
+     * select, order, or page.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * The callback MUST RETURN the (possibly modified) WhereBuilder — the
+     * returned builder's clauses become the group. A callback that mutates
+     * the argument without returning it adds NOTHING (the discarded result
+     * is a no-op — builders are immutable, so mutation is impossible by
+     * construction):
+     *
+     *     ->whereNested(fn (WhereBuilder $q) => $q->where('active', '=', 1))
+     *
+     * The group is stored as an immutable SNAPSHOT of the returned
+     * builder's clause list — compiled SQL is fixed at group-close time;
+     * an escaped reference can never alter it.
+     *
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
+     *        group's where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return $this
+     * @return static A new builder with the group appended; the original is unchanged.
      */
     final public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
     {
         $nested = $this->newNestedBuilder();
-        $group = new WhereBuilder($nested);
-        $callback($group);
+        $group = $callback(new WhereBuilder($nested));
+
+        // Runtime boundary: the callable signature is PHPDoc-only, so a
+        // mutation-style callback (mutates the argument, returns nothing)
+        // hands back NULL here. PHPStan cannot see this — it trusts the
+        // declared signature and would flag the instanceof as always-true —
+        // but at runtime it is the difference between a clear declaration
+        // error and a bare "call to a member function on null". The ignore
+        // is scoped and justified: the check is redundant FOR TYPED
+        // CALLERS, which is exactly who PHPStan analyzes.
+        /** @phpstan-ignore instanceof.alwaysTrue (runtime boundary: untyped callbacks may return null — see the project convention on scoped ignores) */
+        if (!$group instanceof WhereBuilder) {
+            throw new \InvalidArgumentException(
+                'whereNested() callback must RETURN the WhereBuilder it received '
+                . '(the builder is immutable — mutating the argument without returning it adds nothing).'
+            );
+        }
+
+        $groupQuery = $group->getNestedQuery();
 
         // An empty group is a declaration bug, not a neutral filter: on SQL
         // it compiles to degenerate `()` SQL, and evaluators that walk the
         // clause list would read past its end. Fail fast at declaration.
-        if ($nested->getWheres() === []) {
+        if ($groupQuery->getWheres() === []) {
             throw new \InvalidArgumentException(
                 'A nested where group must contain at least one clause; the callback added none.'
             );
         }
 
-        $this->wheres[] = ['type' => WhereType::Nested, 'query' => $group, 'boolean' => $boolean];
-        array_push($this->bindings[BindingCategory::Where->value], ...$nested->getBindings([BindingCategory::Where]));
-        return $this;
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::Nested, 'group' => new WhereGroup($groupQuery->getWheres()), 'boolean' => $boolean];
+        array_push($clone->bindings[BindingCategory::Where->value], ...$groupQuery->getBindings([BindingCategory::Where]));
+        return $clone;
     }
 
     /**
@@ -651,12 +700,13 @@ class QueryBuilder
      * Group rows by one or more columns (for aggregate + select combos).
      *
      * @param string|array<int, string> $columns The column(s) to group by.
-     * @return $this
+     * @return static A new builder with the groups appended; the original is unchanged.
      */
     public function groupBy(string|array $columns): static
     {
-        $this->groups = array_merge($this->groups, is_array($columns) ? $columns : func_get_args());
-        return $this;
+        $clone = clone $this;
+        $clone->groups = array_merge($this->groups, is_array($columns) ? $columns : func_get_args());
+        return $clone;
     }
 
     /**
@@ -669,16 +719,17 @@ class QueryBuilder
      * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
-     * @return $this
+     * @return static A new builder with the having appended; the original is unchanged.
      */
     public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
         $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
-        $this->havings[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value];
+        $clone = clone $this;
+        $clone->havings[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value];
         if ($value !== null && !$value instanceof Expression && !$value instanceof ToSqlValue) {
-            $this->bindings[BindingCategory::Having->value][] = $value;
+            $clone->bindings[BindingCategory::Having->value][] = $value;
         }
-        return $this;
+        return $clone;
     }
 
     // ---- Ordering / Limit / Offset ----
@@ -701,7 +752,7 @@ class QueryBuilder
      *        SQL fragment wrapped in an Expression (e.g.
      *        `new Expression('FIELD(status, \'new\', \'done\')')`).
      * @param SortDirection|string $direction `ASC` or `DESC` (case-insensitive string).
-     * @return $this
+     * @return static A new builder with the order appended; the original is unchanged.
      * @throws \InvalidArgumentException When the direction is not `ASC` or `DESC`.
      */
     public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
@@ -709,32 +760,35 @@ class QueryBuilder
         $normalized = $direction instanceof SortDirection
             ? $direction
             : SortDirection::fromChecked($direction);
-        $this->orders[] = ['column' => $column, 'direction' => $normalized];
-        return $this;
+        $clone = clone $this;
+        $clone->orders[] = ['column' => $column, 'direction' => $normalized];
+        return $clone;
     }
 
     /**
      * Set the maximum number of rows to return.
      *
      * @param int $limit The row limit.
-     * @return $this
+     * @return static A new builder with the limit set; the original is unchanged.
      */
     public function limit(int $limit): static
     {
-        $this->limit = $limit;
-        return $this;
+        $clone = clone $this;
+        $clone->limit = $limit;
+        return $clone;
     }
 
     /**
      * Set the number of rows to skip.
      *
      * @param int $offset The row offset.
-     * @return $this
+     * @return static A new builder with the offset set; the original is unchanged.
      */
     public function offset(int $offset): static
     {
-        $this->offset = $offset;
-        return $this;
+        $clone = clone $this;
+        $clone->offset = $offset;
+        return $clone;
     }
 
     // ---- Unions ----
@@ -742,21 +796,28 @@ class QueryBuilder
     /**
      * Append a union to the query.
      *
-     * The sub-builder's bindings are NOT copied here — the grammar compiles
-     * each union's SQL at compile time and pulls the sub-builder's bindings
-     * then (see {@see \BlueprintAU\Radiant\Database\Grammars\Grammar::compileUnions()}).
-     * Snapshotting at call time desynchronized the `?` order from the
-     * flattened binding list whenever the sub-builder gained clauses after
-     * the union() call; deferring to compile time keeps them in lockstep.
+     * The sub-builder's bindings are SNAPSHOT onto the returned clone
+     * immediately, in union order — a builder is a value, so the
+     * sub-builder is expected to be final when union() is called. No
+     * compile pass ever writes to a builder: compilation stays a pure
+     * snapshot. (The historical late-binding capture — bindings added to
+     * the sub-builder AFTER union() — was a mutation-era behavior; under
+     * value semantics the captured snapshot IS the builder the union
+     * references.)
      *
      * @param QueryBuilder $query The query to union with.
      * @param bool $all Whether to use `UNION ALL`.
-     * @return $this
+     * @return static A new builder with the union appended; the original is unchanged.
      */
     final public function union(QueryBuilder $query, bool $all = false): static
     {
-        $this->unions[] = ['query' => $query, 'all' => $all];
-        return $this;
+        $clone = clone $this;
+        $clone->unions[] = ['query' => $query, 'all' => $all];
+        // Eager capture: APPEND, because unions are a SEQUENCE — each
+        // union() call adds its sub-builder's bindings after the previous
+        // ones, matching the compiled order of the UNION clauses.
+        array_push($clone->bindings[BindingCategory::Union->value], ...$query->getBindings());
+        return $clone;
     }
 
     // ---- Locks ----
@@ -764,23 +825,25 @@ class QueryBuilder
     /**
      * Lock the selected rows for update.
      *
-     * @return $this
+     * @return static A new builder with the lock set; the original is unchanged.
      */
     final public function lockForUpdate(): static
     {
-        $this->lock = LockType::Update;
-        return $this;
+        $clone = clone $this;
+        $clone->lock = LockType::Update;
+        return $clone;
     }
 
     /**
      * Lock the selected rows in shared mode.
      *
-     * @return $this
+     * @return static A new builder with the lock set; the original is unchanged.
      */
     final public function sharedLock(): static
     {
-        $this->lock = LockType::Shared;
-        return $this;
+        $clone = clone $this;
+        $clone->lock = LockType::Shared;
+        return $clone;
     }
 
     // ---- Execution ----
@@ -818,6 +881,10 @@ class QueryBuilder
     /**
      * Run the query and return the first matching row.
      *
+     * SIDE-EFFECT-FREE: the internal `limit(1)` runs on a new builder
+     * (builders are immutable), so this builder's own limit is untouched —
+     * safe to share a builder between a first() read and a later full read.
+     *
      * @return \stdClass|null The first row, or null when none match.
      */
     public function first(): ?object
@@ -844,17 +911,20 @@ class QueryBuilder
     public function value(string|Aggregate $column): mixed
     {
         if ($column instanceof Aggregate) {
+            // The aggregate rides the stable `radiant_scalar` alias; the
+            // row fetch reads it back by name. select() is immutable — it
+            // returns a new builder, leaving this one's columns untouched.
             return $this
                 ->select(new Aggregate($column->function, $column->column, 'radiant_scalar'))
                 ->first()
                 ->radiant_scalar ?? null;
         }
 
-        $sql = $this->scalarColumn($column);
-
         // The columnar fetch: the connection reads the single column
         // directly (no per-row object), positionally — no alias read-back.
-        return $this->connection->selectColumn($this->scopedFor($sql)->limit(1))->first();
+        // select() is immutable — the scoped select leaves this builder
+        // untouched, so no explicit clone is needed.
+        return $this->connection->selectColumn($this->select($this->scalarColumn($column))->limit(1))->first();
     }
 
     /**
@@ -870,11 +940,10 @@ class QueryBuilder
      */
     public function pluck(string $column): Collection
     {
-        $sql = $this->scalarColumn($column);
-
         // The columnar fetch: values come back positionally, one per row —
-        // no per-row object materialized, no alias read per row.
-        return $this->connection->selectColumn($this->scopedFor($sql));
+        // no per-row object materialized, no alias read per row. select()
+        // is immutable — the scoped select leaves this builder untouched.
+        return $this->connection->selectColumn($this->select($this->scalarColumn($column)));
     }
 
     /**
@@ -893,26 +962,6 @@ class QueryBuilder
     protected function scalarColumn(string $column): string
     {
         return (string) preg_replace('/\s+as\s+[`"]?[a-z_][a-z0-9_]*[`"]?$/i', '', $column);
-    }
-
-    /**
-     * A clone of this builder scoped to a scalar select.
-     *
-     * `value()`/`pluck()` must run ONE column without touching this
-     * builder's state: `select()` would permanently overwrite `$columns`
-     * (a later `get()` would inherit the scalar select). The clone carries
-     * the constraints (wheres, joins, orders) but owns its own column
-     * list.
-     *
-     * @param string $sql The column expression to select.
-     * @return static The scoped clone.
-     */
-    protected function scopedFor(string $sql): static
-    {
-        $clone = clone $this;
-        $clone->columns = [$sql];
-
-        return $clone;
     }
 
     // ---- Aggregates are just select fields (built on select()) ----
@@ -1006,6 +1055,8 @@ class QueryBuilder
      */
     public function aggregates(Aggregate ...$aggregates): \stdClass
     {
+        // The aggregate select rides select() — immutable, so this builder's
+        // own column list is untouched.
         return $this->select(...$aggregates)->first()
             ?? throw new \LogicException(
                 'aggregates() cannot run — the query matched no rows to aggregate (this '
@@ -1080,67 +1131,6 @@ class QueryBuilder
     }
 
     /**
-     * Append bindings to a category at compile time.
-     *
-     * Internal: the Grammar calls this while compiling unions and from
-     * subqueries, so a sub-builder's bindings land in the right category
-     * in exactly the order its SQL was compiled — placeholders and
-     * flattened bindings stay in lockstep even when clauses were added
-     * after union()/fromSub() was called.
-     *
-     * Semantics: REPLACE for a single capture, APPEND for sequential
-     * captures within one compile pass. Callers capturing a SINGLE
-     * subquery (from) use replaceBindings(); callers capturing a SEQUENCE
-     * (each union, in order) call clearBindings(category) once up front,
-     * then pushBindings() per sub-builder. Compiling is a pure snapshot —
-     * recompiling the same builder yields the SAME binding list, never an
-     * accumulated one.
-     *
-     * @param BindingCategory $category The category to append to.
-     * @param list<mixed> $bindings The values to append.
-     * @return void
-     */
-    final public function pushBindings(BindingCategory $category, array $bindings): void
-    {
-        array_push($this->bindings[$category->value], ...$bindings);
-    }
-
-    /**
-     * Replace a category's bindings at compile time (idempotent capture).
-     *
-     * Used by Grammar::compileFrom(): the from subquery is the single
-     * source of From-category bindings, so each compile pass REPLACES the
-     * captured list. Appending would duplicate the subquery's bindings on
-     * every recompile (toSql() twice, compileSelect + execution, etc.)
-     * while the SQL stayed identical — desynchronizing placeholders from
-     * values.
-     *
-     * @param BindingCategory $category The category to replace.
-     * @param list<mixed> $bindings The values to store.
-     * @return void
-     */
-    final public function replaceBindings(BindingCategory $category, array $bindings): void
-    {
-        $this->bindings[$category->value] = $bindings;
-    }
-
-    /**
-     * Clear a category's bindings (start of a compile pass for a sequence
-     * of captures).
-     *
-     * Used by Grammar::compileUnions(): the Union category is rebuilt from
-     * scratch on each compile pass — cleared once, then each union's
-     * sub-builder appends in compiled order.
-     *
-     * @param BindingCategory $category The category to clear.
-     * @return void
-     */
-    final public function clearBindings(BindingCategory $category): void
-    {
-        $this->bindings[$category->value] = [];
-    }
-
-    /**
      * Declare the PK column so insertGetId() can return it (RETURNING / lastInsertId).
      *
      * @param string $column The primary key column.
@@ -1148,13 +1138,14 @@ class QueryBuilder
      *        caller-assigned (non-auto-increment) key declares itself here:
      *        the connection's lastInsertId() fallback is NOT meaningful for
      *        it, and insertGetId() fails fast when one is attempted.
-     * @return $this
+     * @return static A new builder with the id column declared; the original is unchanged.
      */
     final public function insertIdColumn(string $column, bool $autoIncrement = true): static
     {
-        $this->insertIdColumn = $column;
-        $this->insertIdAutoIncrement = $autoIncrement;
-        return $this;
+        $clone = clone $this;
+        $clone->insertIdColumn = $column;
+        $clone->insertIdAutoIncrement = $autoIncrement;
+        return $clone;
     }
 
     // ---- Accessors: the query state contract ----
@@ -1265,14 +1256,38 @@ class QueryBuilder
      * The where clauses.
      *
      * A discriminated union keyed by {@see WhereType} — exhaustively match on
-     * `type` to handle every shape. Nested queries carry their own builder;
-     * recurse via `->getWheres()`.
+     * `type` to handle every shape. Nested clauses carry a SNAPSHOT of their
+     * group's clause list (fixed at group-close time); recurse via
+     * `compileWhereGroup()` on the snapshot.
      *
      * @return list<WhereClause>
      */
     final public function getWheres(): array
     {
         return $this->wheres;
+    }
+
+    /**
+     * Mark the most recent where clause as the soft-delete scope clause.
+     *
+     * The marker lets {@see \BlueprintAU\Radiant\ModelQueryBuilder::withTrashed()}
+     * find and remove the clause BY MARKER, not positional index —
+     * index-independent removal is robust under the builder's immutability.
+     * Constructor-time only: the soft-delete scope is applied exactly once,
+     * when the builder is built, so the write targets the instance being
+     * constructed (no clone semantics apply yet).
+     *
+     * @return void
+     * @throws \LogicException When the builder has no where clauses.
+     */
+    protected function markLastWhereSoftDelete(): void
+    {
+        if ($this->wheres === []) {
+            throw new \LogicException('Cannot mark the soft-delete scope: the builder has no where clauses.');
+        }
+
+        $last = count($this->wheres) - 1;
+        $this->wheres[$last]['softDelete'] = true;
     }
 
     /**

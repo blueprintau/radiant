@@ -325,8 +325,8 @@ abstract class Model
      * Start a model query with a nested where group — the second static
      * sink; `orWhereNested` delegates here.
      *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
+     *        where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
      * @return ModelQueryBuilder<static> The query builder.
      */
@@ -521,11 +521,11 @@ abstract class Model
                 if ($composite) {
                     foreach ($pks as $pk) {
                         if ($pk->name !== null) {
-                            $query->where($pk->name, '=', $key[$pk->name] ?? null);
+                            $query = $query->where($pk->name, WhereOperator::Eq, $key[$pk->name] ?? null);
                         }
                     }
                 } else {
-                    $query->where($pks[0]->name ?? 'id', '=', $key);
+                    $query = $query->where($pks[0]->name ?? 'id', WhereOperator::Eq, $key);
                 }
 
                 $deleted = $query->delete();
@@ -889,11 +889,11 @@ abstract class Model
                 if ($composite) {
                     foreach ($pks as $pk) {
                         if ($pk->name !== null) {
-                            $query->where($pk->name, '=', $key[$pk->name] ?? null);
+                            $query = $query->where($pk->name, WhereOperator::Eq, $key[$pk->name] ?? null);
                         }
                     }
                 } else {
-                    $query->where($pks[0]->name ?? 'id', '=', $key);
+                    $query = $query->where($pks[0]->name ?? 'id', WhereOperator::Eq, $key);
                 }
 
                 $query->update($values);

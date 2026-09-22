@@ -419,7 +419,7 @@ final class CsvConnection implements ConnectionInterface
     private function matchesWhere(array $where, array $row): bool
     {
         return match ($where['type']) {
-            WhereType::Nested => $this->matchesWheres($where['query']->getWheres(), $row),
+            WhereType::Nested => $this->matchesWheres($where['group']->wheres, $row),
             WhereType::Raw => throw new UnsupportedFeatureException('This connection does not support raw where clauses.'),
             WhereType::Column => throw new UnsupportedFeatureException('This connection does not support column-to-column where clauses.'),
             WhereType::Null => $this->matchesNull($row[$where['column']] ?? null, $where['operator']),

@@ -293,7 +293,7 @@ abstract class Relation
     {
         $query = $this->related::newQuery();
 
-        $this->applyEagerOrdering($query);
+        $query = $this->applyEagerOrdering($query);
 
         if ($this->isComposite()) {
             $foreignKeys = $this->getForeignKeys();
@@ -307,12 +307,14 @@ abstract class Relation
                     );
                 }
 
-                $query->orWhereNested(fn(WhereBuilder $nested) => self::applyKeyTuple(
-                    $nested,
-                    $foreignKeys,
-                    $localKeys,
-                    $parentKey,
-                ));
+                $query = $query->orWhereNested(
+                    fn(WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
+                        $nested,
+                        $foreignKeys,
+                        $localKeys,
+                        $parentKey,
+                    )
+                );
             }
 
             return EagerResult::fromCollection($query->get());
@@ -332,11 +334,13 @@ abstract class Relation
      * the OR-group path gets the same ordering.
      *
      * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return void
+     * @return ModelQueryBuilder<TRelated> The (possibly re-decorated) chunk
+     *         query — immutable, so decorators return the new instance.
      */
-    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
         // No default ordering.
+        return $query;
     }
 
     /**
@@ -476,7 +480,7 @@ abstract class Relation
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
         $this->composed = true;
-        $this->query->where($column, $operator, $value, $boolean);
+        $this->query = $this->query->where($column, $operator, $value, $boolean);
 
         return $this;
     }
@@ -485,8 +489,8 @@ abstract class Relation
      * Add a nested where group on the constrained builder — the second
      * sink; the trait's `orWhereNested` default delegates here.
      *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
+     *        where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
      * @return static The relation (chainable).
      */
@@ -495,7 +499,7 @@ abstract class Relation
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
         $this->composed = true;
-        $this->query->whereNested($callback, $boolean);
+        $this->query = $this->query->whereNested($callback, $boolean);
 
         return $this;
     }
@@ -511,7 +515,7 @@ abstract class Relation
     final public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
         $this->composed = true;
-        $this->query->orderBy($column, $direction);
+        $this->query = $this->query->orderBy($column, $direction);
 
         return $this;
     }
@@ -525,7 +529,7 @@ abstract class Relation
     final public function limit(int $limit): static
     {
         $this->composed = true;
-        $this->query->limit($limit);
+        $this->query = $this->query->limit($limit);
 
         return $this;
     }
@@ -539,7 +543,7 @@ abstract class Relation
     final public function offset(int $offset): static
     {
         $this->composed = true;
-        $this->query->offset($offset);
+        $this->query = $this->query->offset($offset);
 
         return $this;
     }
@@ -555,7 +559,7 @@ abstract class Relation
         // No args → the default `['*']` select (a variadic list cannot have
         // a default, so the empty case is handled here).
         $this->composed = true;
-        $this->query->select(...$columns);
+        $this->query = $this->query->select(...$columns);
 
         return $this;
     }
@@ -569,7 +573,7 @@ abstract class Relation
     final public function groupBy(string|array $columns): static
     {
         $this->composed = true;
-        $this->query->groupBy($columns);
+        $this->query = $this->query->groupBy($columns);
 
         return $this;
     }
@@ -585,7 +589,7 @@ abstract class Relation
     final public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
         $this->composed = true;
-        $this->query->having($column, $operator, $value);
+        $this->query = $this->query->having($column, $operator, $value);
 
         return $this;
     }
@@ -720,18 +724,20 @@ abstract class Relation
      * @param list<string> $localKeys The local columns (parent side).
      * @param array<string, int|string|null> $values The parent's key values
      *        keyed by local column name.
-     * @return void
+     * @return \BlueprintAU\Radiant\Database\Query\WhereBuilder The constrained group (immutable — returned to the callback's caller).
      */
     final protected static function applyKeyTuple(
         WhereBuilder $query,
         array $foreignKeys,
         array $localKeys,
         array $values,
-    ): void {
+    ): WhereBuilder {
         foreach ($foreignKeys as $i => $foreignKey) {
             $value = $values[$localKeys[$i]] ?? null;
-            $query->where($foreignKey, $value === null ? WhereOperator::Null : WhereOperator::Eq, $value);
+            $query = $query->where($foreignKey, $value === null ? WhereOperator::Null : WhereOperator::Eq, $value);
         }
+
+        return $query;
     }
 
     /**

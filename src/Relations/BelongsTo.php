@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
 
@@ -41,7 +42,7 @@ final class BelongsTo extends Relation
                 //
                 // local side = the RELATED table's owner columns, foreign
                 // side = THIS table's FK columns.
-                $this->query->whereNested(fn (WhereBuilder $nested) => self::applyKeyTuple(
+                $this->query = $this->query->whereNested(fn (WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
                     $nested,
                     $this->getLocalKeys(),
                     $this->getForeignKeys(),
@@ -50,7 +51,7 @@ final class BelongsTo extends Relation
             } else {
                 // Null FK component → no results, without compiling a
                 // meaningless query.
-                $this->query->whereRaw('1 = 0', []);
+                $this->query = $this->query->whereRaw('1 = 0', []);
             }
 
             return;
@@ -59,10 +60,10 @@ final class BelongsTo extends Relation
         $fkValue = $this->parent->attribute($this->getForeignKey());
 
         if ($fkValue !== null) {
-            $this->query->where($this->getLocalKey(), '=', $fkValue);
+            $this->query = $this->query->where($this->getLocalKey(), WhereOperator::Eq, $fkValue);
         } else {
             // Null FK → no results, without compiling a meaningless query.
-            $this->query->whereRaw('1 = 0', []);
+            $this->query = $this->query->whereRaw('1 = 0', []);
         }
     }
 
@@ -124,7 +125,7 @@ final class BelongsTo extends Relation
                 );
             }
 
-            $query->orWhereNested(fn (WhereBuilder $nested) => self::applyKeyTuple(
+            $query = $query->orWhereNested(fn (WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
                 $nested,
                 $localKeys,
                 $foreignKeys,

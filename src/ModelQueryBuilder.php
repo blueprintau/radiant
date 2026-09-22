@@ -65,14 +65,6 @@ final class ModelQueryBuilder extends QueryBuilder
     protected array $modelColumns = [];
 
     /**
-     * The auto-applied soft-delete where's index (null when not applied,
-     * or already removed by `withTrashed()`).
-     *
-     * @var int|null
-     */
-    protected ?int $softDeleteWhereIndex = null;
-
-    /**
      * The eager-loaded relation paths (validated at with() time).
      *
      * @var list<string>
@@ -103,17 +95,6 @@ final class ModelQueryBuilder extends QueryBuilder
      * @var list<array{class-string<Model>, string}>
      */
     protected array $mtiChain = [];
-
-    /**
-     * The index of the `onlyTrashed()` whereNotNull clause (null when not
-     * applied). Tracked separately from the scope index so the state
-     * machine round-trips: `onlyTrashed() → withTrashed()` must be able to
-     * remove the NOT-NULL clause — with only the scope index tracked, the
-     * toggle silently left the builder still returning only-trashed rows.
-     *
-     * @var int|null
-     */
-    protected ?int $onlyTrashedWhereIndex = null;
 
     /**
      * Memoized relation resolutions, keyed by "class::method".
@@ -220,14 +201,19 @@ final class ModelQueryBuilder extends QueryBuilder
         // PK declares nothing: no single column identifies the row).
         $primaryKeys = $metadata->primaryKeys;
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $this->insertIdColumn($primaryKeys[0]->name, $primaryKeys[0]->autoIncrement);
+            // Constructor context: assign directly (the immutable clone API
+            // is for post-construction callers).
+            $this->insertIdColumn = $primaryKeys[0]->name;
+            $this->insertIdAutoIncrement = $primaryKeys[0]->autoIncrement;
         }
-
-        // Auto-apply the soft-delete scope (track its index so
-        // withTrashed() can remove it). The column name comes off the
-        // metadata — no trait static call on a class that may not have it.
-        // MTI: the scope qualifies to the OWNING table (the synthetic
-        // column lives where the trait declared it).
+        // Auto-apply the soft-delete scope. The clause carries the
+        // `softDelete` marker so withTrashed()/onlyTrashed() can find and
+        // remove it by MARKER, not positional index — index-independent
+        // removal is robust under the builder's immutability (clones
+        // reindex nothing). The column name comes off the metadata — no
+        // trait static call on a class that may not have it. MTI: the
+        // scope qualifies to the OWNING table (the synthetic column lives
+        // where the trait declared it).
         if ($metadata->softDeleteColumn !== null) {
             $scopeColumn = $metadata->softDeleteColumn;
 
@@ -235,8 +221,12 @@ final class ModelQueryBuilder extends QueryBuilder
                 $scopeColumn = $this->partitions[$scopeColumn] . '.' . $scopeColumn;
             }
 
-            $this->whereNull($scopeColumn);
-            $this->softDeleteWhereIndex = count($this->getWheres()) - 1;
+            // The constructor is the ONE place a builder finalizes its own
+            // state: the scope rides the instance being built, then is
+            // marked for withTrashed()/onlyTrashed() marker-based removal.
+            $scoped = $this->whereNull($scopeColumn);
+            $scoped->markLastWhereSoftDelete();
+            $this->wheres = $scoped->getWheres();
         }
     }
 
@@ -250,7 +240,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * `'posts.comments'` loads posts, then each post's comments.
      *
      * @param list<string> $relations The relation paths.
-     * @return static The builder.
+     * @return static A new builder with the eager loads registered; the original is unchanged.
      * @throws \InvalidArgumentException When a path does not resolve to a
      *         chain of relation methods.
      */
@@ -258,12 +248,16 @@ final class ModelQueryBuilder extends QueryBuilder
     {
         foreach ($relations as $path) {
             $this->assertRelationPath($path);
-
             $this->validateRelationPath($path);
-            $this->eagerLoad[] = $path;
         }
 
-        return $this;
+        $clone = clone $this;
+
+        foreach ($relations as $path) {
+            $clone->eagerLoad[] = $path;
+        }
+
+        return $clone;
     }
 
     /**
@@ -607,7 +601,8 @@ final class ModelQueryBuilder extends QueryBuilder
         // Re-select every column qualified + aliased back to its plain
         // columnName — raw keys stay unambiguous across all levels. Plain
         // `table.column as column` specs: the Grammar's wrapColumn() owns
-        // the quoting AND the AS rendering.
+        // the quoting AND the AS rendering. Constructor-time: the builder
+        // finalizes its own state here (the one self-mutation point).
         $selects = [];
 
         foreach ($this->modelColumns as $column) {
@@ -615,7 +610,7 @@ final class ModelQueryBuilder extends QueryBuilder
             $selects[] = "{$ownerTable}.{$column} as {$column}";
         }
 
-        parent::select(...$selects);
+        $this->columns = $selects;
     }
 
     /**
@@ -645,7 +640,6 @@ final class ModelQueryBuilder extends QueryBuilder
 
         return parent::whereColumn($first, $operator, $second, $boolean);
     }
-
     /**
      * Add a raw SQL where clause.
      *
@@ -740,39 +734,42 @@ final class ModelQueryBuilder extends QueryBuilder
      * Include soft-deleted rows — removes the auto-applied scope (and any
      * `onlyTrashed()` NOT-NULL clause).
      *
-     * @return static The builder.
+     * The clauses are found by their `softDelete` MARKER, not a positional
+     * index — removal is index-independent and survives any amount of
+     * clause churn between calls.
+     *
+     * @return static A new builder without the soft-delete clauses; the original is unchanged.
      */
     public function withTrashed(): static
     {
-        if ($this->onlyTrashedWhereIndex !== null) {
-            $wheres = $this->getWheres();
-            unset($wheres[$this->onlyTrashedWhereIndex]);
-            $this->wheres = array_values($wheres);
-            $this->onlyTrashedWhereIndex = null;
+        $wheres = $this->getWheres();
+
+        $filtered = array_values(array_filter(
+            $wheres,
+            fn(array $where): bool => !($where['softDelete'] ?? false),
+        ));
+
+        if ($filtered === $wheres) {
+            return $this; // nothing to remove — reuse the instance.
         }
 
-        if ($this->softDeleteWhereIndex !== null) {
-            $wheres = $this->getWheres();
-            unset($wheres[$this->softDeleteWhereIndex]);
-            $this->wheres = array_values($wheres);
-            $this->softDeleteWhereIndex = null;
-        }
-
-        return $this;
+        $clone = clone $this;
+        $clone->wheres = $filtered;
+        return $clone;
     }
 
     /**
-     * Only soft-deleted rows — replaces the scope with a tracked
+     * Only soft-deleted rows — replaces the scope with a marked
      * `whereNotNull` so the toggle round-trips.
      *
-     * The clause index is remembered; a later `withTrashed()` removes it.
-     * Without the tracking, `Model::onlyTrashed()->withTrashed()` silently
-     * kept the NOT-NULL clause and still returned only-trashed rows. The
-     * column is qualified exactly like the constructor's scope — on MTI
-     * models the joined query needs `table.column`, else the SQL fails
-     * with an ambiguous-column error.
+     * The clause carries the same `softDelete` marker; a later
+     * `withTrashed()` removes it. Without the marker, `Model::onlyTrashed()->withTrashed()`
+     * silently kept the NOT-NULL clause and still returned only-trashed
+     * rows. The column is qualified exactly like the constructor's scope —
+     * on MTI models the joined query needs `table.column`, else the SQL
+     * fails with an ambiguous-column error.
      *
-     * @return static The builder.
+     * @return static A new builder scoped to only-trashed rows; the original is unchanged.
      */
     public function onlyTrashed(): static
     {
@@ -787,16 +784,17 @@ final class ModelQueryBuilder extends QueryBuilder
 
         // First clear any existing soft-delete state (scope and/or a
         // previous onlyTrashed clause) so the toggle is idempotent.
-        $this->withTrashed();
+        $cleared = $this->withTrashed();
 
-        if (isset($this->partitions[$column])) {
-            $column = $this->partitions[$column] . '.' . $column;
+        if (isset($cleared->partitions[$column])) {
+            $column = $cleared->partitions[$column] . '.' . $column;
         }
 
-        $this->whereNotNull($column);
-        $this->onlyTrashedWhereIndex = count($this->getWheres()) - 1;
+        $scoped = $cleared->whereNotNull($column);
+        $scoped->markLastWhereSoftDelete();
 
-        return $this;
+        $clone = clone $scoped;
+        return $clone;
     }
 
     // ---- Execution (hydration) ----
@@ -887,6 +885,8 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     public function first(): ?Model
     {
+        // limit() is immutable — it returns a scoped clone, leaving this
+        // builder's own limit untouched.
         $rows = $this->connection->select($this->limit(1));
         $row = $rows[0] ?? null;
 
@@ -1111,30 +1111,29 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * A clone of this builder scoped to a scalar select.
+     * A clone of this builder scoped to a scalar or aggregate select.
      *
-     * `value()`/`pluck()` must run ONE column under the stable
-     * `radiant_scalar` alias — on THIS builder, `select()` would (a)
-     * permanently overwrite `$columns` (a later `get()` would inherit the
-     * scalar select) and (b) re-merge the forced PK, dragging extra
-     * columns into the query. The clone carries the constraints (wheres,
-     * joins, soft-delete state) but owns its own column list.
+     * `value()`/`pluck()`/`aggregates()` must run THEIR columns without
+     * touching this builder's state — and on THIS builder, `select()`
+     * cannot be used for that: it (a) re-merges the forced PK, dragging
+     * extra columns into the query, and (b) validates every column against
+     * the model's declared set, rejecting computed expressions like
+     * `lower(email)` or `sum(price)`. The clone carries the constraints
+     * (wheres, joins, soft-delete state) but owns its own column list —
+     * the deliberate bypass primitive for internal scalar reads. The BASE
+     * builder has no such helper (its `select()` is safe to use directly);
+     * this is model-layer-only.
      *
-     * Shallow clone + one `parent::select()` call: all mutable builder
-     * state is value-type arrays (wheres, bindings, orders) — the only
-     * reference-type state is `$connection` (shared, readonly, safe) and
-     * `$from`/`$unions` sub-builders (none exist on a table-bound
-     * scalar read; a unioned pluck is not a shape the scalar path
-     * supports).
+     * VARIADIC: one column per argument — `aggregates()` spreads its
+     * aggregate list directly.
      *
-     * @param string|Aggregate $sql The column expression (or aggregate) to select.
+     * @param string|Aggregate ...$sql Each column expression or aggregate.
      * @return static The scoped clone.
      */
-    #[\Override]
-    protected function scopedFor(string|Aggregate $sql): static
+    protected function scopedFor(string|Aggregate ...$sql): static
     {
         $clone = clone $this;
-        $clone->columns = [$sql];
+        $clone->columns = $sql === [] ? ['*'] : array_values($sql);
 
         return $clone;
     }
@@ -1245,8 +1244,10 @@ final class ModelQueryBuilder extends QueryBuilder
     public function aggregates(Aggregate ...$aggregates): \stdClass
     {
         // Raw rows — a hydrated Model has no aggregate-alias properties to
-        // read the values back from.
-        $row = $this->select(...$aggregates)->getRaw()->first();
+        // read the values back from. The aggregate select rides the scoped
+        // clone: this builder's own column list is untouched. The spread
+        // forwards the variadic list directly.
+        $row = $this->scopedFor(...$aggregates)->getRaw()->first();
 
         $out = new \stdClass();
 
@@ -1359,15 +1360,17 @@ final class ModelQueryBuilder extends QueryBuilder
                 return $this->whereRaw('1 = 0');
             }
 
+            $builder = $this;
+
             foreach (array_chunk($id, self::KEY_CHUNK) as $chunk) {
                 foreach ($chunk as $key) {
-                    $this->orWhereNested(function (WhereBuilder $nested) use ($key): void {
-                        $this->applyWhereKeyOn($nested, $key);
-                    });
+                    $builder = $builder->orWhereNested(
+                        fn (WhereBuilder $nested): WhereBuilder => $this->applyWhereKeyOn($nested, $key)
+                    );
                 }
             }
 
-            return $this;
+            return $builder;
         }
 
         // Composite PK → accept an associative array of column => value.
@@ -1382,11 +1385,9 @@ final class ModelQueryBuilder extends QueryBuilder
         // the wrong rows); grouped, the parts AND within the parens and the
         // caller's OR stays at the constraint's edges.
         if (is_array($id)) {
-            $this->whereNested(function (WhereBuilder $nested) use ($id): void {
-                $this->applyWhereKeyOn($nested, $id);
-            });
-
-            return $this;
+            return $this->whereNested(
+                fn (WhereBuilder $nested): WhereBuilder => $this->applyWhereKeyOn($nested, $id)
+            );
         }
 
         $single = $this->assertSingleKeyValue($id);
@@ -1425,12 +1426,13 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * @param WhereBuilder $nested The group to constrain.
      * @param mixed $key The scalar key value or column => value map.
-     * @return void
+     * @return WhereBuilder The constrained group (immutable — returned to
+     *         the callback's caller, which forwards it to whereNested()).
      * @throws \InvalidArgumentException When the key shape does not match
      *         the model's PK (a scalar for a composite model, a map for a
      *         single-PK model), or a column/value fails validation.
      */
-    private function applyWhereKeyOn(WhereBuilder $nested, mixed $key): void
+    private function applyWhereKeyOn(WhereBuilder $nested, mixed $key): WhereBuilder
     {
         $primaryKeys = MetadataFactory::for($this->modelClass)->primaryKeys;
 
@@ -1446,10 +1448,10 @@ final class ModelQueryBuilder extends QueryBuilder
                     $qualified = ($this->partitions[$qualified] ?? $this->table) . '.' . $qualified;
                 }
 
-                $nested->where($qualified, WhereOperator::Eq, $validated['value']);
+                $nested = $nested->where($qualified, WhereOperator::Eq, $validated['value']);
             }
 
-            return;
+            return $nested;
         }
 
         $single = $this->assertSingleKeyValue($key);
@@ -1466,7 +1468,7 @@ final class ModelQueryBuilder extends QueryBuilder
             $pkName = ($this->partitions[$pkName] ?? $this->table) . '.' . $pkName;
         }
 
-        $nested->where($pkName, WhereOperator::Eq, $single);
+        return $nested->where($pkName, WhereOperator::Eq, $single);
     }
 
     /**

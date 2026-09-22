@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
 
@@ -94,17 +95,19 @@ abstract class MorphOneOrMany extends Relation
         if ($parentKey === null) {
             // Null parent key → no results, without compiling a meaningless
             // query (BelongsTo's convention).
-            $this->query->whereRaw('1 = 0', []);
+            $this->query = $this->query->whereRaw('1 = 0', []);
             return;
         }
 
         $alias = $this->parentMorphAlias();
         $foreignKey = $this->getForeignKey();
+        $typeColumn = $this->typeColumn;
 
-        $this->query->whereNested(function (WhereBuilder $nested) use ($foreignKey, $parentKey, $alias): void {
-            $nested->where($foreignKey, '=', $parentKey);
-            $nested->where($this->typeColumn, '=', $alias);
-        });
+        $this->query = $this->query->whereNested(
+            fn (WhereBuilder $nested): WhereBuilder => $nested
+                ->where($foreignKey, WhereOperator::Eq, $parentKey)
+                ->where($typeColumn, WhereOperator::Eq, $alias)
+        );
     }
 
     /**
@@ -116,11 +119,13 @@ abstract class MorphOneOrMany extends Relation
      * before the FK `IN` is applied.
      *
      * @param \BlueprintAU\Radiant\ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return void
+     * @return \BlueprintAU\Radiant\ModelQueryBuilder<TRelated> The filtered chunk query.
      */
     #[\Override]
-    protected function applyEagerOrdering(\BlueprintAU\Radiant\ModelQueryBuilder $query): void
+    protected function applyEagerOrdering(\BlueprintAU\Radiant\ModelQueryBuilder $query): \BlueprintAU\Radiant\ModelQueryBuilder
     {
-        $query->where($this->typeColumn, '=', $this->parentMorphAlias());
+        // The chunk query is immutable — the type filter returns a new
+        // instance, which the eager loader must receive.
+        return $query->where($this->typeColumn, WhereOperator::Eq, $this->parentMorphAlias());
     }
 }

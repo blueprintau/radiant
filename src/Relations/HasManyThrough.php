@@ -124,7 +124,7 @@ class HasManyThrough extends Relation
         $secondKeys = $this->secondKeyList();
         $intermediateKeys = $this->intermediateKeys($secondKeys);
 
-        $this->query->join(
+        $this->query = $this->query->join(
             $throughTable,
             self::qualify($relatedTable, $secondKeys[0]),
             '=',
@@ -132,7 +132,7 @@ class HasManyThrough extends Relation
         );
 
         foreach (array_slice($secondKeys, 1) as $i => $secondKey) {
-            $this->query->on(
+            $this->query = $this->query->on(
                 self::qualify($relatedTable, $secondKey),
                 '=',
                 self::qualify($throughTable, $intermediateKeys[$i + 1]),
@@ -145,11 +145,11 @@ class HasManyThrough extends Relation
             if ($parentKey === null) {
                 // Null parent key → no results, without compiling a
                 // meaningless query (BelongsTo's convention).
-                $this->query->whereRaw('1 = 0', []);
+                $this->query = $this->query->whereRaw('1 = 0', []);
                 return;
             }
 
-            $this->query->where(
+            $this->query = $this->query->where(
                 self::qualify($throughTable, $firstKeys[0]),
                 '=',
                 $parentKey,
@@ -161,16 +161,20 @@ class HasManyThrough extends Relation
         // The tuple lands inside a whereNested GROUP — the parent filter is
         // ONE constraint unit: a caller's later `->orWhere(...)` must OR at
         // the constraint's EDGES, never against the tuple's PARTS.
-        $this->query->whereNested(function (WhereBuilder $nested) use ($throughTable, $firstKeys): void {
-            foreach ($firstKeys as $firstKey) {
-                $value = $this->parent->attribute($firstKey);
-                $nested->where(
-                    self::qualify($throughTable, $firstKey),
-                    $value === null ? WhereOperator::Null : WhereOperator::Eq,
-                    $value,
-                );
+        $this->query = $this->query->whereNested(
+            function (WhereBuilder $nested) use ($throughTable, $firstKeys): WhereBuilder {
+                foreach ($firstKeys as $firstKey) {
+                    $value = $this->parent->attribute($firstKey);
+                    $nested = $nested->where(
+                        self::qualify($throughTable, $firstKey),
+                        $value === null ? WhereOperator::Null : WhereOperator::Eq,
+                        $value,
+                    );
+                }
+
+                return $nested;
             }
-        });
+        );
     }
 
     /**
@@ -337,10 +341,10 @@ class HasManyThrough extends Relation
         // Subclass ordering hook (HasOneThrough): applies the related-PK
         // order so first-wins matching stays deterministic, exactly like
         // the lazy path. No-op for the base many-row relation.
-        $this->applyEagerOrdering($builder);
+        $builder = $this->applyEagerOrdering($builder);
 
         foreach (array_slice($secondKeys, 1) as $i => $secondKey) {
-            $builder->on(
+            $builder = $builder->on(
                 self::qualify($relatedTable, $secondKey),
                 '=',
                 self::qualify($throughTable, $intermediateKeys[$i + 1]),
@@ -348,7 +352,7 @@ class HasManyThrough extends Relation
         }
 
         if (!$this->isComposite()) {
-            $builder->whereIn(
+            $builder = $builder->whereIn(
                 self::qualify($throughTable, $firstKeys[0]),
                 $parentKeys,
             );
@@ -361,16 +365,20 @@ class HasManyThrough extends Relation
                     );
                 }
 
-                $builder->orWhereNested(function (WhereBuilder $nested) use ($throughTable, $firstKeys, $parentKey): void {
-                    foreach ($firstKeys as $firstKey) {
-                        $value = $parentKey[$firstKey] ?? null;
-                        $nested->where(
-                            self::qualify($throughTable, $firstKey),
-                            $value === null ? WhereOperator::Null : WhereOperator::Eq,
-                            $value,
-                        );
+                $builder = $builder->orWhereNested(
+                    function (WhereBuilder $nested) use ($throughTable, $firstKeys, $parentKey): WhereBuilder {
+                        foreach ($firstKeys as $firstKey) {
+                            $value = $parentKey[$firstKey] ?? null;
+                            $nested = $nested->where(
+                                self::qualify($throughTable, $firstKey),
+                                $value === null ? WhereOperator::Null : WhereOperator::Eq,
+                                $value,
+                            );
+                        }
+
+                        return $nested;
                     }
-                });
+                );
             }
         }
 
@@ -388,7 +396,7 @@ class HasManyThrough extends Relation
 
         $selects[] = "{$relatedTable}.*";
 
-        $builder->select(...$selects);
+        $builder = $builder->select(...$selects);
 
         $rows = $builder->getRaw();
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
@@ -32,7 +33,7 @@ final class HasOne extends HasMany
         $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $this->query->orderBy($primaryKeys[0]->name);
+            $this->query = $this->query->orderBy($primaryKeys[0]->name);
         }
 
         if ($this->isComposite()) {
@@ -40,7 +41,7 @@ final class HasOne extends HasMany
             // constraint is ONE unit: the parts AND within the parens, and
             // a caller's later `->orWhere(...)` ORs at the constraint's
             // edges instead of against the tuple's PARTS.
-            $this->query->whereNested(fn (WhereBuilder $nested) => self::applyKeyTuple(
+            $this->query = $this->query->whereNested(fn (WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
                 $nested,
                 $this->getForeignKeys(),
                 $this->getLocalKeys(),
@@ -55,11 +56,11 @@ final class HasOne extends HasMany
         if ($parentKey === null) {
             // Null parent key → no results, without compiling a meaningless
             // query (BelongsTo's convention; `fk = NULL` matches no rows).
-            $this->query->whereRaw('1 = 0', []);
+            $this->query = $this->query->whereRaw('1 = 0', []);
             return;
         }
 
-        $this->query->where($this->getForeignKey(), '=', $parentKey);
+        $this->query = $this->query->where($this->getForeignKey(), WhereOperator::Eq, $parentKey);
     }
 
     /**
@@ -86,15 +87,17 @@ final class HasOne extends HasMany
      * backends, plans, and page sizes.
      *
      * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return void
+     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
      */
-    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
         $primaryKeys = MetadataFactory::for($this->related)->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $query->orderBy($primaryKeys[0]->name);
+            $query = $query->orderBy($primaryKeys[0]->name);
         }
+
+        return $query;
     }
 
     /**

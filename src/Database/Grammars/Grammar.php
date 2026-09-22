@@ -10,7 +10,6 @@ use BlueprintAU\Radiant\Database\Concerns\QuotesLiterals;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
-use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
@@ -234,6 +233,11 @@ abstract class Grammar
     /**
      * Compile a select statement.
      *
+     * Compiling is a PURE snapshot: the builder passed in is never
+     * modified. Sub-builder bindings are captured EAGERLY at
+     * union()/fromSub() call time (value semantics — the sub-builder is
+     * final when captured), so no compile pass ever writes to a builder.
+     *
      * @param QueryBuilder $builder The query to compile.
      * @return string The compiled SQL.
      */
@@ -437,13 +441,12 @@ abstract class Grammar
     /**
      * Compile the from clause — a table or a subquery.
      *
-     * When the from is a subquery, the sub-builder's bindings are pushed
-     * into the From category in the same pass as its SQL compilation —
-     * exactly the discipline compileUnions() uses. The sub-builder's `?`
-     * placeholders appear in this SQL, so its bindings must land in the
-     * outer builder's binding list in compiled order; without this, a
-     * filtered subquery compiles with placeholders whose values never
-     * reach the executed statement — a silently lost filter.
+     * The sub-builder's bindings were captured EAGERLY at fromSub() call
+     * time onto the From category (value semantics — the sub-builder is
+     * final when captured), so this pass only compiles SQL. The
+     * sub-builder's `?` placeholders appear in this SQL, and the captured
+     * From bindings ride the outer builder's flattened list in exactly
+     * that order.
      *
      * @param QueryBuilder $builder The query to compile.
      * @return string The from clause.
@@ -454,11 +457,6 @@ abstract class Grammar
         if ($from instanceof QueryBuilder) {
             $alias = $builder->getFromAlias();
             $subSql = $this->compileSelect($from);
-            // REPLACE (not append): the from subquery is the single source
-            // of From-category bindings, so each compile pass rebuilds the
-            // captured list. Appending duplicated the bindings on every
-            // recompile while the SQL stayed identical.
-            $builder->replaceBindings(BindingCategory::From, $from->getBindings());
             return '(' . $subSql . ') AS ' . $this->wrapSegments($alias ?? '');
         }
         return $this->wrapTable($from);
@@ -547,7 +545,7 @@ abstract class Grammar
             WhereType::Null => $this->compileNullWhere($where),
             WhereType::Raw => $where['sql'],
             WhereType::Column => $this->wrapSegments($where['first']) . ' ' . $where['operator']->value . ' ' . $this->wrapSegments($where['second']),
-            WhereType::Nested => '(' . $this->compileWhereGroup($where['query']->getWheres()) . ')',
+            WhereType::Nested => '(' . $this->compileWhereGroup($where['group']->wheres) . ')',
         };
     }
 
@@ -700,28 +698,23 @@ abstract class Grammar
     /**
      * Compile the unions, appending them to the compiled select.
      *
+     * The union sub-builders' bindings were captured EAGERLY at union()
+     * call time onto the Union category, in union order (value semantics —
+     * the sub-builder is final when captured), so this pass only compiles
+     * SQL. Each union's `?` placeholders appear in this SQL, and the
+     * captured Union bindings ride the outer builder's flattened list in
+     * exactly that order.
+     *
      * @param QueryBuilder $builder The query to compile.
      * @param string $sql The already-compiled select.
      * @return string The select with any unions appended.
      */
     protected function compileUnions(QueryBuilder $builder, string $sql): string
     {
-        // Rebuild-from-scratch semantics: the Union category is cleared once
-        // per compile pass, then each union's sub-builder appends in
-        // compiled order. Appending across passes duplicated bindings on
-        // every recompile while the SQL stayed identical.
-        $builder->clearBindings(BindingCategory::Union);
         foreach ($builder->getUnions() as $union) {
             $keyword = $union['all'] ? 'UNION ALL' : 'UNION';
             $sub = $union['query'];
-            // Compile the sub-builder's SQL and pull its bindings in the
-            // same pass, in the same order — the sub-builder's placeholders
-            // appear in this SQL, so its bindings must land in the Union
-            // category now, in exactly the compiled order. Snapshotting at
-            // union() call time desynchronized the two whenever the
-            // sub-builder gained clauses afterwards.
             $unionSql = $this->compileSelect($sub);
-            $builder->pushBindings(BindingCategory::Union, $sub->getBindings());
             $sql .= ' ' . $keyword . ' (' . $unionSql . ')';
         }
         return $sql;

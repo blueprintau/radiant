@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
@@ -223,7 +224,7 @@ class BelongsToMany extends Relation
     {
         $relatedTable = $this->related::table();
 
-        $this->query->join(
+        $this->query = $this->query->join(
             $this->pivotTable,
             self::qualify($relatedTable, $this->relatedKey),
             '=',
@@ -235,11 +236,11 @@ class BelongsToMany extends Relation
         if ($parentKey === null) {
             // Null parent key → no results, without compiling a meaningless
             // query (BelongsTo's convention).
-            $this->query->whereRaw('1 = 0', []);
+            $this->query = $this->query->whereRaw('1 = 0', []);
             return;
         }
 
-        $this->query->where(
+        $this->query = $this->query->where(
             self::qualify($this->pivotTable, $this->foreignPivotKey),
             '=',
             $parentKey,
@@ -278,7 +279,7 @@ class BelongsToMany extends Relation
             }
 
             $selects[] = $this->related::table() . '.*';
-            $this->query->select(...$selects);
+            $this->query = $this->query->select(...$selects);
         }
 
         return $this->query->get();
@@ -352,7 +353,7 @@ class BelongsToMany extends Relation
 
         $selects[] = "{$relatedTable}.*";
 
-        $builder->select(...$selects);
+        $builder = $builder->select(...$selects);
 
         $rows = $builder->getRaw();
 
@@ -471,10 +472,10 @@ class BelongsToMany extends Relation
         $connection = $this->sqlConnection();
 
         $query = $connection->table($this->pivotTable)
-            ->where($this->foreignPivotKey, '=', $this->parent->attribute($this->parentKey));
+            ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey));
 
         if ($ids !== null) {
-            $query->whereIn($this->relatedPivotKey, is_array($ids) ? $ids : [$ids]);
+            $query = $query->whereIn($this->relatedPivotKey, is_array($ids) ? $ids : [$ids]);
         }
 
         return $query->delete();
@@ -527,8 +528,8 @@ class BelongsToMany extends Relation
                     $attached[] = $id;
                 } elseif ($attributes !== [] && $current[$id] !== $attributes) {
                     $table
-                        ->where($this->foreignPivotKey, '=', $this->parent->attribute($this->parentKey))
-                        ->where($this->relatedPivotKey, '=', $id)
+                        ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey))
+                        ->where($this->relatedPivotKey, WhereOperator::Eq, $id)
                         ->update($attributes);
                     $updated[] = $id;
                 }
@@ -538,8 +539,8 @@ class BelongsToMany extends Relation
                 foreach (array_keys($current) as $id) {
                     if (!isset($desired[$id])) {
                         $table
-                            ->where($this->foreignPivotKey, '=', $this->parent->attribute($this->parentKey))
-                            ->where($this->relatedPivotKey, '=', $id)
+                            ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey))
+                            ->where($this->relatedPivotKey, WhereOperator::Eq, $id)
                             ->delete();
                         $detached[] = $id;
                     }
@@ -584,8 +585,8 @@ class BelongsToMany extends Relation
         foreach ($ids as $id) {
             if (isset($current[$id])) {
                 $table
-                    ->where($this->foreignPivotKey, '=', $this->parent->attribute($this->parentKey))
-                    ->where($this->relatedPivotKey, '=', $id)
+                    ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey))
+                    ->where($this->relatedPivotKey, WhereOperator::Eq, $id)
                     ->delete();
                 $detached[] = $id;
             } else {
@@ -609,7 +610,7 @@ class BelongsToMany extends Relation
     private function currentPivotRows(SqlConnection $connection): array
     {
         $rows = $connection->table($this->pivotTable)
-            ->where($this->foreignPivotKey, '=', $this->parent->attribute($this->parentKey))
+            ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey))
             ->get();
 
         $current = [];

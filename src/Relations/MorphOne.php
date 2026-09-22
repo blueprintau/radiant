@@ -34,7 +34,7 @@ final class MorphOne extends MorphOneOrMany
         $primaryKeys = MetadataFactory::for($this->getRelated())->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $this->query->orderBy($primaryKeys[0]->name);
+            $this->query = $this->query->orderBy($primaryKeys[0]->name);
         }
 
         parent::addConstraints();
@@ -57,18 +57,18 @@ final class MorphOne extends MorphOneOrMany
      * Order the eager-load query stably, mirroring the lazy path.
      *
      * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return void
+     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
      */
     #[\Override]
-    protected function applyEagerOrdering(ModelQueryBuilder $query): void
+    protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
         $primaryKeys = MetadataFactory::for($this->getRelated())->primaryKeys;
 
         if (count($primaryKeys) === 1 && $primaryKeys[0]->name !== null) {
-            $query->orderBy($primaryKeys[0]->name);
+            $query = $query->orderBy($primaryKeys[0]->name);
         }
 
-        parent::applyEagerOrdering($query);
+        return parent::applyEagerOrdering($query);
     }
 
     /**

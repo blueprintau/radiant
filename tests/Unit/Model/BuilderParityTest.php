@@ -112,9 +112,7 @@ final class BuilderParityTest extends DatabaseTestCase
         $this->expectExceptionMessage('Unknown column [typo_column]');
 
         $this->runInvalid(function (): void {
-            BpUser::newQuery()->whereNested(function ($nested): void {
-                $nested->where('typo_column', '=', 1);
-            });
+            BpUser::newQuery()->whereNested(fn ($nested) => $nested->where('typo_column', '=', 1));
         });
     }
 
@@ -127,8 +125,7 @@ final class BuilderParityTest extends DatabaseTestCase
         $this->expectExceptionMessage('must contain at least one clause');
 
         $this->runInvalid(function (): void {
-            BpUser::newQuery()->whereNested(function ($nested): void {
-            });
+            BpUser::newQuery()->whereNested(fn ($nested) => $nested);
         });
     }
 

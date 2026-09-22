@@ -29,13 +29,6 @@ use PHPUnit\Framework\TestCase;
 final class GrammarTest extends TestCase
 {
     /**
-     * The most recently built builder (for binding-order assertions).
-     *
-     * @var QueryBuilder
-     */
-    private QueryBuilder $lastBuilder;
-
-    /**
      * Build a query builder with a null connection (compilation never uses it).
      *
      * @param string $table The table to query.
@@ -43,7 +36,7 @@ final class GrammarTest extends TestCase
      */
     private function builder(string $table = 'users'): QueryBuilder
     {
-        return $this->lastBuilder = new QueryBuilder(new NullConnection(), $table);
+        return new QueryBuilder(new NullConnection(), $table);
     }
 
     // ---- Identifier wrapping ----
@@ -199,10 +192,11 @@ final class GrammarTest extends TestCase
     }
 
     /**
-     * The from subquery's bindings are captured into the From category at
-     * compile time, in compiled order, so a filtered subquery actually
-     * filters when the statement executes (regression: subquery bindings
-     * were silently dropped, leaving an unbound `?`).
+     * The from subquery's bindings are captured EAGERLY at fromSub() call
+     * time onto the From category of the returned clone, in sub-builder
+     * order, so a filtered subquery actually filters when the statement
+     * executes (regression: subquery bindings were silently dropped,
+     * leaving an unbound `?`).
      */
     public function testFromSubBindingsAreCaptured(): void
     {
@@ -225,9 +219,8 @@ final class GrammarTest extends TestCase
     }
 
     /**
-     * Compile-time capture happens on EVERY compileSelect pass, and capture
-     * into the outer builder is IDEMPOTENT (binding accumulation would
-     * duplicate values on repeated compiles — e.g. re-running toSql()).
+     * Compiling is a PURE snapshot: repeated compileSelect passes never
+     * change the builder's binding list (no compile-time capture writes).
      */
     public function testFromSubBindingsAreNotDuplicatedOnRecompile(): void
     {
@@ -352,9 +345,9 @@ final class GrammarTest extends TestCase
                 ->whereBetween('age', [18, 65])
                 ->whereRaw('lower(email) = ?', ['a@b.c'])
                 ->whereColumn('updated_at', '>', 'created_at')
-                ->whereNested(function (WhereBuilder $q): void {
-                    $q->where('a', WhereOperator::Eq, 1)->orWhere('b', WhereOperator::Eq, 2);
-                }),
+                ->whereNested(fn (WhereBuilder $q): WhereBuilder => $q
+                    ->where('a', WhereOperator::Eq, 1)
+                    ->orWhere('b', WhereOperator::Eq, 2)),
         );
         self::assertSame(
             'SELECT * FROM "users" WHERE "active" = ? AND "role" IN (?, ?) AND "deleted_at" IS NULL AND "age" BETWEEN ? AND ? AND lower(email) = ? AND "updated_at" > "created_at" AND ("a" = ? OR "b" = ?)',
@@ -368,22 +361,23 @@ final class GrammarTest extends TestCase
      */
     public function testOrWhereNested(): void
     {
-        $sql = (new SqliteGrammar())->compileSelect(
-            $this->builder()
-                ->where('tenant', WhereOperator::Eq, 7)
-                ->orWhereNested(function (WhereBuilder $q): void {
-                    $q->where('region_id', WhereOperator::Eq, 1)->where('country', WhereOperator::Eq, 'US');
-                })
-                ->orWhereNested(function (WhereBuilder $q): void {
-                    $q->where('region_id', WhereOperator::Eq, 2)->where('country', WhereOperator::Eq, 'DE');
-                }),
-        );
+        $builder = $this->builder()
+            ->where('tenant', WhereOperator::Eq, 7)
+            ->orWhereNested(fn (WhereBuilder $q): WhereBuilder => $q
+                ->where('region_id', WhereOperator::Eq, 1)
+                ->where('country', WhereOperator::Eq, 'US'))
+            ->orWhereNested(fn (WhereBuilder $q): WhereBuilder => $q
+                ->where('region_id', WhereOperator::Eq, 2)
+                ->where('country', WhereOperator::Eq, 'DE'));
+
+        $sql = (new SqliteGrammar())->compileSelect($builder);
 
         self::assertSame(
             'SELECT * FROM "users" WHERE "tenant" = ? OR ("region_id" = ? AND "country" = ?) OR ("region_id" = ? AND "country" = ?)',
             $sql,
         );
-        self::assertSame([7, 1, 'US', 2, 'DE'], $this->lastBuilder->getBindings());
+        // Immutable builders: the chained result carries the state.
+        self::assertSame([7, 1, 'US', 2, 'DE'], $builder->getBindings());
     }
 
     /**
@@ -706,9 +700,9 @@ final class GrammarTest extends TestCase
             ->whereIn('role', ['admin', 'editor'])
             ->whereBetween('age', [18, 65])
             ->whereRaw('lower(email) = ?', ['a@b.c'])
-            ->whereNested(function (WhereBuilder $q): void {
-                $q->where('a', WhereOperator::Eq, 1)->orWhere('b', WhereOperator::Eq, 2);
-            });
+            ->whereNested(fn (WhereBuilder $q): WhereBuilder => $q
+                ->where('a', WhereOperator::Eq, 1)
+                ->orWhere('b', WhereOperator::Eq, 2));
 
         self::assertSame([1, 'admin', 'editor', 18, 65, 'a@b.c', 1, 2], $builder->getBindings());
     }

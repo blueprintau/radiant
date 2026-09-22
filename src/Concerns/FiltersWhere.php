@@ -18,6 +18,11 @@ use BlueprintAU\Radiant\Database\Query\WhereBuilder;
  * vocabulary for free, and a NEW helper is added HERE once instead of
  * copy-pasted across the builders and wrapper traits.
  *
+ * **Hosts are immutable**: both sinks return a NEW host (the original is
+ * never modified), and every helper returns the sink's result directly —
+ * a discarded helper call is a no-op. In a `whereNested()` callback,
+ * RETURN the builder.
+ *
  * Column parameters accept `string|Expression`: the builders' raw-column
  * path is part of the shared contract, not a builder-only extra. A wrapper
  * that genuinely cannot splice raw SQL narrows at its own sink instead.
@@ -43,7 +48,7 @@ trait FiltersWhere
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @return static A NEW host with the clause; the original is unchanged.
      */
     abstract public function where(
         string|\BlueprintAU\Radiant\Database\Query\Expression $column,
@@ -56,10 +61,10 @@ trait FiltersWhere
      * Add a nested where group — the second sink (structural, not
      * where-derivable: it wraps a parenthesized group around fresh clauses).
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
+     *        group's where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @return static A NEW host with the group; the original is unchanged.
      */
     abstract public function whereNested(
         callable $callback,
@@ -69,9 +74,9 @@ trait FiltersWhere
     /**
      * Add a nested where group connected by AND — the explicit-naming form.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
-     * @return static The host (chainable).
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
+     *        group's where-family facade and RETURNS the constrained group.
+     * @return static A NEW host with the group; the original is unchanged.
      */
     public function whereNestedGroup(callable $callback): static
     {
@@ -81,9 +86,9 @@ trait FiltersWhere
     /**
      * Add an OR-connected nested where group.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
-     * @return static The host (chainable).
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
+     *        group's where-family facade and RETURNS the constrained group.
+     * @return static A NEW host with the group; the original is unchanged.
      */
     public function orWhereNested(callable $callback): static
     {

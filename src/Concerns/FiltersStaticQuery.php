@@ -70,8 +70,8 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a nested where group on the wrapped builder.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the group's
+     *        where-family facade and RETURNS the constrained group.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
      */
     public static function whereNestedGroup(callable $callback): ModelQueryBuilder
@@ -82,8 +82,8 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an OR-connected nested where group.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the group's
+     *        where-family facade and RETURNS the constrained group.
      * @return ModelQueryBuilder<static> The query builder — bound to the CONSUMING class (User::where() yields a User builder).
      */
     public static function orWhereNested(callable $callback): ModelQueryBuilder

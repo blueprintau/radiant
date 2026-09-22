@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 
@@ -221,7 +222,7 @@ final class MorphTo extends Relation
             return $alias::newQuery()->whereRaw('1 = 0', []);
         }
 
-        return $alias::newQuery()->where($this->getLocalKey(), '=', $fkValue);
+        return $alias::newQuery()->where($this->getLocalKey(), WhereOperator::Eq, $fkValue);
     }
 
     /**

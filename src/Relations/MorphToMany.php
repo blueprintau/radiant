@@ -113,7 +113,7 @@ class MorphToMany extends BelongsToMany
 
         // The type filter rides AFTER the base constraint — the pivot
         // join is already in place, so the column resolves unambiguously.
-        $this->query->where(
+        $this->query = $this->query->where(
             self::qualify($this->pivotTable, $this->morphTypeColumn),
             '=',
             $this->morphAlias,
@@ -160,7 +160,7 @@ class MorphToMany extends BelongsToMany
 
         $selects[] = "{$relatedTable}.*";
 
-        $builder->select(...$selects);
+        $builder = $builder->select(...$selects);
 
         $rows = $builder->getRaw();
 

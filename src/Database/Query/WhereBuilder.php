@@ -33,6 +33,11 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * a clause shape changes. The facade is thin BY DESIGN — the type IS the
  * constraint; the delegation IS the correctness.
  *
+ * **The facade is immutable like the builder it wraps.** Every method
+ * returns a NEW WhereBuilder over the new builder the sink produced — the
+ * original is never modified. In a `whereNested()` callback, RETURN the
+ * result; a discarded return is a no-op.
+ *
  * The where-clause shapes are the query builder's discriminated unions
  * (consumed verbatim by the Grammar and portable connections) — this class
  * never re-shapes them.
@@ -65,7 +70,7 @@ final class WhereBuilder
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
+     * @return static A NEW facade over the new builder; the original is unchanged.
      */
     public function where(
         string|Expression $column,
@@ -73,9 +78,7 @@ final class WhereBuilder
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        $this->query->where($column, $operator, $value, $boolean);
-
-        return $this;
+        return new self($this->query->where($column, $operator, $value, $boolean));
     }
 
     /**
@@ -83,18 +86,16 @@ final class WhereBuilder
      * owning builder, so the group's clauses land on it like any other
      * filter and merge with the parent query's wheres at compile time.
      *
-     * @param callable(WhereBuilder): void $callback Receives the group's
-     *        where-family facade to constrain.
+     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
+     *        group's where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
+     * @return static A NEW facade over the new builder; the original is unchanged.
      */
     public function whereNested(
         callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        $this->query->whereNested($callback, $boolean);
-
-        return $this;
+        return new self($this->query->whereNested($callback, $boolean));
     }
 
     /**
@@ -103,13 +104,11 @@ final class WhereBuilder
      * @param string $sql The raw SQL condition.
      * @param array<int, mixed> $bindings The values to bind into the condition.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
+     * @return static A NEW facade over the new builder; the original is unchanged.
      */
     public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $this->query->whereRaw($sql, $bindings, $boolean);
-
-        return $this;
+        return new self($this->query->whereRaw($sql, $bindings, $boolean));
     }
 
     /**
@@ -119,13 +118,11 @@ final class WhereBuilder
      * @param \BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator|string $operator The comparison operator.
      * @param string $second The second column.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder (chainable).
+     * @return static A NEW facade over the new builder; the original is unchanged.
      */
     public function whereColumn(string $first, \BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $this->query->whereColumn($first, $operator, $second, $boolean);
-
-        return $this;
+        return new self($this->query->whereColumn($first, $operator, $second, $boolean));
     }
 
     /**
@@ -137,5 +134,17 @@ final class WhereBuilder
     public function getWheres(): array
     {
         return $this->query->getWheres();
+    }
+
+    /**
+     * The backing builder this facade delegates to — whereNested()'s
+     * storage path. NOT part of the callback contract: callbacks see the
+     * where-family only.
+     *
+     * @return QueryBuilder The wrapped builder.
+     */
+    public function getNestedQuery(): QueryBuilder
+    {
+        return $this->query;
     }
 }

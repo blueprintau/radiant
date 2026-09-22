@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
 
@@ -34,7 +35,7 @@ class HasMany extends Relation
             // constraint is ONE unit: the parts AND within the parens, and
             // a caller's later `->orWhere(...)` ORs at the constraint's
             // edges instead of against the tuple's PARTS.
-            $this->query->whereNested(fn (WhereBuilder $nested) => self::applyKeyTuple(
+            $this->query = $this->query->whereNested(fn (WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
                 $nested,
                 $this->getForeignKeys(),
                 $this->getLocalKeys(),
@@ -49,11 +50,11 @@ class HasMany extends Relation
         if ($parentKey === null) {
             // Null parent key → no results, without compiling a meaningless
             // query (BelongsTo's convention; `fk = NULL` matches no rows).
-            $this->query->whereRaw('1 = 0', []);
+            $this->query = $this->query->whereRaw('1 = 0', []);
             return;
         }
 
-        $this->query->where($this->getForeignKey(), '=', $parentKey);
+        $this->query = $this->query->where($this->getForeignKey(), WhereOperator::Eq, $parentKey);
     }
 
     /**

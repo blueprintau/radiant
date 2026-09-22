@@ -64,9 +64,9 @@ final class HardeningRegressionTest extends TestCase
      */
     public function testOrderByAcceptsCaseInsensitiveAscDesc(): void
     {
-        $b = $this->builder();
-        $b->orderBy('name', 'desc');
-        $b->orderBy('id', 'AsC');
+        $b = $this->builder()
+            ->orderBy('name', 'desc')
+            ->orderBy('id', 'AsC');
         $orders = $b->getOrders();
         $this->assertSame(SortDirection::Desc, $orders[0]['direction']);
         $this->assertSame(SortDirection::Asc, $orders[1]['direction']);
@@ -118,7 +118,7 @@ final class HardeningRegressionTest extends TestCase
     {
         $b = $this->builder();
         foreach (['=', '!=', '<', '<=', '>', '>='] as $op) {
-            $b->whereColumn('a', $op, 'b');
+            $b = $b->whereColumn('a', $op, 'b');
         }
         $this->assertCount(6, $b->getWheres());
     }
@@ -154,19 +154,20 @@ final class HardeningRegressionTest extends TestCase
     }
 
     /**
-     * Union bindings must be captured when the union SQL is compiled — so a
-     * sub-builder that gains clauses AFTER union() still gets its
-     * placeholders matched to its bindings, in compiled order.
+     * Union bindings are captured EAGERLY at union() call time — the
+     * sub-builder is a frozen value when captured (value semantics), so
+     * its placeholders match its bindings in compiled order.
      */
-    public function testUnionBindingsCapturedAtCompileTime(): void
+    public function testUnionBindingsCapturedAtUnionTime(): void
     {
         $main = $this->builder()->select('id')->where('active', '=', 1);
 
         $sub = new QueryBuilder(new NullConnection(), 'admins');
-        $sub->select('id');
-        $main->union($sub);
-        // Bindings added after the union() call must still be picked up.
-        $sub->where('level', '=', 9);
+        $sub = $sub->select('id')->where('level', '=', 9);
+        // The sub-builder is FINAL when union() is called — a builder is a
+        // value, so the captured snapshot IS the builder the union
+        // references.
+        $main = $main->union($sub);
 
         $grammar = new MySqlGrammar();
         $sql = $grammar->compileSelect($main);

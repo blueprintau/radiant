@@ -180,7 +180,7 @@ final class Collection extends BaseCollection
             $keys[] = $model->getKeyForRefresh();
         }
 
-        $query->whereKey($keys);
+        $query = $query->whereKey($keys);
 
         $freshBySerializedKey = [];
 
