@@ -26,23 +26,28 @@ use BlueprintAU\Radiant\Attributes\Unique;
 final class ClassMetadata
 {
     /**
-     * The column → owning-table map (computed lazily).
+     * The column → owning-table map (computed by the factory at build —
+     * resolving an owner's table must consult the metadata cache, and the
+     * class's OWN entry is not seeded until construction returns, so the
+     * self-reference is resolved by the factory, which already knows the
+     * table name).
      *
-     * @var array<string, string>|null
+     * @var array<string, string>
      */
-    private array|null $tablePartitions = null;
+    private readonly array $tablePartitions;
 
     /**
-     * The DB column name → mapping hash map (computed lazily).
+     * The DB column name → mapping hash map (precomputed in the
+     * constructor).
      *
      * The hot paths — `attribute()`, `castForWrite()`, key reads during
      * eager matching — used to walk the property-keyed list per call
      * (O(columns) each, O(columns × rows) per load). This map makes every
      * lookup O(1).
      *
-     * @var array<string, PropertyMapping>|null
+     * @var array<string, PropertyMapping>
      */
-    private array|null $columnsByDbName = null;
+    private readonly array $columnsByDbName;
 
     /**
      * Create class metadata.
@@ -68,6 +73,9 @@ final class ClassMetadata
      *        the derivation rules, its own columns), whose table holds its
      *        own columns while the ancestor's table holds the inherited
      *        ones. Null for every non-MTI class.
+     * @param array<string, string> $tablePartitions The column →
+     *        owning-table map, precomputed by the factory (see the
+     *        property docblock for why it cannot be derived here).
      */
     public function __construct(
         public readonly ?string $tableName,
@@ -79,7 +87,21 @@ final class ClassMetadata
         public readonly array $checks = [],
         public readonly ?string $softDeleteColumn = null,
         public readonly string|null $parentModel = null,
+        array $tablePartitions = [],
     ) {
+        // Eager precompute: the class is built once per process (the
+        // MetadataFactory cache), so deriving the lookup map here costs
+        // nothing and makes the instance truly readonly — no `??=` write can
+        // ever race a concurrent reader (Fiber/Swoole re-entrancy on the
+        // shared metadata cache).
+        $columnsByDbName = [];
+
+        foreach ($properties as $mapping) {
+            $columnsByDbName[$mapping->columnName] = $mapping;
+        }
+
+        $this->columnsByDbName = $columnsByDbName;
+        $this->tablePartitions = $tablePartitions;
     }
 
     /**
@@ -91,9 +113,7 @@ final class ClassMetadata
      */
     public function mappingFor(string $columnName): PropertyMapping
     {
-        $map = $this->columnsByDbName ??= $this->buildColumnsByDbName();
-
-        return $map[$columnName]
+        return $this->columnsByDbName[$columnName]
             ?? throw new \InvalidArgumentException(
                 'Unknown column [' . $columnName . '] on model [' . ($this->tableName ?? 'no table') . '].'
             );
@@ -107,25 +127,8 @@ final class ClassMetadata
      */
     public function hasColumn(string $columnName): bool
     {
-        $map = $this->columnsByDbName ??= $this->buildColumnsByDbName();
-
-        return isset($map[$columnName]) || array_key_exists($columnName, $map);
-    }
-
-    /**
-     * Build the DB column name → mapping map.
-     *
-     * @return array<string, PropertyMapping> column => mapping
-     */
-    private function buildColumnsByDbName(): array
-    {
-        $map = [];
-
-        foreach ($this->properties as $mapping) {
-            $map[$mapping->columnName] = $mapping;
-        }
-
-        return $map;
+        return isset($this->columnsByDbName[$columnName])
+            || array_key_exists($columnName, $this->columnsByDbName);
     }
 
     /**
@@ -154,35 +157,9 @@ final class ClassMetadata
      */
     public function tableFor(string $columnName): string
     {
-        $partitions = $this->tablePartitions ??= $this->buildPartitions();
-
-        return $partitions[$columnName]
+        return $this->tablePartitions[$columnName]
             ?? throw new \InvalidArgumentException(
                 'Unknown column [' . $columnName . '] on model [' . ($this->tableName ?? 'no table') . '].'
             );
-    }
-
-    /**
-     * Build the column → owning-table map from the merged property
-     * mappings — each mapping's declaring class resolves to its table
-     * through the metadata cache.
-     *
-     * @return array<string, string> column => table
-     */
-    private function buildPartitions(): array
-    {
-        $partitions = [];
-
-        foreach ($this->properties as $mapping) {
-            $table = MetadataFactory::for($mapping->owner)->tableName;
-
-            if ($table === null) {
-                continue; // abstract owner — merged into a descendant's table
-            }
-
-            $partitions[$mapping->columnName] = $table;
-        }
-
-        return $partitions;
     }
 }

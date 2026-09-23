@@ -35,11 +35,15 @@ final class SqliteConnector extends SqlConnector
      * by the extension, on PDO or Pdo\Sqlite (PHP 8.4+), so ATTR_TIMEOUT is
      * the canonical, portable way to set it.
      *
-     * @var array<int, int|bool>
+     * @return array<int, int|bool>
      */
-    protected static array $DEFAULT_OPTIONS = [
-        \PDO::ATTR_TIMEOUT => 5, // seconds → SQLite busy timeout (5000ms)
-    ];
+    #[\Override]
+    protected function defaultOptions(): array
+    {
+        return [
+            \PDO::ATTR_TIMEOUT => 5, // seconds → SQLite busy timeout (5000ms)
+        ];
+    }
 
     /**
      * Create a SQLite connection from the given config.

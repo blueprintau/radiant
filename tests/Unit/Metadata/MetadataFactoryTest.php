@@ -69,10 +69,10 @@ final class MetadataFactoryTest extends TestCase
     {
         $properties = MetadataFactory::for(User::class)->properties;
 
-        self::assertSame('int', $properties['id']->column->propertyType);
-        self::assertSame('string', $properties['email']->column->propertyType);
-        self::assertSame(\Carbon\Carbon::class, $properties['emailVerifiedAt']->column->propertyType);
-        self::assertSame('array', $properties['meta']->column->propertyType);
+        self::assertSame('int', $properties['id']->propertyType);
+        self::assertSame('string', $properties['email']->propertyType);
+        self::assertSame(\Carbon\Carbon::class, $properties['emailVerifiedAt']->propertyType);
+        self::assertSame('array', $properties['meta']->propertyType);
     }
 
     /**
@@ -367,7 +367,7 @@ final class MetadataFactoryTest extends TestCase
         self::assertSame('deleted_at', $mapping->columnName);
         self::assertSame(ColumnType::DateTime, $mapping->column->type);
         self::assertTrue($mapping->column->nullable);
-        self::assertSame('datetime', $mapping->column->propertyType);
+        self::assertSame('datetime', $mapping->propertyType);
     }
 
     /**

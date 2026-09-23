@@ -161,6 +161,34 @@ final class MetadataFactory
             $properties = self::deriveMtiChildKey($reflection, $class, $properties, $parentModel);
         }
 
+        // The column → owning-table partition map, precomputed HERE rather
+        // than in the ClassMetadata constructor: resolving an owner's table
+        // consults the metadata cache, and the class's OWN entry is not
+        // seeded until construction returns — a constructor-side lookup for
+        // a self-owned column would recurse infinitely. The factory already
+        // knows `$tableName`, so the self-reference resolves locally and
+        // only genuinely foreign owners hit the cache (their entries are
+        // complete by construction order — ancestors build before or
+        // independently of descendants).
+        $partitions = [];
+
+        foreach ($properties as $mapping) {
+            if ($mapping->owner === $class) {
+                if ($tableName !== null) {
+                    $partitions[$mapping->columnName] = $tableName;
+                }
+                continue;
+            }
+
+            $table = self::for($mapping->owner)->tableName;
+
+            if ($table === null) {
+                continue; // abstract owner — merged into a descendant's table
+            }
+
+            $partitions[$mapping->columnName] = $table;
+        }
+
         return new ClassMetadata(
             tableName: $tableName,
             properties: $properties,
@@ -174,6 +202,7 @@ final class MetadataFactory
             checks: $checks,
             softDeleteColumn: $softDeleteColumn,
             parentModel: $parentModel,
+            tablePartitions: $partitions,
         );
     }
 
@@ -217,12 +246,13 @@ final class MetadataFactory
                 );
             }
 
+            $propertyType = $type?->getName();
+
             // Fail fast when the column type cannot store the field type —
             // an array on an int column would decode garbage; an untyped
             // property has no cast contract. Also enforces the string
             // column's required length.
-            $column->propertyType = $type?->getName();
-            $column->assertTypeCompatible($column->propertyType, $class, $property->getName());
+            $column->assertTypeCompatible($propertyType, $class, $property->getName());
 
             // Fail fast when a PHP property default would silently shadow
             // the declared column default — an initialized property is
@@ -230,24 +260,44 @@ final class MetadataFactory
             // value from models and another from raw SQL.
             $column->assertDefaultConsistent($property, $class);
 
-            // Resolve the DB column name ONTO the column at build time, so
+            // Resolve the DB column name BEFORE constructing the mapping, so
             // every consumer downstream (primary-key handling, DDL
             // emission, query building) reads a concrete `$column->name`
-            // instead of re-deriving the property-name default.
-            $column->name ??= $property->getName();
+            // instead of re-deriving the property-name default. The
+            // resolution lands on a REBUILT attribute (explicit construction
+            // — the attribute is immutable after construction), so
+            // `primaryKeys` consumers reading `$column->name` see the
+            // resolved name too.
+            $columnName = $column->name ?? $property->getName();
 
             // The reserved `radiant_` prefix is the ORM's internal alias
             // namespace — a declared column with it would collide with the
             // row lift the moment the column rides an alias-bearing select.
             // Fail fast HERE, at build, not at first pivot load.
-            Model::assertNotReservedPrefix($column->name, 'column');
+            Model::assertNotReservedPrefix($columnName, 'column');
+
+            $column = new Column(
+                type: $column->type,
+                name: $columnName,
+                primaryKey: $column->primaryKey,
+                autoIncrement: $column->autoIncrement,
+                nullable: $column->nullable,
+                unique: $column->unique,
+                index: $column->index,
+                default: $column->default,
+                length: $column->length,
+                foreign: $column->foreign,
+                onDelete: $column->onDelete,
+                onUpdate: $column->onUpdate,
+            );
 
             $mapping = new PropertyMapping(
                 propertyName: $property->getName(),
-                columnName: $column->name,
+                columnName: $columnName,
                 column: $column,
                 property: $property,
                 owner: $property->getDeclaringClass()->getName(),
+                propertyType: $propertyType,
             );
 
             $properties[$mapping->propertyName] = $mapping;
@@ -303,22 +353,20 @@ final class MetadataFactory
         }
 
         if ($declared === null) {
-            $column = new Column(
-                type: ColumnType::DateTime,
-                name: $columnName,
-                nullable: true,
-            );
             // No PHP property exists for a synthetic column, so the cast
             // pipeline has no property type to drive from — pin it to the
             // column type so consumers see a consistent datetime column.
-            $column->propertyType = ColumnType::DateTime->value;
-
             $properties[$columnName] = new PropertyMapping(
                 propertyName: $columnName,
                 columnName: $columnName,
-                column: $column,
+                column: new Column(
+                    type: ColumnType::DateTime,
+                    name: $columnName,
+                    nullable: true,
+                ),
                 property: null,
                 owner: $class,
+                propertyType: ColumnType::DateTime->value,
             );
         } elseif ($declared->column->type !== ColumnType::DateTime) {
             throw new \InvalidArgumentException(
@@ -448,18 +496,10 @@ final class MetadataFactory
             return;
         }
 
-        $column = new Column(
-            type: $type,
-            name: $columnName,
-            nullable: $nullable,
-            length: $length,
-        );
-
         // No PHP property exists for a synthetic column — pin the property
         // type to the column type so the cast pipeline sees a consistent
         // scalar (the same convention applySoftDeletes() applies).
-        $column->propertyType = $type->value;
-
+        //
         // The morph name is caller-supplied (`#[Morphs(name: ...)]`) — the
         // same reserved-prefix guard as declared columns applies.
         Model::assertNotReservedPrefix($columnName, 'morph column');
@@ -467,9 +507,15 @@ final class MetadataFactory
         $properties[$columnName] = new PropertyMapping(
             propertyName: $columnName,
             columnName: $columnName,
-            column: $column,
+            column: new Column(
+                type: $type,
+                name: $columnName,
+                nullable: $nullable,
+                length: $length,
+            ),
             property: null,
             owner: $class,
+            propertyType: $type->value,
         );
     }
 
@@ -1043,8 +1089,23 @@ final class MetadataFactory
             }
         }
 
-        $derived = clone $parentKeys[0];
-        $derived->autoIncrement = false;
+        // Explicit construction replaces the historical `clone $parentKeys[0]`
+        // + post-construction `$derived->autoIncrement = false` write — the
+        // attribute is immutable after construction.
+        $derived = new Column(
+            type: $parentKeys[0]->type,
+            name: $pkName,
+            primaryKey: $parentKeys[0]->primaryKey,
+            autoIncrement: false,
+            nullable: $parentKeys[0]->nullable,
+            unique: $parentKeys[0]->unique,
+            index: $parentKeys[0]->index,
+            default: $parentKeys[0]->default,
+            length: $parentKeys[0]->length,
+            foreign: $parentKeys[0]->foreign,
+            onDelete: $parentKeys[0]->onDelete,
+            onUpdate: $parentKeys[0]->onUpdate,
+        );
 
         $parentMapping = null;
 

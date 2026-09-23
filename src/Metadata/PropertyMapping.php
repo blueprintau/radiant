@@ -20,8 +20,7 @@ final class PropertyMapping
      * @param string $propertyName The PHP property name.
      * @param string $columnName The DB column name (the `#[Column]` name when
      *        declared, otherwise the property name).
-     * @param Column $column The column declaration (with `$propertyType`
-     *        captured by the factory).
+     * @param Column $column The column declaration.
      * @param \ReflectionProperty|null $property The reflected property.
      *        Null ONLY for a synthetic mapping — the soft-delete column the
      *        factory injects when the class declares no property of that
@@ -34,6 +33,12 @@ final class PropertyMapping
      *        diagnostics; the deferred JOINED strategy consumes it to
      *        partition columns per table: `owner === root` → root table,
      *        `owner === child` → child table.
+     * @param string|null $propertyType The PHP property type NAME driving
+     *        the cast pipeline (`'Carbon\\Carbon'`, `'int'`, `'array'`),
+     *        captured from the `ReflectionProperty` by the factory. Null
+     *        for an untyped property — a build error for a declared
+     *        column, but legitimate for a synthetic mapping (whose cast
+     *        pins to the column type's name).
      */
     public function __construct(
         public readonly string $propertyName,
@@ -41,6 +46,7 @@ final class PropertyMapping
         public readonly Column $column,
         public readonly \ReflectionProperty|null $property,
         public readonly string $owner,
+        public readonly string|null $propertyType = null,
     ) {
     }
 }

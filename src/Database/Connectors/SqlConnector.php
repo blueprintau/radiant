@@ -37,7 +37,7 @@ abstract class SqlConnector implements ConnectorInterface
      *
      * @var array<int, int|bool>
      */
-    protected static array $DEFAULT_OPTIONS = [
+    private const DEFAULT_OPTIONS = [
         \PDO::ATTR_STRINGIFY_FETCHES => false
     ];
 
@@ -68,12 +68,39 @@ abstract class SqlConnector implements ConnectorInterface
      *
      * @var array<int, int|bool>
      */
-    protected static array $FORCED_OPTIONS = [
+    private const FORCED_OPTIONS = [
         \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
         // Native prepared statements on every dialect; see the class docblock
         // for why emulation must not be re-enableable via config.
         \PDO::ATTR_EMULATE_PREPARES => false,
     ];
+
+    /**
+     * The subclass's driver-appropriate default options — merged over the
+     * base {@see DEFAULT_OPTIONS} layer.
+     *
+     * Override to declare only the driver's DIFFERENCES (e.g. SQLite's
+     * busy timeout); the base defaults always apply underneath.
+     *
+     * @return array<int, int|bool> The subclass default options.
+     */
+    protected function defaultOptions(): array
+    {
+        return [];
+    }
+
+    /**
+     * The subclass's deliberate dialect mandates — merged over the base
+     * {@see FORCED_OPTIONS} layer, able to override even a base-forced
+     * attribute when a dialect genuinely requires it (a documented,
+     * code-level decision — never reachable from config).
+     *
+     * @return array<int, int|bool> The subclass forced options.
+     */
+    protected function forcedOptions(): array
+    {
+        return [];
+    }
 
     /**
      * Create a connection for the given config.
@@ -231,11 +258,11 @@ abstract class SqlConnector implements ConnectorInterface
     {
         $this->validateOptions($options);
         $options = array_replace(
-            self::$DEFAULT_OPTIONS,
-            static::$DEFAULT_OPTIONS,
+            self::DEFAULT_OPTIONS,
+            static::defaultOptions(),
             $options,
-            self::$FORCED_OPTIONS,
-            static::$FORCED_OPTIONS,
+            self::FORCED_OPTIONS,
+            static::forcedOptions(),
         );
         try {
             return \PDO::connect($dsn, $username, $password, $options);

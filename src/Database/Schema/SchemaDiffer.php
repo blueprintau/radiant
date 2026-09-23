@@ -541,7 +541,7 @@ final class SchemaDiffer
 
         foreach ($desiredColumns as $name => $column) {
             if (!isset($liveColumns[$name])) {
-                $alter->column(
+                $alter = $alter->column(
                     $column['type'],
                     $name,
                     primaryKey: $column['primaryKey'],
@@ -572,7 +572,7 @@ final class SchemaDiffer
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
 
             if (!$typeMatches || !$nullableMatches || !$defaultMatches) {
-                $modify->column(
+                $modify = $modify->column(
                     $column['type'],
                     $name,
                     primaryKey: $column['primaryKey'],
@@ -596,7 +596,7 @@ final class SchemaDiffer
             }
 
             if (!isset($desiredColumns[$name])) {
-                $alter->dropColumn($name);
+                $alter = $alter->dropColumn($name);
                 $drops[] = $name;
                 $destructive = true;
             }
@@ -622,7 +622,7 @@ final class SchemaDiffer
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
 
             if (!$typeMatches || !$nullableMatches || !$defaultMatches) {
-                $modify->column(
+                $modify = $modify->column(
                     $column['type'],
                     $to,
                     primaryKey: $column['primaryKey'],
@@ -647,7 +647,7 @@ final class SchemaDiffer
             $renameBlueprint = new Blueprint($table);
 
             foreach ($renames as $from => $to) {
-                $renameBlueprint->renameColumn($from, $to);
+                $renameBlueprint = $renameBlueprint->renameColumn($from, $to);
             }
 
             $changes[] = new SchemaChange(
@@ -1078,7 +1078,7 @@ final class SchemaDiffer
                 continue;
             }
 
-            $rebuild->index($name, $index['columns'], unique: $index['unique'], where: $index['where'], nullsNotDistinct: $index['nullsNotDistinct']);
+            $rebuild = $rebuild->index($name, $index['columns'], unique: $index['unique'], where: $index['where'], nullsNotDistinct: $index['nullsNotDistinct']);
             $drifted[] = $name;
         }
 

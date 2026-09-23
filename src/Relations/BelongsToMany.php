@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
@@ -187,7 +188,8 @@ class BelongsToMany extends Relation
      * state.
      *
      * @param string ...$columns The pivot columns to carry.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the pivot columns declared; the
+     *         original is unchanged.
      * @throws \InvalidArgumentException When a pivot column starts with
      *         the reserved `radiant_` prefix.
      */
@@ -197,10 +199,10 @@ class BelongsToMany extends Relation
             Model::assertNotReservedPrefix($column, 'pivot column');
         }
 
-        $this->pivotColumns = array_values($columns);
-        $this->markComposed();
+        $clone = clone $this;
+        $clone->pivotColumns = array_values($columns);
 
-        return $this;
+        return $clone->markComposed();
     }
 
     /**
@@ -271,6 +273,8 @@ class BelongsToMany extends Relation
     #[\Override]
     protected function executeResults(): Collection
     {
+        $query = $this->query;
+
         if ($this->pivotColumns !== []) {
             $selects = [];
 
@@ -279,10 +283,10 @@ class BelongsToMany extends Relation
             }
 
             $selects[] = $this->related::table() . '.*';
-            $this->query = $this->query->select(...$selects);
+            $query = $query->select(...$selects);
         }
 
-        return $this->query->get();
+        return $query->get();
     }
 
     /**
@@ -428,6 +432,23 @@ class BelongsToMany extends Relation
     }
 
     /**
+     * Stamp a pivot row about to be INSERTed — the subclass hook for
+     * relation-specific columns.
+     *
+     * Base: the row passes through unchanged. {@see MorphToMany} overrides
+     * this to stamp the `{morphName}_type` alias — EVERY insert path
+     * (attach/sync/toggle) funnels through here, so a polymorphic pivot
+     * can never gain a row without its type discriminator.
+     *
+     * @param array<string, mixed> $row The pivot row about to be written.
+     * @return array<string, mixed> The row to insert.
+     */
+    protected function stampRow(array $row): array
+    {
+        return $row;
+    }
+
+    /**
      * Attach related models to the parent — INSERT into the pivot.
      *
      * @param int|string|list<int|string>|array<string, mixed> $ids A single
@@ -444,12 +465,12 @@ class BelongsToMany extends Relation
         $rows = [];
 
         foreach ($this->normalizeIds($ids) as $id => $attributes) {
-            $rows[] = [
+            $rows[] = $this->stampRow([
                 $this->foreignPivotKey => $this->parent->attribute($this->parentKey),
                 $this->relatedPivotKey => $id,
                 ...$pivotAttributes,
                 ...$attributes,
-            ];
+            ]);
         }
 
         if ($rows === []) {
@@ -457,6 +478,23 @@ class BelongsToMany extends Relation
         }
 
         $connection->table($this->pivotTable)->insert($rows);
+    }
+
+    /**
+     * A query builder on the pivot table — the shared entry point for
+     * every pivot READ/DELETE/UPDATE path (detach, sync's diff, toggle).
+     *
+     * Base: the plain table builder. {@see MorphToMany} overrides this to
+     * scope every path to the morph alias — the morph key column is SHARED
+     * across parent classes on the same pivot, so an unscoped delete or
+     * diff would touch another class's rows.
+     *
+     * @param SqlConnection $connection The parent's SQL connection.
+     * @return QueryBuilder The pivot-table builder.
+     */
+    protected function pivotQuery(SqlConnection $connection): QueryBuilder
+    {
+        return $connection->table($this->pivotTable);
     }
 
     /**
@@ -471,7 +509,7 @@ class BelongsToMany extends Relation
     {
         $connection = $this->sqlConnection();
 
-        $query = $connection->table($this->pivotTable)
+        $query = $this->pivotQuery($connection)
             ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey));
 
         if ($ids !== null) {
@@ -514,17 +552,17 @@ class BelongsToMany extends Relation
         $perIdAttributes = $isList ? [] : $desired;
 
         $connection->transaction(function () use ($connection, $desired, $current, $sharedAttributes, $perIdAttributes, $isList, $detaching, &$attached, &$detached, &$updated): void {
-            $table = $connection->table($this->pivotTable);
+            $table = $this->pivotQuery($connection);
 
             foreach ($desired as $id => $attributes) {
                 $attributes = $isList ? $sharedAttributes : ($perIdAttributes[$id] ?? []);
 
                 if (!isset($current[$id])) {
-                    $table->insert([
+                    $table->insert([$this->stampRow([
                         $this->foreignPivotKey => $this->parent->attribute($this->parentKey),
                         $this->relatedPivotKey => $id,
                         ...$attributes,
-                    ]);
+                    ])]);
                     $attached[] = $id;
                 } elseif ($attributes !== [] && $current[$id] !== $attributes) {
                     $table
@@ -580,7 +618,7 @@ class BelongsToMany extends Relation
         $attached = [];
         $detached = [];
 
-        $table = $connection->table($this->pivotTable);
+        $table = $this->pivotQuery($connection);
 
         foreach ($ids as $id) {
             if (isset($current[$id])) {
@@ -590,10 +628,10 @@ class BelongsToMany extends Relation
                     ->delete();
                 $detached[] = $id;
             } else {
-                $table->insert([
+                $table->insert([$this->stampRow([
                     $this->foreignPivotKey => $this->parent->attribute($this->parentKey),
                     $this->relatedPivotKey => $id,
-                ]);
+                ])]);
                 $attached[] = $id;
             }
         }
@@ -609,7 +647,7 @@ class BelongsToMany extends Relation
      */
     private function currentPivotRows(SqlConnection $connection): array
     {
-        $rows = $connection->table($this->pivotTable)
+        $rows = $this->pivotQuery($connection)
             ->where($this->foreignPivotKey, WhereOperator::Eq, $this->parent->attribute($this->parentKey))
             ->get();
 

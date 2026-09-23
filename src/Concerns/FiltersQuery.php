@@ -23,11 +23,12 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * delegate to its wrapped builder).
  *
  * The natural consumers are objects that WRAP a builder (a Relation holds
- * one; a collection could too) — the implementations delegate to the
- * wrapped query and return `$this` so the wrapper keeps chaining. The
- * vocabulary covers the whole filter surface: where-family + ordering +
- * paging + select/groupBy/having. Joins stay builder-only (they are
- * structure, not filtering).
+ * one) — the implementations delegate to the wrapped query and return a
+ * NEW wrapper (the host is immutable: a discarded call is a no-op, and a
+ * composed copy can never poison a shared original). The vocabulary covers
+ * the whole filter surface: where-family + ordering + paging +
+ * select/groupBy/having. Joins stay builder-only (they are structure, not
+ * filtering).
  */
 trait FiltersQuery
 {

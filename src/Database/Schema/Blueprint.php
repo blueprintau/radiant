@@ -21,6 +21,17 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::create()}
  * and {@see alter()}, independent of the ORM.
  *
+ * **Blueprints are immutable.** Every declaration call (`column()`,
+ * `index()`, `foreignKey()`, `check()`, the drops, the renames) returns a
+ * NEW blueprint — the original is never modified, so a blueprint can be
+ * shared, reused, and chained safely. The copies are cheap: all state is
+ * value-type arrays and PHP's copy-on-write means `clone` does not
+ * deep-copy them until a write. Chain the results:
+ *
+ *     $bp = (new Blueprint('users'))
+ *         ->id()
+ *         ->string('name', 255);
+ *
  * @phpstan-type ColumnShape array{
  *     type: ColumnType,
  *     name: string,
@@ -118,33 +129,35 @@ final class Blueprint
      * name would leave the index named after a table that no longer
      * exists).
      *
-     * The sub-arrays are DEEP-copied: the blueprint's state is a list of
-     * associative arrays, and a shallow copy would share the inner arrays
-     * — a later mutation of the copy's nested data (e.g. a column entry)
-     * would leak into the original. The lists themselves are rebuilt with
-     * fresh inner arrays; the VALUES are scalars/enums/immutables, so a
-     * value-level copy is a full copy.
+     * The blueprint is IMMUTABLE — every entry list is written once at
+     * declaration and never mutated afterward — so a plain `clone` is a
+     * complete copy: PHP's copy-on-write gives the copy its own arrays
+     * the moment any write would touch them, and the historical
+     * hand-written deep copy (which guarded against post-creation nested
+     * mutation) is dead weight under value semantics.
      *
      * @param string $table The new table name.
      * @return static A copy bound to `$table`, without indexes.
      */
     public function forTable(string $table): static
     {
+        // `$table` is readonly, so the rebind goes through the
+        // constructor rather than a clone-assign.
         $copy = new static($table);
 
-        // Deep-copy each list of associative arrays — one level DEEPER
-        // where the shape nests lists: a FK entry carries `columns` and
-        // `references` (list<string>) INSIDE it, so `[...$fk]` alone would
-        // still share those inner lists. The values themselves are
-        // scalars/enums, so copying the nested lists completes the copy.
-        $copy->columns = array_map(fn (array $column) => [...$column], $this->columns);
-        $copy->foreignKeys = array_map(
-            fn (array $fk) => [...$fk, 'columns' => [...$fk['columns']], 'references' => [...$fk['references']]],
-            $this->foreignKeys,
-        );
-        $copy->checks = array_map(fn (array $check) => [...$check], $this->checks);
-        $copy->columnRenames = array_map(fn (array $rename) => [...$rename], $this->columnRenames);
+        // Entries are write-once after declaration (the immutable API
+        // guarantees it), so plain array copies are complete copies —
+        // PHP's copy-on-write means the nested lists are never shared
+        // with a writer.
+        $copy->columns = $this->columns;
+        $copy->foreignKeys = $this->foreignKeys;
+        $copy->checks = $this->checks;
+        $copy->columnRenames = $this->columnRenames;
         $copy->renamedFrom = $this->renamedFrom;
+
+        // Indexes are deliberately NOT carried: derived index names embed
+        // the bound table name (see the docblock).
+        $copy->indexes = [];
 
         return $copy;
     }
@@ -160,7 +173,7 @@ final class Blueprint
      * create/drop handling with the advisory flags, never a wrong rename.
      *
      * @param string $oldTable The live table name being renamed.
-     * @return $this
+     * @return static A new blueprint with the rename declared; the original is unchanged.
      * @throws \InvalidArgumentException When the old name is empty.
      */
     public function renamedFrom(string $oldTable): static
@@ -169,8 +182,9 @@ final class Blueprint
             throw new \InvalidArgumentException('A table rename requires a non-empty old table name.');
         }
 
-        $this->renamedFrom = $oldTable;
-        return $this;
+        $clone = clone $this;
+        $clone->renamedFrom = $oldTable;
+        return $clone;
     }
 
     /**
@@ -194,7 +208,7 @@ final class Blueprint
      *
      * @param string $from The live column name.
      * @param string $to The new column name.
-     * @return $this
+     * @return static A new blueprint with the rename declared; the original is unchanged.
      * @throws \InvalidArgumentException When either name is empty or the
      *         names are equal.
      */
@@ -210,8 +224,9 @@ final class Blueprint
             );
         }
 
-        $this->columnRenames[] = ['from' => $from, 'to' => $to];
-        return $this;
+        $clone = clone $this;
+        $clone->columnRenames = [...$this->columnRenames, ['from' => $from, 'to' => $to]];
+        return $clone;
     }
 
     /**
@@ -383,7 +398,7 @@ final class Blueprint
      *        DISTINCT` semantics (Postgres 15+; other dialects fail fast
      *        at compile time). Meaningless on a non-unique index — fails
      *        fast at declaration.
-     * @return $this
+     * @return static A new blueprint with the index declared; the original is unchanged.
      * @throws \InvalidArgumentException When no columns are given, the
      *         `where` predicate is empty, or `nullsNotDistinct` is set on
      *         a non-unique index.
@@ -410,14 +425,15 @@ final class Blueprint
             );
         }
 
-        $this->indexes[] = [
+        $clone = clone $this;
+        $clone->indexes = [...$this->indexes, [
             'name' => $name ?? $this->deriveIndexName($columns, $unique),
             'columns' => $columns,
             'unique' => $unique,
             'where' => $where,
             'nullsNotDistinct' => $nullsNotDistinct,
-        ];
-        return $this;
+        ]];
+        return $clone;
     }
 
     /**
@@ -439,7 +455,7 @@ final class Blueprint
      *        stored as the enum, so no raw string reaches the compiled DDL.
      * @param ForeignKeyAction|string|null $onUpdate The foreign key ON UPDATE
      *        action — validated the same way.
-     * @return $this
+     * @return static A new blueprint with the column appended; the original is unchanged.
      */
     public function column(
         ColumnType $type,
@@ -469,7 +485,8 @@ final class Blueprint
             $foreign = $this->normalizeForeignReference($foreign, $name);
         }
 
-        $this->columns[] = [
+        $clone = clone $this;
+        $clone->columns = [...$this->columns, [
             'type' => $type,
             'name' => $name,
             'primaryKey' => $primaryKey,
@@ -482,22 +499,22 @@ final class Blueprint
             'foreign' => $foreign,
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
             'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
-        ];
+        ]];
 
         // A flagged plain index derives its FINAL name at DECLARATION time
         // (`unique: true` rides the column's inline UNIQUE constraint, so
         // no separate index). Getters stay pure reads.
         if ($index === true && $unique !== true) {
-            $this->indexes[] = [
+            $clone->indexes = [...$clone->indexes, [
                 'name' => $this->deriveIndexName([$name], false),
                 'columns' => [$name],
                 'unique' => false,
                 'where' => null,
                 'nullsNotDistinct' => false,
-            ];
+            ]];
         }
 
-        return $this;
+        return $clone;
     }
 
     /**
@@ -506,7 +523,7 @@ final class Blueprint
      * @param string $name The column name.
      * @param ColumnType $type The column type (default {@see ColumnType::BigInt}).
      * @param bool $autoIncrement Whether the key auto-increments.
-     * @return $this
+     * @return static A new blueprint with the column appended; the original is unchanged.
      */
     public function id(string $name = 'id', ColumnType $type = ColumnType::BigInt, bool $autoIncrement = true): static
     {
@@ -518,7 +535,7 @@ final class Blueprint
      *
      * @param string $name The column name.
      * @param int $length The column length (required).
-     * @return $this
+     * @return static A new blueprint with the column appended; the original is unchanged.
      */
     public function string(string $name, int $length): static
     {
@@ -529,7 +546,7 @@ final class Blueprint
      * Add a nullable datetime column.
      *
      * @param string $name The column name.
-     * @return $this
+     * @return static A new blueprint with the column appended; the original is unchanged.
      */
     public function timestamp(string $name): static
     {
@@ -546,7 +563,7 @@ final class Blueprint
      *        {@see ColumnType::String}).
      * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
      * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
-     * @return $this
+     * @return static A new blueprint with the column appended; the original is unchanged.
      */
     public function foreignId(
         string $name,
@@ -578,7 +595,7 @@ final class Blueprint
      *        `{name}_id`.
      * @param bool $nullable Whether both columns allow null (an optional
      *        polymorphic relation).
-     * @return $this
+     * @return static A new blueprint with both columns appended; the original is unchanged.
      * @throws \InvalidArgumentException When `$name` is empty.
      */
     public function morphs(string $name, bool $nullable = false): static
@@ -587,10 +604,9 @@ final class Blueprint
             throw new \InvalidArgumentException('A morph pair requires a non-empty name.');
         }
 
-        $this->column(ColumnType::String, $name . '_type', nullable: $nullable, length: 255);
-        $this->column(ColumnType::BigInt, $name . '_id', nullable: $nullable);
-
-        return $this;
+        return $this
+            ->column(ColumnType::String, $name . '_type', nullable: $nullable, length: 255)
+            ->column(ColumnType::BigInt, $name . '_id', nullable: $nullable);
     }
 
     /**
@@ -643,7 +659,7 @@ final class Blueprint
      * @param bool $initiallyDeferred Whether the constraint starts
      *        INITIALLY DEFERRED (implies `$deferrable`; fails fast when
      *        set without it).
-     * @return $this
+     * @return static A new blueprint with the constraint declared; the original is unchanged.
      * @throws \InvalidArgumentException When the column/reference arity
      *         mismatches, either list is empty, or `initiallyDeferred` is
      *         set without `deferrable`.
@@ -673,7 +689,8 @@ final class Blueprint
             );
         }
 
-        $this->foreignKeys[] = [
+        $clone = clone $this;
+        $clone->foreignKeys = [...$this->foreignKeys, [
             'name' => ConstraintNamer::derive($this->table, $columns, 'foreign'),
             'columns' => $columns,
             'references' => [$referencesTable, ...$referencesColumns],
@@ -681,8 +698,8 @@ final class Blueprint
             'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
             'deferrable' => $deferrable,
             'initiallyDeferred' => $initiallyDeferred,
-        ];
-        return $this;
+        ]];
+        return $clone;
     }
 
     /**
@@ -703,7 +720,7 @@ final class Blueprint
      * @param string $expression The CHECK predicate, spliced verbatim.
      * @param string|null $name The final constraint name, or null to
      *        derive `{table}_{columns}_check`.
-     * @return $this
+     * @return static A new blueprint with the constraint declared; the original is unchanged.
      * @throws \InvalidArgumentException When the expression is empty.
      */
     public function check(string $expression, ?string $name = null): static
@@ -712,11 +729,12 @@ final class Blueprint
             throw new \InvalidArgumentException('A CHECK constraint requires a non-empty expression.');
         }
 
-        $this->checks[] = [
+        $clone = clone $this;
+        $clone->checks = [...$this->checks, [
             'name' => $name ?? $this->deriveCheckName($expression),
             'expression' => $expression,
-        ];
-        return $this;
+        ]];
+        return $clone;
     }
 
     /**
@@ -817,12 +835,13 @@ final class Blueprint
      * Drop a column (ALTER only).
      *
      * @param string $name The column name.
-     * @return $this
+     * @return static A new blueprint with the drop declared; the original is unchanged.
      */
     public function dropColumn(string $name): static
     {
-        $this->dropColumns[] = $name;
-        return $this;
+        $clone = clone $this;
+        $clone->dropColumns = [...$this->dropColumns, $name];
+        return $clone;
     }
 
     /**
@@ -833,24 +852,26 @@ final class Blueprint
      * that actually exists.
      *
      * @param string $name The live constraint name.
-     * @return $this
+     * @return static A new blueprint with the drop declared; the original is unchanged.
      */
     public function dropForeignKey(string $name): static
     {
-        $this->dropForeignKeys[] = $name;
-        return $this;
+        $clone = clone $this;
+        $clone->dropForeignKeys = [...$this->dropForeignKeys, $name];
+        return $clone;
     }
 
     /**
      * Drop a CHECK constraint by its LIVE name (ALTER only).
      *
      * @param string $name The live constraint name.
-     * @return $this
+     * @return static A new blueprint with the drop declared; the original is unchanged.
      */
     public function dropCheck(string $name): static
     {
-        $this->dropChecks[] = $name;
-        return $this;
+        $clone = clone $this;
+        $clone->dropChecks = [...$this->dropChecks, $name];
+        return $clone;
     }
 
     /**
@@ -950,7 +971,7 @@ final class Blueprint
                 continue; // inherited column — belongs on the parent's table
             }
 
-            $blueprint->column(
+            $blueprint = $blueprint->column(
                 $column->type,
                 $mapping->columnName,
                 primaryKey: $column->primaryKey,
@@ -1003,7 +1024,7 @@ final class Blueprint
             // null name → the blueprint derives the final
             // `{table}_{columns}_unique` name; a user-set name passes
             // through verbatim (it IS the whole name).
-            $blueprint->index(
+            $blueprint = $blueprint->index(
                 $unique->name,
                 $unique->columns,
                 unique: true,
@@ -1017,7 +1038,7 @@ final class Blueprint
                 continue;
             }
 
-            $blueprint->index($index->name, $index->columns, where: $index->where);
+            $blueprint = $blueprint->index($index->name, $index->columns, where: $index->where);
         }
 
         foreach ($metadata->foreignKeys as $foreignKey) {
@@ -1025,7 +1046,7 @@ final class Blueprint
                 continue;
             }
 
-            $blueprint->foreignKey(
+            $blueprint = $blueprint->foreignKey(
                 $foreignKey->columns,
                 $foreignKey->resolvedReferences(),
                 $foreignKey->resolvedReferencesColumns(),
@@ -1040,7 +1061,7 @@ final class Blueprint
             // A CHECK is table-level — it always belongs on the model's own
             // table, even for an MTI child (there are no column ownership
             // semantics to filter on).
-            $blueprint->check($check->expression, $check->name);
+            $blueprint = $blueprint->check($check->expression, $check->name);
         }
 
         // Class-level #[Morphs] attributes need NO separate pass here: the
@@ -1062,7 +1083,7 @@ final class Blueprint
             $parentKeys = $parentMetadata->primaryKeys;
 
             if ($parentTable !== null && count($parentKeys) === 1 && $parentKeys[0]->name !== null) {
-                $blueprint->foreignKey(
+                $blueprint = $blueprint->foreignKey(
                     [$parentKeys[0]->name],
                     $parentTable,
                     [$parentKeys[0]->name],

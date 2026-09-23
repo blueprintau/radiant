@@ -26,9 +26,9 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     private function createSimpleTable(string $table): void
     {
-        $blueprint = new Blueprint($table);
-        $blueprint->id();
-        $blueprint->column(ColumnType::String, 'name', length: 50);
+        $blueprint = (new Blueprint($table))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
         $this->connection->create($blueprint);
     }
 
@@ -43,10 +43,10 @@ final class MigrationSyncTest extends DatabaseTestCase
             "INSERT INTO legacy_users (name) VALUES ('Alice'), ('Bob')",
         );
 
-        $desired = new Blueprint('users');
-        $desired->renamedFrom('legacy_users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 50);
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$desired]);
@@ -67,9 +67,9 @@ final class MigrationSyncTest extends DatabaseTestCase
         // blueprint WITHOUT the renamedFrom declaration — the rename is
         // done, and re-declaring it would now fail fast by design).
         self::assertFalse($this->connection->schemaInspector->hasTable('legacy_users'));
-        $converged = new Blueprint('users');
-        $converged->id();
-        $converged->column(ColumnType::String, 'name', length: 50);
+        $converged = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
         self::assertSame([], $differ->diff([$converged]));
     }
 
@@ -80,10 +80,10 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testDeclaredRenameWithNoLiveOldTableFailsFast(): void
     {
-        $desired = new Blueprint('users');
-        $desired->renamedFrom('ghost_table');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 50);
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('ghost_table')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
@@ -101,10 +101,10 @@ final class MigrationSyncTest extends DatabaseTestCase
         $this->createSimpleTable('users');
         $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
 
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'full_name', length: 50);
-        $desired->renameColumn('name', 'full_name');
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'full_name', length: 50)
+            ->renameColumn('name', 'full_name');
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$desired]);
@@ -131,10 +131,10 @@ final class MigrationSyncTest extends DatabaseTestCase
     {
         $this->createSimpleTable('users');
 
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'full_name', length: 120);
-        $desired->renameColumn('name', 'full_name');
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'full_name', length: 120)
+            ->renameColumn('name', 'full_name');
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$desired]);
@@ -158,10 +158,10 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testContentDriftModifiesViaRebuildAndPreservesData(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->id();
-        $blueprint->column(ColumnType::String, 'name', length: 50);
-        $blueprint->column(ColumnType::String, 'email', length: 255, index: true);
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'email', length: 255, index: true);
         $this->connection->create($blueprint);
 
         $this->connection->statement(
@@ -169,10 +169,10 @@ final class MigrationSyncTest extends DatabaseTestCase
         );
 
         // Widen the name column — a pure type/length drift.
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 120);
-        $desired->column(ColumnType::String, 'email', length: 255, index: true);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120)
+            ->column(ColumnType::String, 'email', length: 255, index: true);
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$desired]);
@@ -211,17 +211,17 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testModifyDestructiveClassification(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->id();
-        $blueprint->column(ColumnType::String, 'name', length: 50, nullable: true);
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50, nullable: true);
         $this->connection->create($blueprint);
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
         // Tighten nullability → destructive.
-        $tighten = new Blueprint('users');
-        $tighten->id();
-        $tighten->column(ColumnType::String, 'name', length: 50, nullable: false);
+        $tighten = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50, nullable: false);
         $changes = $differ->diff([$tighten]);
         self::assertCount(1, $changes);
         self::assertTrue($changes[0]->destructive);
@@ -229,9 +229,9 @@ final class MigrationSyncTest extends DatabaseTestCase
         // Default-only change → non-destructive.
         $this->connection->apply($changes[0]);
 
-        $defaulted = new Blueprint('users');
-        $defaulted->id();
-        $defaulted->column(ColumnType::String, 'name', length: 50, nullable: false, default: 'anon');
+        $defaulted = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50, nullable: false, default: 'anon');
         $changes = $differ->diff([$defaulted]);
         self::assertCount(1, $changes);
         self::assertFalse($changes[0]->destructive);
@@ -254,14 +254,14 @@ final class MigrationSyncTest extends DatabaseTestCase
         // tables, so users must stay declared). The FK targets the PK
         // (SQLite requires referenced columns to be PK or uniquely
         // indexed).
-        $users = new Blueprint('users');
-        $users->id();
-        $users->column(ColumnType::String, 'name', length: 50);
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
 
-        $desired = new Blueprint('posts');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 50);
-        $desired->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
+        $desired = (new Blueprint('posts'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
 
         $changes = $differ->diff([$users, $desired]);
         // The new column (add) plus the FK (add_foreign_key) — two changes.
@@ -277,10 +277,10 @@ final class MigrationSyncTest extends DatabaseTestCase
         self::assertSame([], $differ->diff([$users, $desired]));
 
         // Drop it: the desired state no longer declares the FK.
-        $withoutFk = new Blueprint('posts');
-        $withoutFk->id();
-        $withoutFk->column(ColumnType::String, 'name', length: 50);
-        $withoutFk->column(ColumnType::BigInt, 'author_id');
+        $withoutFk = (new Blueprint('posts'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::BigInt, 'author_id');
 
         $changes = $differ->diff([$users, $withoutFk]);
         self::assertCount(1, $changes);
@@ -296,18 +296,18 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testCheckDiffing(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->id();
-        $blueprint->column(ColumnType::Int, 'age');
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::Int, 'age');
         $this->connection->create($blueprint);
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
         // Declare a CHECK — missing live.
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::Int, 'age');
-        $desired->check('age >= 18', 'adult');
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::Int, 'age')
+            ->check('age >= 18', 'adult');
 
         $changes = $differ->diff([$desired]);
         self::assertCount(1, $changes);
@@ -319,10 +319,10 @@ final class MigrationSyncTest extends DatabaseTestCase
         // Same name, different expression → advisory-only change (the
         // operation is AddCheck but the description says advisory; the
         // blueprint carries NO executable declaration).
-        $drifted = new Blueprint('users');
-        $drifted->id();
-        $drifted->column(ColumnType::Int, 'age');
-        $drifted->check('age >= 21', 'adult');
+        $drifted = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::Int, 'age')
+            ->check('age >= 21', 'adult');
 
         $changes = $differ->diff([$drifted]);
         self::assertCount(1, $changes);
@@ -341,12 +341,12 @@ final class MigrationSyncTest extends DatabaseTestCase
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
         // Declare posts (FK → users) BEFORE users — the sort must flip it.
-        $posts = new Blueprint('posts');
-        $posts->id();
-        $posts->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
+        $posts = (new Blueprint('posts'))
+            ->id()
+            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
 
-        $users = new Blueprint('users');
-        $users->id();
+        $users = (new Blueprint('users'))
+            ->id();
 
         $changes = $differ->diff([$posts, $users]);
 
@@ -370,13 +370,13 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testCircularDependencyFailsFast(): void
     {
-        $a = new Blueprint('cycle_a');
-        $a->id();
-        $a->column(ColumnType::BigInt, 'b_id', foreign: 'cycle_b.id');
+        $a = (new Blueprint('cycle_a'))
+            ->id()
+            ->column(ColumnType::BigInt, 'b_id', foreign: 'cycle_b.id');
 
-        $b = new Blueprint('cycle_b');
-        $b->id();
-        $b->column(ColumnType::BigInt, 'a_id', foreign: 'cycle_a.id');
+        $b = (new Blueprint('cycle_b'))
+            ->id()
+            ->column(ColumnType::BigInt, 'a_id', foreign: 'cycle_a.id');
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
@@ -392,9 +392,9 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testSynchronizerFlow(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 50);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
 
         $synchronizer = new SchemaSynchronizer($this->connection);
 
@@ -440,14 +440,14 @@ final class MigrationSyncTest extends DatabaseTestCase
      */
     public function testRebuildIntegrityGateRollsBack(): void
     {
-        $users = new Blueprint('users');
-        $users->id();
-        $users->column(ColumnType::String, 'name', length: 50);
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
         $this->connection->create($users);
 
-        $posts = new Blueprint('posts');
-        $posts->id();
-        $posts->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
+        $posts = (new Blueprint('posts'))
+            ->id()
+            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
         $this->connection->create($posts);
 
         $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
@@ -456,14 +456,14 @@ final class MigrationSyncTest extends DatabaseTestCase
         // Modify users via the rebuild — the child row is valid, so it
         // succeeds and the child FK survives the rebuild. BOTH tables ride
         // the desired set (posts must stay declared or it diffs as a drop).
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 120);
-        $desired->column(ColumnType::BigInt, 'extra', nullable: true);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120)
+            ->column(ColumnType::BigInt, 'extra', nullable: true);
 
-        $postsDesired = new Blueprint('posts');
-        $postsDesired->id();
-        $postsDesired->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
+        $postsDesired = (new Blueprint('posts'))
+            ->id()
+            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
 
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$desired, $postsDesired]);

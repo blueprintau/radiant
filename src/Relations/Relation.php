@@ -42,6 +42,13 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * shape wins. Scalar and composite are mutually exclusive — one side
  * cannot be a list while the other is a single column.
  *
+ * **Relations are immutable.** Every filter (`where()`, `orderBy()`,
+ * `limit()`, ...) and every configurator (`withName()`, `withPivot()`,
+ * ...) returns a NEW relation — the original is never modified. A
+ * discarded call is a no-op, and a composed chain can never poison the
+ * shared cached prototype (the cache holds the un-composed original;
+ * composition happens on copies).
+ *
  * @template TRelated of Model
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
  */
@@ -180,29 +187,59 @@ abstract class Relation
      *
      * @param string|null $name The relation method's name (null changes
      *        nothing — an unstamped relation simply has no cache path).
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the name stamped; the same
+     *         instance when $name is null (the documented no-op).
      */
     final public function withName(?string $name): static
     {
-        if ($name !== null) {
-            $this->name = $name;
+        if ($name === null) {
+            return $this;
         }
 
-        return $this;
+        $clone = clone $this;
+        $clone->name = $name;
+
+        return $clone;
     }
 
     /**
-     * Mark the relation as composed — for subclasses whose modifiers
-     * change what a fresh read would return without riding the where
-     * sinks ({@see BelongsToMany::withPivot()} widens the select, so a
-     * cache loaded WITHOUT pivot columns must not serve a withPivot
+     * Mark a COPY of the relation as composed — for subclasses whose
+     * modifiers change what a fresh read would return without riding the
+     * where sinks ({@see BelongsToMany::withPivot()} widens the select, so
+     * a cache loaded WITHOUT pivot columns must not serve a withPivot
      * chain).
      *
-     * @return void
+     * @return static A NEW relation with the composed flag set; the
+     *         original is unchanged.
      */
-    protected function markComposed(): void
+    protected function markComposed(): static
     {
-        $this->composed = true;
+        $clone = clone $this;
+        $clone->composed = true;
+
+        return $clone;
+    }
+
+    /**
+     * The builder a composition sink decorates.
+     *
+     * Deferring relations ({@see MorphTo}) have no constrained builder —
+     * the related class resolves per row — so filters cannot compose onto
+     * them. This fails fast with the explanation instead of the
+     * uninitialized-property error a raw `$query` read would raise.
+     *
+     * @return ModelQueryBuilder<TRelated> The constrained builder.
+     */
+    protected function compositionQuery(): ModelQueryBuilder
+    {
+        if (!isset($this->query)) {
+            throw new \LogicException(
+                static::class . ' cannot compose filters — its query is built lazily per '
+                . 'resolved type; read the results with getResults() instead.'
+            );
+        }
+
+        return $this->query;
     }
 
     /**
@@ -471,7 +508,8 @@ abstract class Relation
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the filter composed; the original
+     *         is unchanged.
      */
     final public function where(
         string|Expression $column,
@@ -479,10 +517,11 @@ abstract class Relation
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        $this->composed = true;
-        $this->query = $this->query->where($column, $operator, $value, $boolean);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->where($column, $operator, $value, $boolean);
 
-        return $this;
+        return $clone;
     }
 
     /**
@@ -492,16 +531,18 @@ abstract class Relation
      * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
      *        where-family facade and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the group composed; the original
+     *         is unchanged.
      */
     final public function whereNested(
         callable $callback,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        $this->composed = true;
-        $this->query = $this->query->whereNested($callback, $boolean);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->whereNested($callback, $boolean);
 
-        return $this;
+        return $clone;
     }
 
     /**
@@ -510,72 +551,82 @@ abstract class Relation
      * @param string|Expression $column The column to order by — or a raw
      *        SQL fragment wrapped in an Expression.
      * @param SortDirection|string $direction `ASC` or `DESC`.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the ordering composed; the
+     *         original is unchanged.
      */
     final public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
-        $this->composed = true;
-        $this->query = $this->query->orderBy($column, $direction);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->orderBy($column, $direction);
 
-        return $this;
+        return $clone;
     }
 
     /**
      * Set the maximum number of rows to return.
      *
      * @param int $limit The row limit.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the limit composed; the original
+     *         is unchanged.
      */
     final public function limit(int $limit): static
     {
-        $this->composed = true;
-        $this->query = $this->query->limit($limit);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->limit($limit);
 
-        return $this;
+        return $clone;
     }
 
     /**
      * Set the number of rows to skip.
      *
      * @param int $offset The number of rows to skip.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the offset composed; the original
+     *         is unchanged.
      */
     final public function offset(int $offset): static
     {
-        $this->composed = true;
-        $this->query = $this->query->offset($offset);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->offset($offset);
 
-        return $this;
+        return $clone;
     }
 
     /**
      * Set an explicit column selection on the constrained builder.
      *
      * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the selection composed; the
+     *         original is unchanged.
      */
     final public function select(string|Expression|Aggregate ...$columns): static
     {
         // No args → the default `['*']` select (a variadic list cannot have
         // a default, so the empty case is handled here).
-        $this->composed = true;
-        $this->query = $this->query->select(...$columns);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->select(...$columns);
 
-        return $this;
+        return $clone;
     }
 
     /**
      * Group by columns on the constrained builder.
      *
      * @param string|array<int, string> $columns The column(s) to group by.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the grouping composed; the
+     *         original is unchanged.
      */
     final public function groupBy(string|array $columns): static
     {
-        $this->composed = true;
-        $this->query = $this->query->groupBy($columns);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->groupBy($columns);
 
-        return $this;
+        return $clone;
     }
 
     /**
@@ -584,14 +635,16 @@ abstract class Relation
      * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
-     * @return static The relation (chainable).
+     * @return static A NEW relation with the filter composed; the original
+     *         is unchanged.
      */
     final public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
-        $this->composed = true;
-        $this->query = $this->query->having($column, $operator, $value);
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->having($column, $operator, $value);
 
-        return $this;
+        return $clone;
     }
 
     /**

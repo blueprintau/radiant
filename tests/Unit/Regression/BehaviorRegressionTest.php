@@ -308,14 +308,15 @@ final class BehaviorRegressionTest extends TestCase
      */
     public function testMySqlEmulationCannotBeEnabled(): void
     {
-        $baseForced = (new \ReflectionProperty(
+        // The base forced layer is a private const on SqlConnector; the
+        // subclass hook returns only the dialect's own additions.
+        $baseForced = (new \ReflectionClass(
             \BlueprintAU\Radiant\Database\Connectors\SqlConnector::class,
-            'FORCED_OPTIONS',
-        ))->getValue();
-        $mysqlForced = (new \ReflectionProperty(
+        ))->getConstant('FORCED_OPTIONS');
+        $mysqlForced = (new \ReflectionMethod(
             \BlueprintAU\Radiant\Database\Connectors\MySqlConnector::class,
-            'FORCED_OPTIONS',
-        ))->getValue();
+            'forcedOptions',
+        ))->invoke(new \BlueprintAU\Radiant\Database\Connectors\MySqlConnector());
 
         self::assertFalse(
             $baseForced[\PDO::ATTR_EMULATE_PREPARES],

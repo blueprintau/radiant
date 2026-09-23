@@ -1159,7 +1159,9 @@ final class ModelQueryBuilder extends QueryBuilder
             return $raw;
         }
 
-        return $metadata->mappingFor($bare)->column->decode($raw);
+        $mapping = $metadata->mappingFor($bare);
+
+        return $mapping->column->decode($raw, $mapping->propertyType);
     }
 
     // ---- Aggregates (decoded like every other scalar read) ----
@@ -1947,10 +1949,9 @@ final class ModelQueryBuilder extends QueryBuilder
     {
         $this->validateWriteColumn($column);
 
-        return MetadataFactory::for($this->modelClass)
-            ->mappingFor($column)
-            ->column
-            ->encode($value);
+        $mapping = MetadataFactory::for($this->modelClass)->mappingFor($column);
+
+        return $mapping->column->encode($value, $mapping->propertyType);
     }
 
     /**

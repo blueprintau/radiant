@@ -116,8 +116,8 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileModifyColumnMySql(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->column(ColumnType::String, 'name', length: 100, nullable: false, default: 'unknown');
+        $blueprint = (new Blueprint('users'))
+            ->column(ColumnType::String, 'name', length: 100, nullable: false, default: 'unknown');
 
         self::assertSame(
             ['ALTER TABLE `users` MODIFY `name` varchar(100) NOT NULL DEFAULT \'unknown\''],
@@ -131,8 +131,8 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileModifyColumnPostgres(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->column(ColumnType::String, 'name', length: 100, nullable: false, default: 'unknown');
+        $blueprint = (new Blueprint('users'))
+            ->column(ColumnType::String, 'name', length: 100, nullable: false, default: 'unknown');
 
         self::assertSame(
             [
@@ -150,8 +150,8 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileModifyColumnSqliteThrows(): void
     {
-        $blueprint = new Blueprint('users');
-        $blueprint->column(ColumnType::String, 'name', length: 100);
+        $blueprint = (new Blueprint('users'))
+            ->column(ColumnType::String, 'name', length: 100);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
         $this->expectExceptionMessage('requires a table rebuild');
@@ -164,9 +164,9 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileRebuildTableSequence(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 100, nullable: false);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 100, nullable: false);
 
         $statements = $this->sqlite->compileRebuildTable(
             $desired,
@@ -191,9 +191,9 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileRebuildTableSkipsPragmasWhenFksOff(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 100, nullable: false);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 100, nullable: false);
 
         $statements = $this->sqlite->compileRebuildTable(
             $desired,
@@ -217,11 +217,11 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileRebuildTableCarriesConstraintsNotIndexes(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::BigInt, 'roleId', foreign: 'roles.id');
-        $desired->check('id > 0', 'positive');
-        $desired->index(null, ['roleId']);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::BigInt, 'roleId', foreign: 'roles.id')
+            ->check('id > 0', 'positive')
+            ->index(null, ['roleId']);
 
         $statements = $this->sqlite->compileRebuildTable(
             $desired,
@@ -247,9 +247,9 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileRebuildTableCopiesOnlyTheIntersection(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'name', length: 100);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 100);
         $desired->column(ColumnType::BigInt, 'extra', nullable: true); // added
 
         $statements = $this->sqlite->compileRebuildTable(
@@ -271,9 +271,9 @@ final class MigrationFeaturesTest extends DatabaseTestCase
      */
     public function testCompileRebuildTableRefusesEmptyIntersection(): void
     {
-        $desired = new Blueprint('users');
-        $desired->id();
-        $desired->column(ColumnType::String, 'brand_new', length: 100);
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'brand_new', length: 100);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('would copy no columns');

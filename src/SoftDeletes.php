@@ -166,7 +166,7 @@ trait SoftDeletes
             return;
         }
 
-        $propertyType = $mapping->column->propertyType;
+        $propertyType = $mapping->propertyType;
         if (
             $value instanceof \DateTimeInterface
             && is_string($propertyType)

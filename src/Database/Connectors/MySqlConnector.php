@@ -66,11 +66,15 @@ final class MySqlConnector extends SqlConnector
      * being honest — so this is forced on. (ERRMODE and EMULATE_PREPARES are
      * forced by the base connector for every dialect.)
      *
-     * @var array<int, int|bool>
+     * @return array<int, int|bool>
      */
-    protected static array $FORCED_OPTIONS = [
-        \PDO\Mysql::ATTR_FOUND_ROWS => true,
-    ];
+    #[\Override]
+    protected function forcedOptions(): array
+    {
+        return [
+            \PDO\Mysql::ATTR_FOUND_ROWS => true,
+        ];
+    }
 
     /**
      * Create a MySQL connection from the given config.

@@ -16,12 +16,12 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * {@see Column::decode()} / {@see Column::encode()}) and the DB schema
  * (the type, constraints, and FK actions the DDL is compiled from).
  *
- * The cast is **owned by the field type** — the PHP property type
- * ({@see Column::$propertyType}, captured by the {@see MetadataFactory}
- * from the `ReflectionProperty`) drives `decode()`/`encode()`, with the
- * column type used to disambiguate (`int` on an `int` column is identity;
- * `int` on a `timestamp` column is a Unix timestamp cast). Incompatible
- * combos fail fast at metadata build via
+ * The cast is **owned by the field type** — the PHP property type (captured
+ * by the {@see MetadataFactory} from the `ReflectionProperty` and carried on
+ * the {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}) drives
+ * `decode()`/`encode()`, with the column type used to disambiguate (`int` on
+ * an `int` column is identity; `int` on a `timestamp` column is a Unix
+ * timestamp cast). Incompatible combos fail fast at metadata build via
  * {@see Column::assertTypeCompatible()}, never silently mis-cast.
  *
  * The two-layer cast pipeline: `decode()`/`encode()` convert between the
@@ -75,19 +75,6 @@ final class Column
     ) {
     }
 
-    /**
-     * The PHP property type name (set by {@see MetadataFactory}).
-     *
-     * Captured from the `ReflectionProperty` as a plain string — the cast
-     * pipeline matches on names (`'Carbon\Carbon'`, `'int'`, `'array'`),
-     * so storing the name where it is consumed spares every consumer a
-     * null-check + `getName()` dance. Union/intersection types on a column
-     * property are a metadata build error, so this is always a single named
-     * type (or null for an untyped property).
-     *
-     * @var string|null
-     */
-    public ?string $propertyType = null;
 
     // ---- Type compatibility (fail-fast at metadata build) ----
 
@@ -244,18 +231,20 @@ final class Column
      * two differ.
      *
      * @param mixed $value The bindable value from the driver.
+     * @param string|null $propertyType The PHP property type name driving
+     *        the cast (from the owning {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}).
      * @return mixed The typed property value.
      */
-    public function decode(mixed $value): mixed
+    public function decode(mixed $value, ?string $propertyType = null): mixed
     {
         if ($value === null) {
             return null;
         }
 
         if (
-            $this->propertyType !== null
-            && !in_array($this->propertyType, ['int', 'float', 'bool', 'string', 'array'], true)
-            && is_a($this->propertyType, \DateTimeInterface::class, true)
+            $propertyType !== null
+            && !in_array($propertyType, ['int', 'float', 'bool', 'string', 'array'], true)
+            && is_a($propertyType, \DateTimeInterface::class, true)
         ) {
             // Any DateTimeInterface implementation: Carbon::parse returns
             // a Carbon, which IS a DateTimeInterface — the model layer
@@ -268,7 +257,7 @@ final class Column
                 return \Carbon\Carbon::parse($value);
             } catch (\Throwable $e) {
                 throw new \RuntimeException(
-                    'Column [' . ($this->name ?? $this->propertyType) . '] could not decode the value ['
+                    'Column [' . ($this->name ?? $propertyType) . '] could not decode the value ['
                     . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
                     . '] as a datetime: ' . $e->getMessage(),
                     0,
@@ -277,7 +266,7 @@ final class Column
             }
         }
 
-        return match ($this->propertyType) {
+        return match ($propertyType) {
             'int' => $this->type === ColumnType::Timestamp ? strtotime((string) $value) : (int) $value,
             'float' => (float) $value,
             'bool' => (bool) $value,
@@ -315,9 +304,11 @@ final class Column
      * pass through — the typed property already holds the right scalar.
      *
      * @param mixed $value The typed property value.
+     * @param string|null $propertyType The PHP property type name driving
+     *        the cast (from the owning {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}).
      * @return mixed The bindable value.
      */
-    public function encode(mixed $value): mixed
+    public function encode(mixed $value, ?string $propertyType = null): mixed
     {
         if ($value === null) {
             return null;
@@ -327,7 +318,7 @@ final class Column
             return $value;
         }
 
-        return match ($this->propertyType) {
+        return match ($propertyType) {
             'array' => $this->encodeJson($value),
             default => $value,
         };

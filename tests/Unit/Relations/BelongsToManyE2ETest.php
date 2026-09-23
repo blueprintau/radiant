@@ -85,10 +85,12 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
             Blueprint::fromMetadata(B2mTag::class),
         );
 
-        $pivot = new Blueprint('b2m_posts_b2m_tags');
-        $pivot->foreignId('b2m_posts_id', 'b2m_posts.id');
-        $pivot->foreignId('b2m_tags_id', 'b2m_tags.id');
-        $pivot->column(ColumnType::String, 'position', nullable: true, length: 16);
+        $pivot = (new Blueprint('b2m_posts_b2m_tags'))
+            ->foreignId('b2m_posts_id', 'b2m_posts.id')
+            ->foreignId('b2m_tags_id', 'b2m_tags.id')
+            ->column(ColumnType::String, 'position', nullable: true, length: 16)
+            ->column(ColumnType::DateTime, 'created_at', nullable: true)
+            ->column(ColumnType::DateTime, 'updated_at', nullable: true);
         $this->connection->create($pivot);
 
         $this->connection->table('b2m_posts')->insert([
@@ -309,5 +311,73 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $tags = $post->tags()->getResults();
         self::assertInstanceOf(Collection::class, $tags);
         self::assertCount(0, $tags);
+    }
+
+    /**
+     * withTimestamps() is sugar for withPivot('created_at', 'updated_at')
+     * — the pivot pair rides the select and reads through pivotValue().
+     */
+    public function testWithTimestampsCarriesPivotTimestamps(): void
+    {
+        $this->connection->table('b2m_posts_b2m_tags')->insert([
+            ['b2m_posts_id' => 2, 'b2m_tags_id' => 3, 'position' => null, 'created_at' => '2026-01-01 00:00:00', 'updated_at' => '2026-01-02 00:00:00'],
+        ]);
+
+        $post = B2mPost::newQuery()->find(2);
+        self::assertNotNull($post);
+
+        $tags = $post->tags()->withTimestamps()->getResults();
+        self::assertCount(2, $tags);
+
+        $orm = null;
+        foreach ($tags as $tag) {
+            if ($tag->attribute('label') === 'orm') {
+                $orm = $tag;
+            }
+        }
+
+        self::assertNotNull($orm);
+        self::assertSame('2026-01-01 00:00:00', $orm->pivotValue('created_at'));
+        self::assertSame('2026-01-02 00:00:00', $orm->pivotValue('updated_at'));
+    }
+
+    /**
+     * The relation is immutable: withPivot() returns a NEW relation, the
+     * original stays pivot-free, and a discarded call is a no-op.
+     */
+    public function testWithPivotReturnsNewInstanceAndLeavesOriginalUntouched(): void
+    {
+        $post = B2mPost::newQuery()->find(1);
+        self::assertNotNull($post);
+
+        $relation = $post->tags();
+        $withPivot = $relation->withPivot('position');
+
+        self::assertNotSame($relation, $withPivot);
+
+        // The original's lazy read selects no pivot alias.
+        $rows = $relation->getResults();
+        self::assertCount(2, $rows);
+        self::assertNull($rows->first()?->pivotValue('position'));
+
+        // The composed copy carries the pivot columns.
+        $pivoted = $withPivot->getResults();
+        self::assertCount(2, $pivoted);
+        self::assertSame('first', $pivoted->first()?->pivotValue('position'));
+    }
+
+    /**
+     * withName(null) is the documented no-op — the SAME instance comes
+     * back; withName('x') returns a NEW instance with the stamp.
+     */
+    public function testWithNameNullIsNoOpAndNameReturnsNewInstance(): void
+    {
+        $post = B2mPost::newQuery()->find(1);
+        self::assertNotNull($post);
+
+        $relation = $post->tags();
+
+        self::assertSame($relation, $relation->withName(null));
+        self::assertNotSame($relation, $relation->withName('tags'));
     }
 }

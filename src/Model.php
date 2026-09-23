@@ -624,7 +624,7 @@ abstract class Model
                 continue;
             }
 
-            $property->setValue($this, $mapping->column->decode($default));
+            $property->setValue($this, $mapping->column->decode($default, $mapping->propertyType));
         }
     }
 
@@ -708,6 +708,7 @@ abstract class Model
                         if (array_key_exists($mapping->columnName, $this->syntheticValues)) {
                             $values[$mapping->columnName] = $mapping->column->encode(
                                 $this->syntheticValues[$mapping->columnName],
+                                $mapping->propertyType,
                             );
                         }
                         continue;
@@ -719,6 +720,7 @@ abstract class Model
 
                     $values[$mapping->columnName] = $mapping->column->encode(
                         $mapping->property->getValue($this),
+                        $mapping->propertyType,
                     );
                 }
 
@@ -795,7 +797,7 @@ abstract class Model
             return null;
         }
 
-        $value = $mapping->column->encode($mapping->property->getValue($this));
+        $value = $mapping->column->encode($mapping->property->getValue($this), $mapping->propertyType);
 
         return is_string($value) || is_int($value) ? $value : null;
     }
@@ -1018,7 +1020,7 @@ abstract class Model
                 continue;
             }
 
-            $instance->hydrateProperty($mapping, $mapping->column->decode($row->{$columnName}));
+            $instance->hydrateProperty($mapping, $mapping->column->decode($row->{$columnName}, $mapping->propertyType));
         }
 
         $instance->exists = true;
@@ -1069,7 +1071,7 @@ abstract class Model
             return;
         }
 
-        $propertyType = $mapping->column->propertyType;
+        $propertyType = $mapping->propertyType;
 
         if (
             $value instanceof \DateTimeInterface
@@ -1115,7 +1117,7 @@ abstract class Model
 
             $encoded = $this->original[$columnName] ?? null;
 
-            return $encoded === null ? null : $mapping->column->decode($encoded);
+            return $encoded === null ? null : $mapping->column->decode($encoded, $mapping->propertyType);
         }
 
         if ($mapping->property->isInitialized($this) === false) {
@@ -1200,6 +1202,7 @@ abstract class Model
                 if (array_key_exists($mapping->columnName, $this->syntheticValues)) {
                     $values[$mapping->columnName] = $mapping->column->encode(
                         $this->syntheticValues[$mapping->columnName],
+                        $mapping->propertyType,
                     );
                 } elseif (array_key_exists($mapping->columnName, $this->original)) {
                     $values[$mapping->columnName] = $this->original[$mapping->columnName];
@@ -1213,6 +1216,7 @@ abstract class Model
 
             $values[$mapping->columnName] = $mapping->column->encode(
                 $mapping->property->getValue($this),
+                $mapping->propertyType,
             );
         }
 
@@ -1228,7 +1232,9 @@ abstract class Model
      */
     protected function castForWrite(string $columnName, mixed $value): mixed
     {
-        return MetadataFactory::for(static::class)->mappingFor($columnName)->column->encode($value);
+        $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
+
+        return $mapping->column->encode($value, $mapping->propertyType);
     }
 
     // ---- Relations ----

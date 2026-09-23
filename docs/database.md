@@ -110,6 +110,24 @@ $users = $db->table('users')
     ->get(); // Collection<int, \stdClass>
 ```
 
+**Builders are immutable.** Every filter/select/order/limit call returns
+a NEW builder — the original is never modified. A discarded call is a
+no-op, and a base builder can be shared and branched safely:
+
+```php
+$base = $db->table('users')->where('active', '=', 1);
+
+$admins = $base->where('role', '=', 'admin')->get(); // both queries
+$recent = $base->where('last_login', '>', $cutoff)->get(); // independent
+```
+
+In a `whereNested()` callback, RETURN the builder — the callback's return
+value is what gets stored, so a discarded return adds nothing:
+
+```php
+$q->whereNested(fn ($nested) => $nested->where('a', '=', 1)->orWhere('b', '=', 2));
+```
+
 Every method validates its inputs and fails fast rather than compiling
 broken SQL — an empty `whereIn([])` throws, aggregate arguments fail
 closed on non-column shapes, and clause fragments that cannot be bound as

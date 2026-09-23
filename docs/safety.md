@@ -46,6 +46,9 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
 
 - An empty `whereIn([])` throws instead of compiling invalid `IN ()` SQL.
 - An empty nested where group throws at declaration.
+- A discarded `whereNested()` callback return (the callback added clauses
+  but returned nothing usable) throws — under the immutable builder API a
+  callback MUST return the `WhereBuilder` it constrained.
 - Aggregate arguments fail closed on non-column shapes.
 - A corrupt JSON or datetime cell throws with the column named, instead of
   corrupting hydration silently.

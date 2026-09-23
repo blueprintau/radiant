@@ -243,10 +243,10 @@ final class MorphsAttributeTest extends DatabaseTestCase
     {
         $fromMetadata = Blueprint::fromMetadata(MorphComment::class);
 
-        $handBuilt = new Blueprint('morph_comments');
-        $handBuilt->id();
-        $handBuilt->string('body', 64);
-        $handBuilt->morphs('commentable');
+        $handBuilt = (new Blueprint('morph_comments'))
+            ->id()
+            ->string('body', 64)
+            ->morphs('commentable');
 
         $grammar = $this->connection->schemaGrammar;
 

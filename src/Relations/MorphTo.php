@@ -52,7 +52,7 @@ final class MorphTo extends Relation
      *
      * @var string
      */
-    protected string $typeColumn;
+    protected readonly string $typeColumn;
 
     /**
      * The optional morph-alias allowlist.

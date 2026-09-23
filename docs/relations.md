@@ -58,6 +58,12 @@ foreach ($user->posts()->orderBy('created_at')->getResults() as $post) { ... }
 $recent = $user->posts()->where('active', '=', 1)->limit(5)->getResults();
 ```
 
+**Relations are immutable.** Every filter and configurator (`withPivot()`,
+`withTimestamps()`) returns a NEW relation — the original is never
+modified, and a discarded call is a no-op. Composition can never poison
+the shared cached prototype: the cache holds the un-composed original,
+and a composed chain always executes fresh.
+
 The relation also exposes fail-fast reads: `firstOrFail()` returns the
 first related model or throws
 `BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException` when the

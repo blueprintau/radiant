@@ -131,10 +131,10 @@ final class MorphToManyE2ETest extends DatabaseTestCase
             Blueprint::fromMetadata(MtmTag::class),
         );
 
-        $pivot = new Blueprint('taggable');
-        $pivot->foreignId('taggable_id', 'mtm_posts.id');
-        $pivot->column(ColumnType::String, 'taggable_type', length: 255);
-        $pivot->foreignId('mtm_tags_id', 'mtm_tags.id');
+        $pivot = (new Blueprint('taggable'))
+            ->foreignId('taggable_id', 'mtm_posts.id')
+            ->column(ColumnType::String, 'taggable_type', length: 255)
+            ->foreignId('mtm_tags_id', 'mtm_tags.id');
         $this->connection->create($pivot);
 
         $this->connection->table('mtm_posts')->insert(['id' => 1, 'title' => 'Post One']);
@@ -235,5 +235,79 @@ final class MorphToManyE2ETest extends DatabaseTestCase
         $posts = $db->posts()->getResults();
         self::assertInstanceOf(Collection::class, $posts);
         self::assertCount(1, $posts);
+    }
+
+    /**
+     * sync() stamps the morph alias on every row it ATTACHES — a pivot
+     * row without `{morphName}_type` would leak across parent classes
+     * sharing the pivot (the regression: sync/toggle rode the base
+     * insert path, which skipped the stamp).
+     */
+    public function testSyncStampsMorphAlias(): void
+    {
+        $video = MtmVideo::newQuery()->find(1);
+        self::assertNotNull($video);
+
+        $video->tags()->sync([1, 2]);
+
+        $rows = $this->connection->table('taggable')
+            ->where('taggable_id', '=', 1)
+            ->where('taggable_type', '=', MtmVideo::class)
+            ->get();
+        self::assertCount(2, $rows);
+
+        // And the rows belong to the video's alias, not the post's.
+        $postRows = $this->connection->table('taggable')
+            ->where('taggable_id', '=', 1)
+            ->where('taggable_type', '=', MtmPost::class)
+            ->get();
+        self::assertCount(2, $postRows);
+    }
+
+    /**
+     * toggle() stamps the morph alias on the rows it attaches.
+     */
+    public function testToggleStampsMorphAlias(): void
+    {
+        $video = MtmVideo::newQuery()->find(1);
+        self::assertNotNull($video);
+
+        // Tag 2 is attached → toggling detaches it; tag 1 is not →
+        // toggling attaches it (and must stamp the alias).
+        $video->tags()->toggle([1, 2]);
+
+        $attached = $this->connection->table('taggable')
+            ->where('taggable_id', '=', 1)
+            ->where('taggable_type', '=', MtmVideo::class)
+            ->get();
+        self::assertCount(1, $attached);
+        self::assertSame(1, $attached->first()?->mtm_tags_id);
+    }
+
+    /**
+     * The relation is immutable: composing a filter returns a NEW
+     * relation, the original keeps only the constraint, and the cached
+     * prototype is never poisoned (a composed copy never lands in the
+     * cache — the cache holds the un-composed original).
+     */
+    public function testCompositionReturnsNewInstanceAndLeavesOriginalUntouched(): void
+    {
+        $post = MtmPost::newQuery()->find(1);
+        self::assertNotNull($post);
+
+        $relation = $post->tags();
+        $composed = $relation->where('label', '=', 'php');
+
+        self::assertNotSame($relation, $composed);
+        self::assertSame(
+            'SELECT * FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
+            . ' WHERE "taggable"."taggable_id" = ? AND "taggable"."taggable_type" = ?',
+            $this->connection->grammar->compileSelect($relation->getQuery()),
+        );
+        self::assertSame(
+            'SELECT * FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
+            . ' WHERE "taggable"."taggable_id" = ? AND "taggable"."taggable_type" = ? AND "label" = ?',
+            $this->connection->grammar->compileSelect($composed->getQuery()),
+        );
     }
 }

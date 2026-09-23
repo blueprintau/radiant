@@ -32,21 +32,21 @@ class HasManyThrough extends Relation
      *
      * @var class-string<Model>
      */
-    protected string $through;
+    protected readonly string $through;
 
     /**
      * FK on the intermediate table pointing back at the parent.
      *
      * @var string|list<string>
      */
-    protected string|array $firstKey;
+    protected readonly string|array $firstKey;
 
     /**
      * FK on the related table pointing at the intermediate.
      *
      * @var string|list<string>
      */
-    protected string|array $secondKey;
+    protected readonly string|array $secondKey;
 
     /**
      * Create a through relation.

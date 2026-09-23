@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Model;
 
 /**
@@ -176,12 +178,35 @@ class MorphToMany extends BelongsToMany
     }
 
     /**
-     * Stamp the morph alias onto every pivot row the write API inserts.
+     * Scope every pivot READ/DELETE/UPDATE path to the morph alias — the
+     * {@see BelongsToMany::pivotQuery()} hook. The morph key column is
+     * SHARED across parent classes on the same pivot, so an unscoped
+     * detach/sync-diff/toggle would touch another class's rows.
+     *
+     * @param SqlConnection $connection The parent's SQL connection.
+     * @return QueryBuilder The alias-scoped pivot builder.
+     */
+    #[\Override]
+    protected function pivotQuery(SqlConnection $connection): QueryBuilder
+    {
+        return parent::pivotQuery($connection)->where(
+            self::qualify($this->pivotTable, $this->morphTypeColumn),
+            '=',
+            $this->morphAlias,
+        );
+    }
+
+    /**
+     * Stamp the morph alias onto every pivot row the write API inserts —
+     * the {@see BelongsToMany::stampRow()} hook. attach(), sync(), and
+     * toggle() all funnel through it, so no polymorphic pivot row can be
+     * written without its type discriminator.
      *
      * @param array<string, mixed> $row The pivot row about to be written.
      * @return array<string, mixed> The row with the type column set.
      */
-    protected function stampMorphAlias(array $row): array
+    #[\Override]
+    protected function stampRow(array $row): array
     {
         $row[$this->morphTypeColumn] = $this->morphAlias;
 
@@ -189,7 +214,8 @@ class MorphToMany extends BelongsToMany
     }
 
     /**
-     * Attach related models — every inserted row carries the morph alias.
+     * Attach related models — every inserted row carries the morph alias
+     * (via the stampRow hook).
      *
      * @param int|string|list<int|string>|array<string, mixed> $ids A single
      *        id, a list of ids, or a map of id => pivot attributes.
@@ -205,7 +231,7 @@ class MorphToMany extends BelongsToMany
         $rows = [];
 
         foreach ($this->normalizeIds($ids) as $id => $attributes) {
-            $rows[] = $this->stampMorphAlias([
+            $rows[] = $this->stampRow([
                 $this->foreignPivotKey => $this->parent->attribute($this->parentKey),
                 $this->relatedPivotKey => $id,
                 ...$pivotAttributes,

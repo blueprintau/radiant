@@ -439,13 +439,20 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         self::assertNotNull($post);
 
         $relation = $post->comments();
-        $relation->orWhere('body', '=', 'on video');
+        $composed = $relation->orWhere('body', '=', 'on video');
 
-        $sql = $this->connection->grammar->compileSelect($relation->getQuery());
+        $sql = $this->connection->grammar->compileSelect($composed->getQuery());
 
         self::assertSame(
             'SELECT * FROM "poly_comments" WHERE ("commentable_id" = ? AND "commentable_type" = ?) OR "body" = ?',
             $sql,
+        );
+
+        // The relation is immutable: the original carries ONLY the
+        // constraint — the discarded-composition no-op contract.
+        self::assertSame(
+            'SELECT * FROM "poly_comments" WHERE ("commentable_id" = ? AND "commentable_type" = ?)',
+            $this->connection->grammar->compileSelect($relation->getQuery()),
         );
     }
 }
