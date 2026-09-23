@@ -60,9 +60,9 @@ $recent = $user->posts()->where('active', '=', 1)->limit(5)->getResults();
 
 **Relations are immutable.** Every filter and configurator (`withPivot()`,
 `withTimestamps()`) returns a NEW relation — the original is never
-modified, and a discarded call is a no-op. Composition can never poison
-the shared cached prototype: the cache holds the un-composed original,
-and a composed chain always executes fresh.
+modified, and a discarded call is a no-op. A composed chain always
+executes fresh: the eagerly-loaded result was fetched unfiltered, so it
+can never be served for a filtered read.
 
 The relation also exposes fail-fast reads: `firstOrFail()` returns the
 first related model or throws
@@ -270,13 +270,13 @@ model, readable through `$tag->pivotValue('position')`;
 `withTimestamps()` is sugar for the `created_at`/`updated_at` pair.
 
 **Reserved prefix.** Column names starting with `radiant_` are reserved —
-the ORM namespaces its internal select aliases there
+the ORM uses that prefix for its internal select aliases
 (`radiant_pivot_{column}`, `radiant_pivot_parent_{table}`,
-`radiant_scalar`, `radiant_through_parent_{table}`), and the hydration
-lift treats any row field with that prefix as internal state. `withPivot()`
-fails fast on a reserved pivot column name; a declared model column with
-the prefix collides the same way the moment it rides a reserved alias —
-name your columns anything else.
+`radiant_scalar`, `radiant_through_parent_{table}`), and any row field
+with that prefix is treated as internal bookkeeping rather than model
+data. `withPivot()` rejects a reserved pivot column name; a declared
+model column with the prefix collides the same way the moment it rides a
+reserved alias — name your columns anything else.
 
 The write API operates on the pivot directly:
 

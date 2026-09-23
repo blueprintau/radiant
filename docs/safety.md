@@ -13,11 +13,12 @@ docblocks.
 
 Values are always bound as parameters. Identifiers are quoted per
 dialect. The clause fragments that cannot be bound — order direction,
-column-to-column operators, the MySQL charset — are allowlisted
-(`SortDirection`, `ColumnOperator` enums and the charset allowlist) rather
-than interpolated raw. DSN metacharacters in `host`/`database` config are
-rejected at validation; MySQL forces native prepared statements (client-side
-emulation cannot be re-enabled via options).
+column-to-column operators, the MySQL charset — are restricted to fixed
+sets of allowed values (`SortDirection`, `ColumnOperator` enums and the
+charset allowlist) rather than interpolated raw. DSN metacharacters in
+`host`/`database` config are rejected at validation; MySQL forces native
+prepared statements (client-side emulation cannot be re-enabled via
+options).
 
 There is no string-based `*Raw()` API. Verbatim SQL is spliced only via an
 explicit `Expression` — `select(new Expression(...))`,
@@ -51,7 +52,7 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
   callback MUST return the `WhereBuilder` it constrained.
 - Aggregate arguments fail closed on non-column shapes.
 - A corrupt JSON or datetime cell throws with the column named, instead of
-  corrupting hydration silently.
+  silently loading wrong data into the model.
 - A query carrying a row lock (`lockForUpdate()`/`sharedLock()`) is
   rejected outside a transaction — the lock would be released the moment
   it was acquired.

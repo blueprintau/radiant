@@ -45,8 +45,8 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * **Relations are immutable.** Every filter (`where()`, `orderBy()`,
  * `limit()`, ...) and every configurator (`withName()`, `withPivot()`,
  * ...) returns a NEW relation — the original is never modified. A
- * discarded call is a no-op, and a composed chain can never poison the
- * shared cached prototype (the cache holds the un-composed original;
+ * discarded call is a no-op, and a composed chain can never affect the
+ * shared cached relation (the cache holds the un-composed original;
  * composition happens on copies).
  *
  * @template TRelated of Model
@@ -57,12 +57,11 @@ abstract class Relation
     use FiltersQuery;
 
     /**
-     * The parent-key chunk size for eager loading.
+     * How many parent keys to include in one eager-load query.
      *
-     * Bounded so one oversized load cannot exceed driver caps (SQLite's
-     * 999 placeholders, MySQL's max_allowed_packet) — an eager load
-     * degrades to N queries, not a hard failure. Composite keys multiply
-     * the placeholder count by arity, so the bound stays conservative.
+     * Databases cap how many values a single query can hold (SQLite
+     * allows 999, MySQL limits total query size). If a load needs more
+     * keys than this, it simply runs a few queries instead of failing.
      */
     protected const EAGER_KEY_CHUNK = 500;
 
@@ -74,22 +73,20 @@ abstract class Relation
     protected ModelQueryBuilder $query;
 
     /**
-     * The relation-method name this relation was built from — the cache
-     * key {@see getResults()} consults. Stamped by the model factories
-     * (the calling relation method's name); null when a factory was
-     * reached outside a relation method, in which case the cache path is
-     * skipped and every read executes.
+     * The relation-method name this relation was built from (e.g. `posts`),
+     * used to find eagerly-loaded results on the parent. Null when the
+     * relation was created outside a relation method — in that case every
+     * read runs a fresh query.
      *
      * @var string|null
      */
     private ?string $name = null;
 
     /**
-     * Whether a filter has been composed onto the relation since
-     * construction. A composed relation's {@see getResults()} executes
-     * fresh — the cached eager result was loaded for the UNFILTERED
-     * constraint, and serving it to a filtered chain would silently
-     * ignore the filters.
+     * Whether a filter has been added to this relation. A filtered
+     * relation always runs a fresh query — the eagerly-loaded result was
+     * fetched WITHOUT the filter, so serving it would silently ignore
+     * what you asked for.
      *
      * @var bool
      */
@@ -139,10 +136,8 @@ abstract class Relation
             );
         }
 
-        // A deferring subclass (MorphTo) has no resolved related class yet —
-        // the constrained builder and the constraint both need one. It
-        // constructs through this ctor with the abstract Model::class marker
-        // and builds its query lazily per resolved type.
+        // MorphTo resolves its related model per row, so it has no query
+        // to build here — it handles that itself, lazily.
         if ($this->defersConstraints()) {
             return;
         }
@@ -152,16 +147,10 @@ abstract class Relation
     }
 
     /**
-     * Whether the subclass defers the base constructor's query build.
+     * Whether the related model is resolved per row (MorphTo) rather than
+     * fixed at construction.
      *
-     * False by default — every fixed-related relation builds its constrained
-     * builder in the constructor. {@see MorphTo} overrides this to true: its
-     * related class resolves per parent from the type column, so neither the
-     * builder nor the constraint can exist at construction. The base ctor
-     * still assigns the promoted properties (the marker included) before the
-     * early return, so the subclass starts from a fully-initialized base.
-     *
-     * @return bool True to skip the query build + addConstraints() pass.
+     * @return bool True to skip building the query in the constructor.
      */
     protected function defersConstraints(): bool
     {
@@ -169,26 +158,15 @@ abstract class Relation
     }
 
     /**
-     * Stamp the relation-method name this relation was built from.
+     * Name this relation after the model method that created it.
      *
-     * Called by the model factories right after construction — the name
-     * is the cache key the eager loader writes (via match()) and
-     * {@see getResults()} reads. Per-instance state is safe here: the
-     * LAZY path builds a fresh relation per access, and the loader's
-     * cached prototype relation never reaches getResults().
+     * This lets `getResults()` reuse an eagerly-loaded result when one
+     * exists. Passing null does nothing — it will not remove an existing
+     * name.
      *
-     * A null arg is a NO-OP, not an un-stamp: the factories pass
-     * `relationName()`, whose null means "not built from a relation
-     * method" — erasing a stamp nothing wrote would only widen the
-     * surface for accidental un-caching. A caller who wants an
-     * always-fresh read bypasses the cache by composing a filter (any
-     * filter marks the relation composed) or reading the builder directly
-     * ({@see getQuery()} → get()); withName stays single-purpose.
-     *
-     * @param string|null $name The relation method's name (null changes
-     *        nothing — an unstamped relation simply has no cache path).
-     * @return static A NEW relation with the name stamped; the same
-     *         instance when $name is null (the documented no-op).
+     * @param string|null $name The relation method's name.
+     * @return static A NEW relation with the name set; the same instance
+     *         when $name is null.
      */
     final public function withName(?string $name): static
     {
@@ -203,14 +181,13 @@ abstract class Relation
     }
 
     /**
-     * Mark a COPY of the relation as composed — for subclasses whose
-     * modifiers change what a fresh read would return without riding the
-     * where sinks ({@see BelongsToMany::withPivot()} widens the select, so
-     * a cache loaded WITHOUT pivot columns must not serve a withPivot
-     * chain).
+     * Return a copy of this relation marked as "modified" — used by
+     * configurators like {@see BelongsToMany::withPivot()} that change what
+     * a fresh read returns without adding a where clause. A modified
+     * relation never reuses an eagerly-loaded result.
      *
-     * @return static A NEW relation with the composed flag set; the
-     *         original is unchanged.
+     * @return static A NEW relation marked as modified; the original is
+     *         unchanged.
      */
     protected function markComposed(): static
     {
@@ -221,12 +198,11 @@ abstract class Relation
     }
 
     /**
-     * The builder a composition sink decorates.
+     * The builder that filters are added to.
      *
-     * Deferring relations ({@see MorphTo}) have no constrained builder —
-     * the related class resolves per row — so filters cannot compose onto
-     * them. This fails fast with the explanation instead of the
-     * uninitialized-property error a raw `$query` read would raise.
+     * MorphTo has no fixed related model, so it has no builder to filter —
+     * this throws a clear error for that case instead of failing with a
+     * confusing internal message.
      *
      * @return ModelQueryBuilder<TRelated> The constrained builder.
      */
@@ -243,10 +219,10 @@ abstract class Relation
     }
 
     /**
-     * Apply the relation's constraint to {@see Relation::$query}.
+     * Apply the relation's constraint (the FK match) to the builder.
      *
-     * Called from the constructor — the builder starts constrained, so
-     * composition adds to it.
+     * Called once from the constructor, so every relation starts out
+     * correctly constrained and any filters you add are on top of it.
      *
      * @return void
      */
@@ -270,28 +246,18 @@ abstract class Relation
     /**
      * Run the eager query for MANY parents at once.
      *
-     * The default strategy is the same FK match as the lazy constraint,
-     * widened from `=` to `IN` — one round trip, no joins. A composite key
-     * widens to an OR of AND-groups (one nested group per parent key —
-     * portable across dialects, unlike tuple `IN`). Through relations
-     * override the whole method (they must join the intermediate table and
-     * record which parent each row belongs to).
+     * Instead of one query per parent, this fetches everything in a
+     * single `IN (...)` query and lets {@see match()} hand each parent its
+     * own results. Relations that need joins (the "through" family)
+     * override this with their own strategy.
      *
-     * The key list is CHUNKED: SQL text and placeholder count grow
-     * linearly with parent count, and drivers enforce hard caps (SQLite's
-     * 999-parameter limit, MySQL's max_allowed_packet). An oversized load
-     * used to raise a hard QueryException; it now degrades to one query
-     * per chunk, with results merged in encounter order.
+     * Very large key lists are split into batches of
+     * {@see EAGER_KEY_CHUNK} so no database limit is ever hit — a huge
+     * load just runs a few queries instead of failing.
      *
-     * @param list<KeyValue> $parentKeys The parents' local-key values —
-     *        scalars, or column => value maps for a composite key. A
-     *        relation whose eager strategy needs per-parent state beyond
-     *        the key values folds that state INTO the key tuple
-     *        ({@see MorphTo::eagerKeyColumn()} adds the type column, so
-     *        the (type, key) pair travels with the keys) — the eager
-     *        contract stays key-shaped, and no parent objects cross it.
-     * @return EagerResult<TRelated> The related models, with (for through relations)
-     *         the per-row parent key that {@see match()} distributes by.
+     * @param list<KeyValue> $parentKeys The parents' key values.
+     * @return EagerResult<TRelated> The related models, ready for match()
+     *         to distribute.
      */
     public function eagerLoad(array $parentKeys): EagerResult
     {
@@ -316,15 +282,10 @@ abstract class Relation
     }
 
     /**
-     * Run one eager-load query for a CHUNK of parent keys.
+     * Run one eager-load query for a batch of parent keys.
      *
-     * Subclasses hook {@see applyEagerOrdering()} to keep the eager path's
-     * row selection deterministic (HasOne/HasOneThrough order by the
-     * related PK so `match()`'s first-wins keeps the same row the lazy
-     * path's `first()` would take).
-     *
-     * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return EagerResult<TRelated> The related models for this chunk.
+     * @param list<KeyValue> $parentKeys The batch's key values.
+     * @return EagerResult<TRelated> The related models for this batch.
      */
     protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
@@ -361,18 +322,12 @@ abstract class Relation
     }
 
     /**
-     * Apply this relation's eager-path ordering to the chunk query.
+     * Apply the eager query's ordering. One-to-one relations override
+     * this to order by the related model's primary key, so "take the
+     * first match" always picks the same row.
      *
-     * Base relation: no ordering — the eager result set is whole (every
-     * matching row is distributed), so order is irrelevant. One-to-one
-     * subclasses override this to order by the related PK so first-wins
-     * matching stays deterministic. Kept as a separate hook (rather than
-     * ordering inside eagerLoadChunk) so composite-key subclass logic in
-     * the OR-group path gets the same ordering.
-     *
-     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return ModelQueryBuilder<TRelated> The (possibly re-decorated) chunk
-     *         query — immutable, so decorators return the new instance.
+     * @param ModelQueryBuilder<TRelated> $query The eager query.
+     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) query.
      */
     protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
@@ -381,22 +336,15 @@ abstract class Relation
     }
 
     /**
-     * Run the constrained query and return the related models — or the
-     * eagerly-loaded cache when it applies.
+     * Get the related models — reusing an eagerly-loaded result when one
+     * applies.
      *
-     * The cache path engages only when ALL of these hold: the relation
-     * was stamped with its method name (the model factories do this), no
-     * filter has been composed onto it, and the parent has the relation
-     * loaded (an eager `with()` ran). A single-valued cache entry
-     * (HasOne/BelongsTo/MorphTo store a model or null) wraps into the
-     * same one-element-or-empty collection the lazy path returns, so both
-     * paths share one shape.
-     *
-     * Everything else executes fresh: an unstamped relation, a composed
-     * chain (`->where(...)` — the cache was loaded unfiltered), a
-     * relation not loaded on this instance (lazy access always
-     * executes), and the fail-fast reads {@see firstOrFail()}/{@see sole()}
-     * (they delegate to the builder directly, never the cache).
+     * The loaded result is reused only when ALL of these hold: the
+     * relation was named (via {@see withName()}), no filter has been
+     * added, and the parent actually has the relation loaded (an eager
+     * `with()` ran). Everything else runs a fresh query — a filtered
+     * chain must hit the database, since the loaded result was fetched
+     * unfiltered.
      *
      * @return Collection<TRelated> The related models (a single model wraps
      *         in a one-element collection; HasOne unwraps at the accessor).
@@ -411,21 +359,10 @@ abstract class Relation
     }
 
     /**
-     * Wrap a cached relation value into {@see getResults()}'s collection
-     * shape.
+     * Wrap a cached relation value (a model, a collection, or null) into
+     * the collection shape {@see getResults()} returns.
      *
-     * The template rides the PARAMETER (not the return): PHPStan infers
-     * `TCached` from the argument's runtime union, and the union's
-     * collection arm is `Collection<Model>` — so the inferred element
-     * type is `Model`, which is exactly what the cache holds (the cache
-     * is keyed by name, not by relation template). The declared
-     * `Collection<TRelated>` return of {@see getResults()} is satisfied
-     * because every cached entry for a relation name was produced by that
-     * relation's own match() — the runtime guarantee the type describes.
-     *
-     * @param Model|Collection<Model>|null $value The cached entry — a
-     *        model (single-valued relations), a collection (to-many), or
-     *        null (an empty single-valued relation).
+     * @param Model|Collection<Model>|null $value The cached entry.
      * @return Collection<TRelated> The wrapped shape.
      */
     private function wrapCached(Model|Collection|null $value): Collection
@@ -440,8 +377,8 @@ abstract class Relation
     }
 
     /**
-     * Run the constrained query — the always-executes read behind
-     * {@see getResults()}'s cache path.
+     * Run the query and return the related models — the always-executes
+     * read behind {@see getResults()}.
      *
      * @return Collection<TRelated> The related models.
      */
@@ -453,8 +390,7 @@ abstract class Relation
     /**
      * The first related model — or throw when the relation matches none.
      *
-     * Delegates to the constrained builder's {@see ModelQueryBuilder::firstOrFail()}.
-     * For one-to-one relations this is the natural "must exist" read; on
+     * On a one-to-one relation this is the natural "must exist" read; on
      * a to-many relation it takes the first of the matches (use
      * {@see sole()} when there must be exactly one).
      *
@@ -470,11 +406,10 @@ abstract class Relation
     /**
      * Require the relation to match EXACTLY ONE related model.
      *
-     * Delegates to the constrained builder's {@see ModelQueryBuilder::sole()}:
-     * zero related rows raise
-     * {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
-     * more than one raise
-     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
+     * Zero matches throw
+n     * {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
+     * more than one throw
+n     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
      *
      * @return TRelated The single related model.
      *
@@ -487,9 +422,9 @@ abstract class Relation
     }
 
     /**
-     * The constrained builder — the trait's orderBy/limit/offset delegate
-     * here; the sink methods below funnel into the builder's validated
-     * where() directly.
+     * The underlying query builder for the related model — already
+     * constrained to this parent. Filters added to it are on top of the
+n     * relation's own constraint.
      *
      * @return ModelQueryBuilder<TRelated> The builder.
      */
@@ -499,16 +434,14 @@ abstract class Relation
     }
 
     /**
-     * Add a where clause — the trait's single sink; the `or*`/`where*`
-     * helpers are default implementations over it. Validation and the
-     * clause live on the builder (the builder's validated where() runs).
+     * Add a where clause to the relation's query.
      *
      * @param string|Expression $column The column to compare — or a raw
      *        SQL fragment wrapped in an Expression.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW relation with the filter composed; the original
+     * @return static A NEW relation with the filter added; the original
      *         is unchanged.
      */
     final public function where(
@@ -525,14 +458,19 @@ abstract class Relation
     }
 
     /**
-     * Add a nested where group on the constrained builder — the second
-     * sink; the trait's `orWhereNested` default delegates here.
+     * Add a nested where group — a parenthesized set of conditions.
+     *
+     * The callback receives the group's builder and MUST return it:
+     *
+     * ```php
+     * $relation->whereNested(fn ($nested) => $nested->where('a', '=', 1)->orWhere('b', '=', 2));
+     * ```
      *
      * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
-     *        where-family facade and RETURNS the constrained group.
+     *        builder and RETURNS the constrained group.
      * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW relation with the group composed; the original
-     *         is unchanged.
+     * @return static A NEW relation with the group added; the original is
+     *         unchanged.
      */
     final public function whereNested(
         callable $callback,
@@ -546,13 +484,13 @@ abstract class Relation
     }
 
     /**
-     * Add an order-by clause on the constrained builder.
+     * Add an order-by clause to the relation's query.
      *
      * @param string|Expression $column The column to order by — or a raw
      *        SQL fragment wrapped in an Expression.
      * @param SortDirection|string $direction `ASC` or `DESC`.
-     * @return static A NEW relation with the ordering composed; the
-     *         original is unchanged.
+     * @return static A NEW relation with the ordering added; the original
+     *         is unchanged.
      */
     final public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
@@ -567,8 +505,8 @@ abstract class Relation
      * Set the maximum number of rows to return.
      *
      * @param int $limit The row limit.
-     * @return static A NEW relation with the limit composed; the original
-     *         is unchanged.
+     * @return static A NEW relation with the limit added; the original is
+     *         unchanged.
      */
     final public function limit(int $limit): static
     {
@@ -583,8 +521,8 @@ abstract class Relation
      * Set the number of rows to skip.
      *
      * @param int $offset The number of rows to skip.
-     * @return static A NEW relation with the offset composed; the original
-     *         is unchanged.
+     * @return static A NEW relation with the offset added; the original is
+     *         unchanged.
      */
     final public function offset(int $offset): static
     {
@@ -596,16 +534,15 @@ abstract class Relation
     }
 
     /**
-     * Set an explicit column selection on the constrained builder.
+     * Set an explicit column selection on the relation's query.
      *
      * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return static A NEW relation with the selection composed; the
-     *         original is unchanged.
+     * @return static A NEW relation with the selection added; the original
+     *         is unchanged.
      */
     final public function select(string|Expression|Aggregate ...$columns): static
     {
-        // No args → the default `['*']` select (a variadic list cannot have
-        // a default, so the empty case is handled here).
+        // No args → the default `['*']` select.
         $clone = clone $this;
         $clone->composed = true;
         $clone->query = $this->compositionQuery()->select(...$columns);
@@ -614,11 +551,11 @@ abstract class Relation
     }
 
     /**
-     * Group by columns on the constrained builder.
+     * Group the results by one or more columns (for use with aggregates).
      *
      * @param string|array<int, string> $columns The column(s) to group by.
-     * @return static A NEW relation with the grouping composed; the
-     *         original is unchanged.
+     * @return static A NEW relation with the grouping added; the original
+     *         is unchanged.
      */
     final public function groupBy(string|array $columns): static
     {
@@ -630,13 +567,13 @@ abstract class Relation
     }
 
     /**
-     * Filter groups after aggregation on the constrained builder.
+     * Filter groups after aggregation (HAVING).
      *
      * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
      * @param WhereOperator|string $operator The comparison operator.
      * @param mixed $value The value to compare against.
-     * @return static A NEW relation with the filter composed; the original
-     *         is unchanged.
+     * @return static A NEW relation with the filter added; the original is
+     *         unchanged.
      */
     final public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
@@ -658,13 +595,13 @@ abstract class Relation
     }
 
     /**
-     * The related classes a dotted path's DEEPER segments resolve against.
+     * The related classes a dotted eager-load path's deeper segments
+     * resolve against.
      *
-     * A single-element list for every fixed-related relation (the base
-     * and all but the polymorphic inverse). An EMPTY list means the
-     * related set is dynamic ({@see MorphTo} resolves per row) — the
-     * path validator stops there and the runtime recursion resolves the
-     * deeper segments off the actually-loaded models.
+     * A single-element list for every relation with a fixed related model.
+     * An EMPTY list means the related model varies per row (MorphTo) —
+     * deeper path segments are then resolved from the actually-loaded
+n     * models at runtime.
      *
      * @return list<class-string<Model>> The related classes, or [] when
      *         dynamic.
@@ -751,10 +688,8 @@ abstract class Relation
     /**
      * The parent column(s) the eager loader collects key values from.
      *
-     * The default is the parent's local key — the related table's FK points
-     * at it, so the `IN` clause matches the parent's own key values.
-     * {@see BelongsTo} overrides it: there the FK lives on the PARENT and
-     * points at the related table's owner key, so the loader must collect
+     * The default is the parent's local key. {@see BelongsTo} overrides
+n     * this: there the FK lives on the PARENT, so the loader must collect
      * the parent's FK values instead.
      *
      * @return string|list<string> The column (or columns) on the parent.
@@ -765,19 +700,16 @@ abstract class Relation
     }
 
     /**
-     * Apply one key tuple onto a builder — the composite constraint shape.
-     *
-     * A composite key match is per-column equality: every FK column equals
-     * the corresponding local value (and a null component is IS NULL —
-     * SQL `= NULL` never matches). Used by the lazy constraints and the
-     * eager OR-groups alike — one tuple shape, both directions.
+     * Apply one composite key match to a builder — every FK column must
+     * equal the corresponding parent value (a null component becomes IS
+     * NULL, since SQL `= NULL` never matches).
      *
      * @param WhereBuilder $query The builder to constrain.
      * @param list<string> $foreignKeys The FK columns (related side).
      * @param list<string> $localKeys The local columns (parent side).
      * @param array<string, int|string|null> $values The parent's key values
      *        keyed by local column name.
-     * @return \BlueprintAU\Radiant\Database\Query\WhereBuilder The constrained group (immutable — returned to the callback's caller).
+     * @return \BlueprintAU\Radiant\Database\Query\WhereBuilder The constrained group.
      */
     final protected static function applyKeyTuple(
         WhereBuilder $query,
@@ -813,12 +745,11 @@ abstract class Relation
     /**
      * Read a model's composite key tuple as a POSITIONAL value list.
      *
-     * Matching must be position-based, not name-based: the related side's
-     * tuple is keyed by FK column names while the parent's is keyed by
-     * local column names — the two maps would never serialize equal even
-     * for a genuine match. Positional lists serialize identically because
-     * both sides declare their columns in the same order (the relation's
-     * constructor enforces matching arity).
+     * Matching is position-based, not name-based: the related side's
+     * values are keyed by FK column names while the parent's are keyed by
+     * local column names — the two maps would never compare equal even
+     * for a genuine match. Positional lists match because both sides
+     * declare their columns in the same order.
      *
      * @param Model $model The model to read.
      * @param list<string> $columns The key columns, in declared order.

@@ -152,8 +152,8 @@ The differ verifies the declaration against the live schema (old exists,
 new absent) and emits a real `RenameTable` / `RenameColumn` change —
 non-destructive, data travels with the rename. A declaration that does
 not match reality falls through to the usual create/drop handling with
-the advisory flags. A column rename plus a shape change sequences two
-changes: `RenameColumn` first, then `ModifyColumn`.
+the rename reported as a suggestion. A column rename plus a shape change
+sequences two changes: `RenameColumn` first, then `ModifyColumn`.
 
 ### Content drift: ModifyColumn
 
@@ -179,7 +179,7 @@ handle). MySQL and Postgres compile in-place `ADD CONSTRAINT` /
 `DROP CONSTRAINT`; SQLite routes through the table rebuild.
 
 CHECK constraints diff by name; a same-name different-expression
-mismatch is **advisory-only** — reported in the description, never
+mismatch is **reported only** — it appears in the description, never
 auto-executed.
 
 ### The synchronizer
@@ -208,7 +208,7 @@ a CLI consumes directly.
 
 A declared index absent from the live table is a deployment gap the
 differ does not create. A CHECK whose expression changed but kept its
-name is reported as an advisory, not an executable change. The SQLite
+name is reported as a suggestion, not an executable change. The SQLite
 rebuild loses triggers and views on the table (Radiant does not manage
 them) and re-seeds `AUTOINCREMENT` from the max rowid. Review the plan
 before applying.
@@ -223,7 +223,7 @@ instances race on stale snapshots.
 `SqlConnection::withLock()` takes the dialect's native lock — MySQL
 `GET_LOCK` · Postgres advisory lock · SQLite `BEGIN IMMEDIATE` — with the
 mutual-exclusion *name* supplied at call time: one name is one lock
-domain, so distinct jobs use distinct names and never serialize each
+domain, so distinct jobs use distinct names and never wait on each
 other. The schema-sync convention is the name `'radiant:schema'`:
 
 ```php

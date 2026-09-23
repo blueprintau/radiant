@@ -100,8 +100,8 @@ property backing it — useful for columns the model reads and writes but
 doesn't want as a typed field. Read it with
 `$model->attribute('column_name')`; a value written with
 `$model->setAttribute('column_name', $value)` is held in a runtime store
-and survives hydration. A column backed by a typed property rejects
-`setAttribute()` — write the property directly.
+and survives re-loading the model. A column backed by a typed property
+rejects `setAttribute()` — write the property directly.
 
 ## Constraints
 
@@ -273,12 +273,12 @@ entry point), `ClassMetadata` (a class's resolved table, columns, keys,
 and constraints), and `PropertyMapping` (one column ↔ property pair).
 
 Processes that regenerate classes at runtime — dev servers with hot
-reload, codegen tools, test suites that redefine classes — must evict the
+reload, codegen tools, test suites that redefine classes — must clear the
 cache or it serves the old metadata forever:
 
 ```php
-MetadataFactory::clear();            // evict everything
-MetadataFactory::clear(User::class); // evict one class
+MetadataFactory::clear();            // clear everything
+MetadataFactory::clear(User::class); // clear one class
 ```
 
 Clearing one class does not clear its ancestors or descendants (their

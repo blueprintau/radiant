@@ -271,9 +271,9 @@ Two ownership rules are enforced rather than assumed:
 
 A connection whose query fails with a connection-loss error (server
 restart, network blip) is marked stale and transparently rebuilt on the
-next use — under long-running runtimes a transient outage doesn't poison
-the worker. Eviction and garbage collection roll back any transaction the
-caller abandoned.
+next use — under long-running runtimes a transient outage doesn't leave
+the worker with a broken connection. Eviction and garbage collection roll
+back any transaction the caller abandoned.
 
 ## Value codecs
 

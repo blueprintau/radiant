@@ -24,9 +24,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * **Blueprints are immutable.** Every declaration call (`column()`,
  * `index()`, `foreignKey()`, `check()`, the drops, the renames) returns a
  * NEW blueprint — the original is never modified, so a blueprint can be
- * shared, reused, and chained safely. The copies are cheap: all state is
- * value-type arrays and PHP's copy-on-write means `clone` does not
- * deep-copy them until a write. Chain the results:
+ * shared, reused, and chained safely. Chain the results:
  *
  *     $bp = (new Blueprint('users'))
  *         ->id()
@@ -50,12 +48,9 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 final class Blueprint
 {
     /**
-     * The table this blueprint builds — REQUIRED at construction so index
-     * names can be derived to their FINAL form (with the table prefix and
-     * kind suffix) the moment they are declared. A name on the blueprint
-     * is always the name the database will see; the grammar renders it
-     * verbatim. Consumers (grammars, differ, connection) read it via
-     * {@see getTable()} — no parallel $table parameters anywhere.
+     * The table this blueprint builds — required at construction, so
+     * index names can be derived (with the table prefix) the moment they
+     * are declared. Read via {@see getTable()}.
      *
      * @var string
      */
@@ -66,11 +61,9 @@ final class Blueprint
      * table rename — the differ turns a declared rename into a real
      * `RenameTable` change instead of a create+drop pair.
      *
-     * **A rename is a decision, not a guess.** The differ's heuristic
-     * (column-overlap scoring) stays advisory-only; the ONLY path to an
-     * executable rename is the host declaring the old name here. Doctrine:
-     * "rename advisories are data, never decisions" — the declaration IS
-     * the decision.
+     * A rename is a decision, not a guess: the differ's automatic
+     * detection stays advisory-only; the ONLY way to get an executable
+     * rename is to declare the old name here.
      *
      * @var string|null
      */
@@ -79,11 +72,10 @@ final class Blueprint
     /**
      * Column renames declared on this blueprint, in declaration order.
      *
-     * Same doctrine as {@see $renamedFrom}: the host declares the mapping
-     * (`renameColumn('name', 'full_name')`), the differ emits a real
-     * `RenameColumn` change and suppresses the add+drop rename advisory
-     * for those columns — a declared rename is never re-flagged as a
-     * possible data-losing alter.
+     * Same rule as {@see $renamedFrom}: declaring the mapping
+     * (`renameColumn('name', 'full_name')`) makes the differ emit a real
+     * `RenameColumn` change instead of the (data-losing) drop-and-add
+     * advisory.
      *
      * @var list<array{from: string, to: string}>
      */
@@ -91,12 +83,6 @@ final class Blueprint
 
     /**
      * Create a table-bound blueprint.
-     *
-     * The table is REQUIRED: the blueprint owns the table name (index
-     * names derive to their final form at declaration time from it), so
-     * every downstream consumer — grammars, the differ, the connection —
-     * reads it from {@see getTable()} instead of carrying a parallel
-     * `$table` parameter that could disagree with the blueprint.
      *
      * @param string $table The table the blueprint builds.
      */
@@ -118,23 +104,11 @@ final class Blueprint
     /**
      * A copy of this blueprint bound to a DIFFERENT table name.
      *
-     * The one legitimate re-binding site is the SQLite rebuild's temp
-     * table: the desired shape must render against `users__radiant_new`
-     * before the rename makes it `users` again. Everything else on the
-     * blueprint (columns, FKs, CHECKs, renames) carries over verbatim —
-     * EXCEPT the indexes, which are deliberately dropped: derived index
-     * names embed the bound table name, and the rebuild re-creates them
-     * from the ORIGINAL blueprint after the rename, so a temp-bound copy
-     * must never carry them (a temp name leaking into a derived index
-     * name would leave the index named after a table that no longer
-     * exists).
-     *
-     * The blueprint is IMMUTABLE — every entry list is written once at
-     * declaration and never mutated afterward — so a plain `clone` is a
-     * complete copy: PHP's copy-on-write gives the copy its own arrays
-     * the moment any write would touch them, and the historical
-     * hand-written deep copy (which guarded against post-creation nested
-     * mutation) is dead weight under value semantics.
+     * Used by the SQLite table rebuild: the desired shape must render
+     * against a temporary table name before the rename makes it the real
+     * name again. Everything carries over EXCEPT the indexes — derived
+     * index names embed the table name, and the rebuild re-creates them
+     * from the ORIGINAL blueprint after the rename.
      *
      * @param string $table The new table name.
      * @return static A copy bound to `$table`, without indexes.
@@ -145,10 +119,6 @@ final class Blueprint
         // constructor rather than a clone-assign.
         $copy = new static($table);
 
-        // Entries are write-once after declaration (the immutable API
-        // guarantees it), so plain array copies are complete copies —
-        // PHP's copy-on-write means the nested lists are never shared
-        // with a writer.
         $copy->columns = $this->columns;
         $copy->foreignKeys = $this->foreignKeys;
         $copy->checks = $this->checks;
@@ -170,7 +140,7 @@ final class Blueprint
      * differ verifies the declaration against the live schema (old exists,
      * new absent) before emitting an executable `RenameTable` change — a
      * declaration that does not match reality falls through to the usual
-     * create/drop handling with the advisory flags, never a wrong rename.
+     * create/drop handling, never a wrong rename.
      *
      * @param string $oldTable The live table name being renamed.
      * @return static A new blueprint with the rename declared; the original is unchanged.
@@ -201,10 +171,9 @@ final class Blueprint
      * Declare a column rename: the live column `$from` becomes `$to`.
      *
      * The differ emits an executable `RenameColumn` change for each
-     * declared rename (after verifying the old column exists live) and
-     * suppresses the add+drop rename advisory for those columns — the
-     * declaration IS the decision, so the data-losing alter shape never
-     * materializes for a declared rename.
+     * declared rename (after verifying the old column exists live) — the
+     * declaration IS the decision, so the data-losing drop-and-add shape
+     * never happens for a declared rename.
      *
      * @param string $from The live column name.
      * @param string $to The new column name.
@@ -274,16 +243,13 @@ final class Blueprint
      *
      * Every name stored here is exactly what the database will see: user-
      * set names pass through verbatim; derived names are built at
-     * declaration time via {@see Blueprint::deriveIndexName()} (table
-     * prefix + columns + kind suffix). The grammar renders them verbatim —
-     * it makes NO naming decisions, so the differ and the collision checks
-     * read the same final names.
+     * declaration time ({table}_{columns}_{kind}). The grammar renders
+     * them verbatim — it makes NO naming decisions.
      *
      * `where` is the partial-index predicate (spliced verbatim — the raw
-     * escape hatch, same trust model as an {@see \BlueprintAU\Radiant\Database\Query\Expression}
-     * default); `nullsNotDistinct` upgrades a UNIQUE index to `NULLS NOT
-     * DISTINCT` semantics (Postgres 15+ — dialects that cannot render it
-     * fail fast at compile time).
+     * escape hatch); `nullsNotDistinct` upgrades a UNIQUE index to `NULLS
+     * NOT DISTINCT` semantics (Postgres 15+ — dialects that cannot render
+     * it fail fast at compile time).
      *
      * @var list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
@@ -292,14 +258,10 @@ final class Blueprint
     /**
      * Derive the FINAL index name from its kind and columns.
      *
-     * Mirrors the framework consensus (Laravel's `createIndexName`, built
-     * at blueprint time; SQLAlchemy's naming conventions): the derivation
-     * needs the table + columns, both available HERE — not at render time.
-     * Shape: `{table}_{columns}_{kind}` for plain indexes, `{table}_{columns}_unique`
-     * for uniques (the kind suffix says WHAT the index is, so a unique and
-     * a plain index over the same columns can coexist). The shape itself
-     * is owned by {@see ConstraintNamer} — one convention, shared with
-     * every other constraint kind.
+     * Shape: `{table}_{columns}_{kind}` for plain indexes,
+     * `{table}_{columns}_unique` for uniques (the kind suffix says WHAT
+     * the index is, so a unique and a plain index over the same columns
+     * can coexist).
      *
      * @param list<string> $columns The covered columns.
      * @param bool $unique Whether the index is unique.
@@ -315,13 +277,12 @@ final class Blueprint
      *
      * Accepted inputs:
      * - `table.column` — passes through (already explicit).
-     * - `table` — references that table's primary key; resolved as
-     *   `table.id` (the package's PK convention).
-     * - a model class-string (contains `\`) — resolves to its table via
-     *   the shared {@see \BlueprintAU\Radiant\Attributes\ReferenceResolver},
-     *   and the PK column comes from the referenced model's metadata when
-     *   it declares a single PK (a composite PK has no single default —
-     *   the caller must use the explicit `table.column` form).
+     * - `table` — references that table's primary key (resolved as
+     *   `table.id` by convention).
+     * - a model class-string — resolves to its table, and the primary-key
+     *   column comes from the model's metadata when it declares a single
+     *   PK (a composite PK has no single default — use the explicit
+     *   `table.column` form instead).
      *
      * @param class-string<\BlueprintAU\Radiant\Model>|string $foreign The raw reference.
      * @param string $column The local column name (for the message).
@@ -345,11 +306,7 @@ final class Blueprint
         $table = ReferenceResolver::resolve($foreign);
 
         // The referenced model's single PK (if declared) gives the column;
-        // fall back to the package's `id` convention for tables the ORM
-        // does not own. resolve() already guaranteed a Model when the
-        // reference contains a backslash — this branch only runs for
-        // model-shaped references, and resolve() guaranteed the class
-        // exists AND is a Model; assert it for the type system.
+        // fall back to the `id` convention for tables the ORM does not own.
         $pkColumn = 'id';
 
         if (str_contains($foreign, '\\')) {
@@ -383,10 +340,9 @@ final class Blueprint
      * Add an index over one or more columns.
      *
      * A single column gets a derived name; multiple columns form a
-     * composite. When `$name` is given it is the WHOLE final name (user-set
-     * names pass through verbatim — no prefix, no suffix); when omitted the
-     * name is derived to its final form here, so anything downstream (the
-     * grammar, the differ, the collision checks) reads the same string.
+     * composite. When `$name` is given it is the WHOLE final name (used
+     * verbatim); when omitted the name is derived as
+     * `{table}_{columns}_{kind}`.
      *
      * @param string|null $name The final index name, or null to derive.
      * @param list<string> $columns The columns to index.
@@ -471,16 +427,8 @@ final class Blueprint
         ForeignKeyAction|string|null $onDelete = null,
         ForeignKeyAction|string|null $onUpdate = null,
     ): static {
-        // Fail fast at DECLARATION, and NORMALIZE the reference to
-        // `table.column` so the getter is a pure read. Two accepted forms:
-        //   - `table.column` — a plain reference.
-        //   - `table` (or a model class-string) — references THAT table's
-        //     primary key; a model class-string resolves to its table via
-        //     the shared {@see ReferenceResolver} (the same convention the
-        //     class-level #[ForeignKey] uses), and the PK column name is
-        //     taken from the referenced model's primary key when one is
-        //     declared (a table with no single PK must use the explicit
-        //     `table.column` form).
+        // Validate the reference at declaration time, and normalize it to
+        // `table.column` so the getter is a pure read.
         if ($foreign !== null) {
             $foreign = $this->normalizeForeignReference($foreign, $name);
         }
@@ -501,9 +449,9 @@ final class Blueprint
             'onUpdate' => $onUpdate === null ? null : ($onUpdate instanceof ForeignKeyAction ? $onUpdate : ForeignKeyAction::fromChecked($onUpdate)),
         ]];
 
-        // A flagged plain index derives its FINAL name at DECLARATION time
-        // (`unique: true` rides the column's inline UNIQUE constraint, so
-        // no separate index). Getters stay pure reads.
+        // A flagged plain index derives its final name here (`unique: true`
+        // rides the column's inline UNIQUE constraint, so no separate
+        // index is needed).
         if ($index === true && $unique !== true) {
             $clone->indexes = [...$clone->indexes, [
                 'name' => $this->deriveIndexName([$name], false),
@@ -579,17 +527,11 @@ final class Blueprint
     /**
      * Add a polymorphic (morph) column pair: `{name}_type` + `{name}_id`.
      *
-     * The ONE emission path for morph columns — the `#[Morphs]` attribute
-     * folds into this exact call sequence via `Blueprint::fromMetadata()`,
-     * so a metadata-driven table and a hand-built one always produce
-     * identical DDL.
-     *
      * The pair carries NO foreign key: `{name}_type` names the target
      * table at runtime (the related model's class-string), so no static
      * FK can express the reference — the integrity is the relation's job,
      * not the schema's. `{name}_type` is a 255-char string (room for a
-     * full class-string); `{name}_id` is a bigint (the conventional PK
-     * type of the target tables).
+     * full class-string); `{name}_id` is a bigint.
      *
      * @param string $name The morph alias prefix — emits `{name}_type` and
      *        `{name}_id`.
@@ -610,14 +552,14 @@ final class Blueprint
     }
 
     /**
-     * Foreign-key constraints — single-column via `foreignId()` are inline;
-     * this holds table-level (composite) constraints.
+     * Foreign-key constraints — single-column ones declared via
+     * `foreign:` on a column are inline; this holds table-level
+     * (composite) constraints.
      *
-     * Every entry carries its FINAL `name` (derived at declaration via
-     * {@see ConstraintNamer} — `{table}_{columns}_foreign`), the same
-     * doctrine as indexes and checks: the name is the drop handle, final
-     * before render, so the connection and the differ read the same
-     * string the database will see.
+     * Every entry carries its FINAL name (derived at declaration as
+     * `{table}_{columns}_foreign`) — the name is the drop handle, so the
+     * connection and the differ read the same string the database will
+     * see.
      *
      * `deferrable`/`initiallyDeferred` are Postgres-only options (MySQL and
      * SQLite fail fast at compile time when set).
@@ -630,13 +572,9 @@ final class Blueprint
      * Table-level CHECK constraints, in declaration order.
      *
      * A CHECK is portable across all three dialects. The expression is
-     * spliced verbatim — the raw escape hatch, same trust model as an
-     * {@see \BlueprintAU\Radiant\Database\Query\Expression} default. The
-     * NAME follows the same rule as {@see index()}: when given it is the
-     * WHOLE final name (user-set names pass through verbatim); when
-     * omitted it is DERIVED (`{table}_{columns}_check`) — so every CHECK
-     * carries a final name and is diffable by name like every other
-     * constraint.
+     * spliced verbatim — the raw escape hatch. The NAME follows the same
+     * rule as {@see index()}: when given it is the WHOLE final name; when
+     * omitted it is DERIVED (`{table}_{columns}_check`).
      *
      * @var list<array{name: string, expression: string}>
      */
@@ -710,12 +648,9 @@ final class Blueprint
      * `status IN ('draft', 'published')`).
      *
      * The NAME follows the same rule as {@see index()}: when given it is
-     * the WHOLE final name (user-set names pass through verbatim — no
-     * prefix, no suffix); when omitted it is DERIVED to its final form
-     * here — `{table}_{columns}_check` (the covered columns joined with
-     * underscores) — so anything downstream (the grammar, the differ)
-     * reads the same string, and the constraint is diffable by name like
-     * every other named constraint.
+     * the WHOLE final name (used verbatim); when omitted it is derived as
+     * `{table}_{columns}_check` (the covered columns joined with
+     * underscores).
      *
      * @param string $expression The CHECK predicate, spliced verbatim.
      * @param string|null $name The final constraint name, or null to
@@ -741,12 +676,10 @@ final class Blueprint
      * Derive the FINAL CHECK name from the expression's column
      * references.
      *
-     * Mirrors {@see deriveIndexName()}: the derivation needs the table +
-     * the covered columns, both available HERE. The columns are the
-     * declared column names appearing in the expression (word-boundary
-     * match, longest-first so `user_id` wins over `id`); a CHECK over no
-     * declared column (e.g. `1 = 1`) falls back to a positional suffix.
-     * The shape is owned by {@see ConstraintNamer}.
+     * The columns are the declared column names appearing in the
+     * expression (longest-first so `user_id` wins over `id`); a CHECK
+     * over no declared column (e.g. `1 = 1`) falls back to a positional
+     * suffix.
      *
      * @param string $expression The CHECK predicate.
      * @return string The final CHECK name.
@@ -776,8 +709,7 @@ final class Blueprint
     }
 
     /**
-     * The CHECK constraints — every entry carries a FINAL name (derived
-     * at declaration time when omitted); pure read.
+     * The CHECK constraints — every entry carries a final name.
      *
      * @return list<array{name: string, expression: string}>
      */
@@ -787,19 +719,12 @@ final class Blueprint
     }
 
     /**
-     * Foreign-key constraints — derived single-column plus explicit composite.
+     * Foreign-key constraints — derived single-column plus explicit
+     * composite.
      *
-     * Single-column FKs come from columns declared with `foreign` (the
-     * `table.column` reference was VALIDATED at {@see column()} time);
+     * Single-column FKs come from columns declared with `foreign`;
      * explicit {@see foreignKey()} declarations (single or composite) are
      * appended after. Each entry's `references` is `[table, ...columns]`.
-     * Every entry carries the full constraint shape INCLUDING its final
-     * `name` (derived via {@see ConstraintNamer} — the same handle the
-     * SQLite inspector derives when reading live constraints back).
-     * Derived single-column FKs always render `deferrable: false`/
-     * `initiallyDeferred: false` (a column-level `foreign:` flag has no
-     * deferrability knobs; use the class-level `#[ForeignKey(deferrable: ...)]`
-     * for those). No other derivation happens here — pure read.
      *
      * @return list<array{name: string, columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
@@ -821,8 +746,7 @@ final class Blueprint
                 'onDelete' => $column['onDelete'],
                 'onUpdate' => $column['onUpdate'],
                 // A flag-derived single-column FK has no deferrability
-                // declaration site — the option only exists on the
-                // class-level #[ForeignKey] attribute / foreignKey().
+                // options — those only exist on foreignKey().
                 'deferrable' => false,
                 'initiallyDeferred' => false,
             ];
@@ -847,9 +771,8 @@ final class Blueprint
     /**
      * Drop a foreign-key constraint by its LIVE name (ALTER only).
      *
-     * The name is the drop handle the inspector captured — the differ
-     * fills it from the live schema, so the drop addresses the constraint
-     * that actually exists.
+     * The name is the drop handle captured from the live schema, so the
+     * drop addresses the constraint that actually exists.
      *
      * @param string $name The live constraint name.
      * @return static A new blueprint with the drop declared; the original is unchanged.
@@ -916,8 +839,7 @@ final class Blueprint
 
     /**
      * The indexes — every index declared on the blueprint, each with its
-     * FINAL name (derived at declaration time from the bound table, or
-     * user-set verbatim). Pure read: no derivation happens here.
+     * final name.
      *
      * @return list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
@@ -930,14 +852,10 @@ final class Blueprint
      * Build the desired-state Blueprint for a model from its cached
      * metadata — the one place ORM metadata and DDL meet.
      *
-     * A pure mapping, no I/O: every `#[Column]` (whichever ancestor
-     * declared it — the metadata is the MERGED view) folds into a
-     * `column()` call; `#[Column]` flags (unique/index/foreign) ride the
-     * same call; the class-level `#[Unique]` / `#[ForeignKey]` /
-     * `#[Index]` attributes become explicit `index()` /
-     * `foreignKey()` declarations (with the duplicate-declaration rule
-     * already enforced at metadata build, so a flag and an attribute can
-     * never double-declare here).
+     * A pure mapping, no I/O: every `#[Column]` folds into a `column()`
+     * call (with its unique/index/foreign flags); the class-level
+     * `#[Unique]` / `#[ForeignKey]` / `#[Index]` attributes become
+     * explicit `index()` / `foreignKey()` declarations.
      *
      * @param class-string<Model> $model The model class.
      * @return static The desired-state blueprint.
@@ -960,10 +878,7 @@ final class Blueprint
 
         // MTI children: the child table holds ONLY the child's own columns
         // plus the derived key — the inherited columns live on the parent's
-        // table (that is what multi-table inheritance means). The partition
-        // map ({@see ClassMetadata::tableFor()}) resolves each merged
-        // mapping to its owning table; a non-MTI model resolves every
-        // column to its own table, so the filter is a no-op there.
+        // table (that is what multi-table inheritance means).
         foreach ($metadata->properties as $mapping) {
             $column = $mapping->column;
 
@@ -991,19 +906,15 @@ final class Blueprint
         // already rode the column() calls above). For an MTI child, only
         // constraints over the CHILD'S OWN columns belong on the child's
         // table — a constraint covering an inherited column travels with
-        // the parent's table (its flag is already there).
+        // the parent's table.
         //
-        // Unique index naming: a hardcoded constant would collide — two
-        // `#[Unique]` attributes would emit two CREATE UNIQUE INDEX
-        // statements with the same name and the second would fail at the
-        // DB. The default derives from the covered columns with a `_unique`
-        // suffix (`{columns}_unique`, rendered `{table}_{name}_unique` by
-        // the grammar): the suffix says WHAT the index is, it cannot
-        // collide with a #[Index] over the same columns (which
-        // derives `{columns}` bare), and an explicit #[Unique(name: ...)]
-        // always wins. The duplicate-name guard at the bottom of this
-        // method catches any remaining collision (e.g. genuinely duplicated
-        // constraints) at blueprint-build time instead of at DDL time.
+        // Unique index naming: the default derives from the covered
+        // columns with a `_unique` suffix, so it cannot collide with a
+        // #[Index] over the same columns (which derives the bare column
+        // name); an explicit #[Unique(name: ...)] always wins. The
+        // duplicate-name guard at the bottom of this method catches any
+        // remaining collision at blueprint-build time instead of at DDL
+        // time.
         $ownColumns = null;
 
         if ($metadata->parentModel !== null) {
@@ -1023,7 +934,7 @@ final class Blueprint
 
             // null name → the blueprint derives the final
             // `{table}_{columns}_unique` name; a user-set name passes
-            // through verbatim (it IS the whole name).
+            // through verbatim.
             $blueprint = $blueprint->index(
                 $unique->name,
                 $unique->columns,
@@ -1068,15 +979,12 @@ final class Blueprint
         // metadata factory injects the `{name}_type`/`{name}_id` synthetic
         // mappings into $metadata->properties, so the properties loop above
         // already emitted them as ordinary columns — with the exact shapes
-        // morphs() produces (string 255 + bigint, same nullability). That
-        // IS the one-emission-path guarantee: a metadata-driven table and a
-        // hand-built `morphs()` call compile identical DDL.
+        // morphs() produces.
 
         // MTI children: the factory-emitted FK to the parent table. The
         // shared primary key IS the table link — the child declares no key
-        // of its own (the factory derives it with autoIncrement: false), so
-        // the DDL carries `FOREIGN KEY (id) REFERENCES <parent> (id) ON
-        // DELETE CASCADE`. No user declaration exists to double-declare it.
+        // of its own, so the DDL carries `FOREIGN KEY (id) REFERENCES
+        // <parent> (id) ON DELETE CASCADE`.
         if ($metadata->parentModel !== null) {
             $parentMetadata = MetadataFactory::for($metadata->parentModel);
             $parentTable = $parentMetadata->tableName;
@@ -1095,9 +1003,7 @@ final class Blueprint
         // Fail fast on duplicate index names WITHIN this blueprint — a
         // collision would compile two CREATE INDEX statements with the same
         // name and the second would fail at the database, far from the
-        // declaration that caused it. (Column-derived names collide only
-        // when the covered columns are identical — a genuinely duplicated
-        // constraint, which SHOULD fail here rather than at DDL time.)
+        // declaration that caused it.
         $names = [];
 
         foreach ($blueprint->getIndexes() as $index) {

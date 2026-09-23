@@ -42,12 +42,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * **Builders are immutable.** Every filter/select/order/limit call returns
  * a NEW builder — the original is never modified, so a builder can be
  * shared, reused, and chained safely (`$base = ...; $a = $base->where(...)`
- * leaves `$base` untouched). The copies are cheap: all builder state is
- * value-type arrays (wheres, bindings, orders, columns) and PHP's
- * copy-on-write means `clone` does not deep-copy them until a write.
- * The only reference-type state ($connection, union/$from sub-builders,
- * Expression/Aggregate value objects, nested clause snapshots) is shared —
- * safe because every shared object is itself immutable.
+ * leaves `$base` untouched).
  *
  * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
