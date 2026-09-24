@@ -29,7 +29,7 @@ trait SoftDeletes
      * Return `null` (the default) to use `deleted_at`. Override to rename —
      * the returned name must match a declared `#[Column]` on the model.
      *
-     * @return ?string
+     * @return string|null
      */
     public static function deletedAtColumn(): ?string
     {
