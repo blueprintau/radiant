@@ -44,6 +44,7 @@ trait SoftDeletes
      */
     private static function softDeleteColumn(): string
     {
+        /** @phpstan-ignore nullCoalesce.expr (the trait is re-analyzed per using class — overrides narrowing deletedAtColumn() to non-nullable string make the left side look never-null there) */
         return self::deletedAtColumn() ?? 'deleted_at';
     }
 
