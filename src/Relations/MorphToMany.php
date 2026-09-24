@@ -54,20 +54,12 @@ class MorphToMany extends BelongsToMany
     /**
      * Create a polymorphic many-to-many relation.
      *
-     * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class.
-     * @param string $morphName The morph alias prefix — the pivot's
-     *        `{morphName}_id`/`{morphName}_type` columns.
-     * @param string|null $table The pivot table name; null derives the
-     *        morph name ITSELF (`taggable`) — deterministic and identical
-     *        across every direction and parent class sharing the morph
-     *        name (`Post::tags()`, `Video::tags()`, and `Tag::posts()`
-     *        all land on the same pivot). Pass an explicit `$table` for
-     *        any other name.
-     * @param bool $inverse True for `morphedByMany` — the parent is the
-     *        RELATED side of the pivot.
-     * @throws \InvalidArgumentException When a model's primary key is
-     *         composite or unnamed.
+     * @param  Model  $parent
+     * @param  class-string<TRelated>  $related
+     * @param  string  $morphName
+     * @param  string|null  $table
+     * @param  bool  $inverse  True for `morphedByMany`.
+     * @throws \InvalidArgumentException
      */
     public function __construct(
         Model $parent,
@@ -126,8 +118,8 @@ class MorphToMany extends BelongsToMany
      * Run one eager-load query for a CHUNK of parent keys — the base join
      * plus the morph type filter.
      *
-     * @param list<int|string> $parentKeys The chunk's key values.
-     * @return EagerResult<TRelated> The models plus the per-row parent keys.
+     * @param  list<int|string>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     protected function eagerLoadChunk(array $parentKeys): EagerResult
@@ -179,12 +171,10 @@ class MorphToMany extends BelongsToMany
 
     /**
      * Scope every pivot READ/DELETE/UPDATE path to the morph alias — the
-     * {@see BelongsToMany::pivotQuery()} hook. The morph key column is
-     * SHARED across parent classes on the same pivot, so an unscoped
-     * detach/sync-diff/toggle would touch another class's rows.
+     * {@see BelongsToMany::pivotQuery()} hook.
      *
-     * @param SqlConnection $connection The parent's SQL connection.
-     * @return QueryBuilder The alias-scoped pivot builder.
+     * @param  SqlConnection  $connection
+     * @return QueryBuilder
      */
     #[\Override]
     protected function pivotQuery(SqlConnection $connection): QueryBuilder
@@ -198,12 +188,10 @@ class MorphToMany extends BelongsToMany
 
     /**
      * Stamp the morph alias onto every pivot row the write API inserts —
-     * the {@see BelongsToMany::stampRow()} hook. attach(), sync(), and
-     * toggle() all funnel through it, so no polymorphic pivot row can be
-     * written without its type discriminator.
+     * the {@see BelongsToMany::stampRow()} hook.
      *
-     * @param array<string, mixed> $row The pivot row about to be written.
-     * @return array<string, mixed> The row with the type column set.
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
      */
     #[\Override]
     protected function stampRow(array $row): array
@@ -214,13 +202,10 @@ class MorphToMany extends BelongsToMany
     }
 
     /**
-     * Attach related models — every inserted row carries the morph alias
-     * (via the stampRow hook).
+     * Attach related models — every inserted row carries the morph alias.
      *
-     * @param int|string|list<int|string>|array<string, mixed> $ids A single
-     *        id, a list of ids, or a map of id => pivot attributes.
-     * @param array<string, mixed> $pivotAttributes Attributes for EVERY
-     *        attached row.
+     * @param  int|string|list<int|string>|array<string, mixed>  $ids
+     * @param  array<string, mixed>  $pivotAttributes
      * @return void
      */
     #[\Override]

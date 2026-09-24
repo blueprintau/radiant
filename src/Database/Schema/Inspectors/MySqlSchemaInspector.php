@@ -14,7 +14,7 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * The dialect's schema grammar (the factory hook).
      *
-     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar The grammar.
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar
      */
     protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
     {
@@ -25,15 +25,10 @@ final class MySqlSchemaInspector extends SchemaInspector
      * Whether a live column's native type text matches the declared
      * logical type — the MySQL mapping.
      *
-     * The live text is compared against the native text the MySQL grammar
-     * renders for the declared type (the round-trip guarantee). MySQL's
-     * `information_schema` reports types like `varchar(100)`, `bigint`,
-     * `tinyint(1)` — exactly what the grammar renders.
-     *
-     * @param string $liveType The live column's native type text.
-     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
-     * @param int|null $declaredLength The declared length (strings).
-     * @return bool True when the live type matches the declaration.
+     * @param  string  $liveType
+     * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
+     * @param  int|null  $declaredLength
+     * @return bool
      */
     public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
     {
@@ -41,11 +36,10 @@ final class MySqlSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live tables that declare a foreign key INTO the given table —
-     * one `information_schema` query.
+     * The live tables that declare a foreign key into the given table.
      *
-     * @param string $table The referenced table.
-     * @return list<string> The referencing table names.
+     * @param  string  $table
+     * @return list<string>
      */
     public function referencingTables(string $table): array
     {
@@ -66,7 +60,7 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * Every table name in the live schema (the connection's default database).
      *
-     * @return list<string> The table names.
+     * @return list<string>
      */
     public function tables(): array
     {
@@ -90,9 +84,9 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * One table's live schema.
      *
-     * @param string $name The table name.
-     * @return LiveTable The live snapshot.
-     * @throws \RuntimeException When the table does not exist.
+     * @param  string  $name
+     * @return LiveTable
+     * @throws \RuntimeException
      */
     public function table(string $name): LiveTable
     {
@@ -111,8 +105,8 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * The live columns, from `information_schema.columns`.
      *
-     * @param string $name The table name.
-     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}> The columns.
+     * @param  string  $name
+     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}>
      */
     private function columns(string $name): array
     {
@@ -148,12 +142,8 @@ final class MySqlSchemaInspector extends SchemaInspector
     /**
      * The live indexes, from `information_schema.statistics`.
      *
-     * MySQL has no partial indexes or NULLS NOT DISTINCT — the extra
-     * shape fields are always null/false (the grammar refuses to render
-     * them, so a live table can never carry them).
-     *
-     * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
+     * @param  string  $name
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     private function indexes(string $name): array
     {
@@ -201,10 +191,8 @@ final class MySqlSchemaInspector extends SchemaInspector
      * The live foreign keys, from `information_schema.key_column_usage` +
      * `referential_constraints` (for the actions).
      *
-     * MySQL has no DEFERRABLE — the field is always false.
-     *
-     * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}> The constraints.
+     * @param  string  $name
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}>
      */
     private function foreignKeys(string $name): array
     {
@@ -256,11 +244,10 @@ final class MySqlSchemaInspector extends SchemaInspector
     }
 
     /**
-     * Normalize MySQL's referential-action text to a canonical value, null
-     * for the no-op default.
+     * Normalize MySQL's referential-action text to a canonical value.
      *
-     * @param mixed $action The raw action text.
-     * @return string|null The canonical action, or null for NO ACTION.
+     * @param  mixed  $action
+     * @return string|null
      */
     private function normalizeAction(mixed $action): ?string
     {

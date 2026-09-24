@@ -66,7 +66,7 @@ final class HasOne extends HasMany
     /**
      * Run the constrained query and keep only the first match.
      *
-     * @return Collection<TRelated> A one-element (or empty) collection.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -79,15 +79,8 @@ final class HasOne extends HasMany
     /**
      * Order the eager-load query stably, mirroring the lazy path.
      *
-     * The lazy path orders by the related PK before taking the first row
-     * ({@see addConstraints()}); the eager path must apply the same order
-     * or the two paths can return different rows for the same parent when
-     * duplicate FK rows exist. Without the order, `match()` keeps whatever
-     * row the database happened to return first — non-deterministic across
-     * backends, plans, and page sizes.
-     *
-     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
+     * @param  ModelQueryBuilder<TRelated>  $query
+     * @return ModelQueryBuilder<TRelated>
      */
     protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
@@ -103,12 +96,10 @@ final class HasOne extends HasMany
     /**
      * Distribute eager results onto parents — first match per FK value.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        Unused here — the FK lives on each related model (accepted for
-     *        signature parity with the through relations).
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
      */
     public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void

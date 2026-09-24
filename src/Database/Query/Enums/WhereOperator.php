@@ -6,10 +6,6 @@ namespace BlueprintAU\Radiant\Database\Query\Enums;
 
 /**
  * The comparison operators a where or having clause can use.
- *
- * Each case carries the SQL operator text it renders as. Using an enum
- * (rather than a bare string) makes an invalid operator a compile-time error
- * instead of a silently-wrong query.
  */
 enum WhereOperator: string
 {

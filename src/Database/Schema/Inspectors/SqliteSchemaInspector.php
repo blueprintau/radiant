@@ -17,7 +17,7 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * The dialect's schema grammar (the factory hook).
      *
-     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar The grammar.
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar
      */
     protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
     {
@@ -28,16 +28,10 @@ final class SqliteSchemaInspector extends SchemaInspector
      * Whether a live column's native type text matches the declared
      * logical type — the SQLite mapping.
      *
-     * SQLite is dynamically typed, so the live text is compared against
-     * the native text the SQLite grammar renders for the declared type
-     * (the round-trip guarantee: what the grammar renders is what
-     * `PRAGMA table_info` reads back). The comparison is on the FULL
-     * text — `varchar(100)` vs `varchar(50)` is a real drift.
-     *
-     * @param string $liveType The live column's native type text.
-     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
-     * @param int|null $declaredLength The declared length (strings).
-     * @return bool True when the live type matches the declaration.
+     * @param  string  $liveType
+     * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
+     * @param  int|null  $declaredLength
+     * @return bool
      */
     public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
     {
@@ -45,12 +39,10 @@ final class SqliteSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live tables that declare a foreign key INTO the given table —
-     * one `PRAGMA foreign_key_list` scan per table, but only the
-     * referenced-table column is read (no full snapshots).
+     * The live tables that declare a foreign key into the given table.
      *
-     * @param string $table The referenced table.
-     * @return list<string> The referencing table names.
+     * @param  string  $table
+     * @return list<string>
      */
     public function referencingTables(string $table): array
     {
@@ -77,10 +69,9 @@ final class SqliteSchemaInspector extends SchemaInspector
      * Every table name in the live schema.
      *
      * Excludes SQLite's own internals (`sqlite_%`) and shadow tables of
-     * FTS/virtual tables (which carry `%_data`, `%_idx`, … suffixes —
-     * they are implementation detail, not user schema).
+     * FTS/virtual tables.
      *
-     * @return list<string> The table names.
+     * @return list<string>
      */
     public function tables(): array
     {
@@ -107,9 +98,9 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * One table's live schema.
      *
-     * @param string $name The table name.
-     * @return LiveTable The live snapshot.
-     * @throws \RuntimeException When the table does not exist.
+     * @param  string  $name
+     * @return LiveTable
+     * @throws \RuntimeException
      */
     public function table(string $name): LiveTable
     {
@@ -129,14 +120,8 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * The live CHECK constraints, parsed from the `sqlite_master` SQL.
      *
-     * The CREATE TABLE text is the only place SQLite exposes CHECK
-     * definitions; the parse extracts `CONSTRAINT name CHECK (expr)` and
-     * bare `CHECK (expr)` forms (unnamed constraints get a null name and
-     * cannot be diffed by name). The expression is captured verbatim —
-     * the differ's conservative normalization handles the comparison.
-     *
-     * @param string $name The table name.
-     * @return list<array{name: string|null, expression: string|null}> The constraints.
+     * @param  string  $name
+     * @return list<array{name: string|null, expression: string|null}>
      */
     private function checks(string $name): array
     {
@@ -200,8 +185,8 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * The live columns, from `PRAGMA table_info`.
      *
-     * @param string $name The table name.
-     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}> The columns.
+     * @param  string  $name
+     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}>
      */
     private function columns(string $name): array
     {
@@ -225,11 +210,10 @@ final class SqliteSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live indexes, from `PRAGMA index_list` + `index_info` (the
-     * partial-index predicate parsed from the `sqlite_master` SQL).
+     * The live indexes, from `PRAGMA index_list` + `index_info`.
      *
-     * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
+     * @param  string  $name
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     private function indexes(string $name): array
     {
@@ -279,11 +263,10 @@ final class SqliteSchemaInspector extends SchemaInspector
 
     /**
      * Extract the partial-index predicate for a named index from the
-     * `sqlite_master` SQL — the text after the top-level ` WHERE `, or
-     * null for a full index.
+     * `sqlite_master` SQL.
      *
-     * @param string $indexName The index name.
-     * @return string|null The predicate text, or null.
+     * @param  string  $indexName
+     * @return string|null
      */
     private function parseIndexWhere(string $indexName): ?string
     {
@@ -310,8 +293,8 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * The live foreign keys, from `PRAGMA foreign_key_list`.
      *
-     * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string|null}> The constraints.
+     * @param  string  $name
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string|null}>
      */
     private function foreignKeys(string $name): array
     {
@@ -360,11 +343,10 @@ final class SqliteSchemaInspector extends SchemaInspector
     }
 
     /**
-     * Normalize SQLite's referential-action text ('NO ACTION', 'CASCADE',
-     * 'SET NULL', …) to a canonical value, null for the no-op default.
+     * Normalize SQLite's referential-action text to a canonical value.
      *
-     * @param mixed $action The raw action text.
-     * @return string|null The canonical action, or null for NO ACTION.
+     * @param  mixed  $action
+     * @return string|null
      */
     private function normalizeAction(mixed $action): ?string
     {
@@ -376,11 +358,10 @@ final class SqliteSchemaInspector extends SchemaInspector
     /**
      * Quote an identifier for direct PRAGMA interpolation.
      *
-     * PRAGMA arguments cannot be bound as parameters — quote the double
-     * quotes instead, mirroring the dialect's wrap() convention.
+     * PRAGMA arguments cannot be bound as parameters.
      *
-     * @param string $name The identifier.
-     * @return string The quoted identifier.
+     * @param  string  $name
+     * @return string
      */
     private function quoteIdentifier(string $name): string
     {

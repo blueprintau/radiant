@@ -11,12 +11,10 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
  * The generic database connection contract — the backend that runs a
  * structured query.
  *
- * Exposes the typed portable subset: each method takes a
- * {@see QueryBuilder} and returns exactly what the operation produces.
  * Every backend (SQL, CSV, HTTP, …) implements this interface; SQL-only
- * extras (raw SQL, transactions, schema) live on {@see SqlConnection}and
+ * extras (raw SQL, transactions, schema) live on {@see SqlConnection} and
  * throw {@see \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException}
- * on backends that can't support them — never silently ignored.
+ * on backends that can't support them.
  *
  * @see SqlConnection
  * @see \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
@@ -26,98 +24,71 @@ interface ConnectionInterface
     /**
      * Start a fluent query against a table, bound to this connection.
      *
-     * @param string $identifier The table name (or fully-qualified identifier).
-     * @return QueryBuilder A new query builder, pre-bound to the table.
+     * @param  string  $identifier
+     * @return QueryBuilder
      */
     public function table(string $identifier): QueryBuilder;
 
     /**
      * Run the query and return the matching rows.
      *
-     * @param QueryBuilder $query The query to run, built via {@see table()}.
-     * @return Collection<int,\stdClass> The matching rows, each as an object.
+     * @param  QueryBuilder  $query
+     * @return Collection<int,\stdClass>
      */
     public function select(QueryBuilder $query): Collection;
 
     /**
-     * Run the query and return the FIRST selected column's values, positionally.
+     * Run the query and return the first selected column's values, positionally.
      *
-     * The scalar-fetch counterpart of {@see select()}: instead of materializing
-     * every matching row as an object and reading one property off each, the
-     * backend fetches the single column directly (a SQL backend uses the
-     * driver's columnar fetch mode, a file-backed backend projects the field
-     * out of its rows). No per-row object allocation, no alias lookup — the
-     * collection holds the raw column values, one per row.
-     *
-     * The column read is the FIRST entry of the query's select list, by
-     * position — callers select exactly one column (the builders' scalar
-     * reads do). When the query selects more than one column, the extras
-     * are computed by the backend but discarded.
-     *
-     * @param QueryBuilder $query The query to run, built via {@see table()}.
-     * @return Collection<int, mixed> The first selected column's values, one per row.
+     * @param  QueryBuilder  $query
+     * @return Collection<int, mixed>
      */
     public function selectColumn(QueryBuilder $query): Collection;
 
     /**
      * Run the query and yield each matching row as it arrives.
      *
-     * The streaming counterpart of {@see select()}: each backend materializes
-     * rows however its transport allows — a SQL backend fetches one row at a
-     * time from the statement, a file-backed backend (whose dataset is fully
-     * in memory anyway) simply yields the rows {@see select()} would return.
-     * Either way the caller consumes one row at a time and never holds the
-     * full result set twice.
-     *
      * Consume the generator fully (or let it be garbage collected) before
      * running another query on the connection — an unfinished cursor may
      * hold the statement open.
      *
-     * @param QueryBuilder $query The query to run, built via {@see table()}.
-     * @return \Generator<int,\stdClass> The matching rows, one at a time.
+     * @param  QueryBuilder  $query
+     * @return \Generator<int,\stdClass>
      */
     public function cursor(QueryBuilder $query): \Generator;
 
     /**
      * Insert one or more rows into the table.
      *
-     * Pass a single row or a list of rows. Returns how many rows were
-     * inserted.
-     *
-     * @param QueryBuilder $query The query for the table to insert into.
-     * @param array<string,mixed>|list<array<string,mixed>> $values A single
-     *        row or a list of rows.
-     * @return int The number of rows inserted.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>|list<array<string,mixed>>  $values
+     * @return int
      */
     public function insert(QueryBuilder $query, array $values): int;
 
     /**
      * Insert a single row and return its generated id.
      *
-     * The id comes back in the primary key column's native PHP type: int for
-     * integer keys, string for bigint keys that exceed PHP_INT_MAX. Returns
-     * null when the table has no auto-increment primary key (e.g. UUID keys).
-     *
-     * @param QueryBuilder $query The query for the table to insert into.
-     * @param array<string,mixed> $values The row to insert.
-     * @return string|int|null The generated id, or null when there is none.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return string|int|null
      */
     public function insertGetId(QueryBuilder $query, array $values): string|int|null;
 
     /**
      * Update the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to update.
-     * @param array<string,mixed> $values The columns to change and their new values.
-     * @return int How many rows were updated.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return int
      */
     public function update(QueryBuilder $query, array $values): int;
 
     /**
      * Delete the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to delete.
-     * @return int How many rows were deleted.
+     * @param  QueryBuilder  $query
+     * @return int
      */
     public function delete(QueryBuilder $query): int;
     
@@ -125,24 +96,12 @@ interface ConnectionInterface
      * Whether this connection has been marked dead and should be discarded
      * by a caching layer before reuse.
      *
-     * The shared failure contract behind connection caching: a backend
-     * flags itself when an error indicates its transport is gone (a SQL
-     * server restart, a network blip), and a caching layer (e.g.
-     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}) consults this
-     * before handing the cached instance out again — so one transient
-     * outage does not poison every subsequent request in a long-running
-     * process. A backend with no meaningful failure mode (e.g. a CSV file
-     * handle) returns false forever.
-     *
-     * @return bool True when the connection should be rebuilt before reuse.
+     * @return bool
      */
     public function isStale(): bool;
 
     /**
      * Mark this connection dead so a caching layer rebuilds it.
-     *
-     * Backends set this automatically on connection-class errors; it is on
-     * the interface so a caching layer can also force-evict.
      */
     public function markStale(): void;
 }

@@ -32,7 +32,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * The default query grammar for this connection.
      *
-     * @return Grammar The Postgres grammar.
+     * @return Grammar
      */
     protected function getDefaultQueryGrammar(): Grammar
     {
@@ -42,7 +42,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * The default schema grammar for this connection.
      *
-     * @return SchemaGrammar The Postgres schema grammar.
+     * @return SchemaGrammar
      */
     protected function getDefaultSchemaGrammar(): SchemaGrammar
     {
@@ -50,9 +50,9 @@ final class PostgresConnection extends SqlConnection
     }
 
     /**
-     * The dialect's live-schema reader ({@see SchemaInspector}).
+     * The dialect's live-schema reader.
      *
-     * @return PostgresSchemaInspector The live-schema inspector.
+     * @return PostgresSchemaInspector
      */
     protected function getDefaultSchemaInspector(): SchemaInspector
     {
@@ -65,7 +65,7 @@ final class PostgresConnection extends SqlConnection
      * Postgres' native `timestamp` stores microseconds, so datetimes are
      * formatted as `Y-m-d H:i:s.u` on the write path.
      *
-     * @return ValueCodecInterface The microsecond Postgres codec.
+     * @return ValueCodecInterface
      */
     protected function getDefaultValueCodec(): ValueCodecInterface
     {
@@ -75,7 +75,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * Whether this dialect supports savepoints for nested transactions.
      *
-     * @return bool True — Postgres supports `SAVEPOINT` natively.
+     * @return bool
      */
     protected function supportsSavepoints(): bool
     {
@@ -86,7 +86,7 @@ final class PostgresConnection extends SqlConnection
      * Postgres DDL is transactional — schema statements roll back with
      * the transaction.
      *
-     * @return bool True.
+     * @return bool
      */
     #[Override]
     public function supportsTransactionalDdl(): bool
@@ -97,7 +97,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * Create a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function createSavepoint(string $name): void
     {
@@ -107,7 +107,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * Release a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function releaseSavepoint(string $name): void
     {
@@ -117,7 +117,7 @@ final class PostgresConnection extends SqlConnection
     /**
      * Roll back to a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function rollbackToSavepoint(string $name): void
     {
@@ -130,10 +130,10 @@ final class PostgresConnection extends SqlConnection
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The work to run under lock.
-     * @param string $name The lock domain.
-     * @return TReturn The callback's return value.
-     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     * @param  callable(): TReturn  $callback
+     * @param  string  $name
+     * @return TReturn
+     * @throws \Throwable
      */
     #[Override]
     public function withLock(callable $callback, string $name): mixed

@@ -19,21 +19,10 @@ final class SqliteConnector extends SqlConnector
 {
     /**
      * SQLite-specific default PDO attributes — merged over the base
-     * defaults by {@see SqlConnector::createPdo()}, so only the addition is
-     * declared here.
-     *
-     * The busy timeout: SQLite's default is 0ms — the moment another
-     * connection holds a write lock, a query fails immediately with
-     * "database is locked". A 5s timeout lets concurrent access wait
-     * briefly instead of failing spuriously. Overridable by the user via
-     * config.
+     * defaults.
      *
      * The busy timeout is set via \PDO::ATTR_TIMEOUT, which pdo_sqlite
-     * maps to SQLite's busy timeout in seconds (verified empirically:
-     * ATTR_TIMEOUT => 5 yields PRAGMA busy_timeout = 5000ms). There is no
-     * \PDO::SQLITE_ATTR_BUSY_TIMEOUT constant — it has never been defined
-     * by the extension, on PDO or Pdo\Sqlite (PHP 8.4+), so ATTR_TIMEOUT is
-     * the canonical, portable way to set it.
+     * maps to SQLite's busy timeout in seconds.
      *
      * @return array<int, int|bool>
      */
@@ -48,9 +37,9 @@ final class SqliteConnector extends SqlConnector
     /**
      * Create a SQLite connection from the given config.
      *
-     * @param array{database: mixed, options?: PdoOptions, ...<mixed>} $config The connection config (database path, options, …).
-     * @return SqliteConnection A ready-to-use SQLite connection.
-     * @throws \InvalidArgumentException If the database path is not a string.
+     * @param  array{database: mixed, options?: PdoOptions, ...<mixed>}  $config
+     * @return SqliteConnection
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function connect(array $config): SqlConnection
@@ -81,13 +70,8 @@ final class SqliteConnector extends SqlConnector
     /**
      * Validate the shape of a SQLite connection config.
      *
-     * SQLite needs a `database` path string — the only field it consumes. The
-     * shared `driver` key is owned (and validated) by
-     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
-     *
-     * @param array<string,mixed> $config The connection config to validate.
-     * @throws \InvalidArgumentException When the database path is not a
-     *         string.
+     * @param  array<string,mixed>  $config
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function validConfig(array $config): void

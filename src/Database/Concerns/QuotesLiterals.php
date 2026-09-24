@@ -18,11 +18,8 @@ trait QuotesLiterals
     /**
      * Quote a scalar as a SQL literal.
      *
-     * Strings are single-quoted with embedded quotes doubled; booleans render
-     * as `1`/`0`; null as `null`; numbers pass through.
-     *
-     * @param string|int|float|bool|null $value The scalar to quote.
-     * @return string The SQL literal.
+     * @param  string|int|float|bool|null  $value
+     * @return string
      */
     protected function quoteLiteral(string|int|float|bool|null $value): string
     {

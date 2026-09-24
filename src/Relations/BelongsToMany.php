@@ -89,22 +89,14 @@ class BelongsToMany extends Relation
     /**
      * Create a many-to-many relation.
      *
-     * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|null $table The pivot table name; null derives
-     *        `{parentTable}_{relatedTable}`.
-     * @param string|null $foreignPivotKey The pivot column → parent; null
-     *        derives `{parentTable}_id`.
-     * @param string|null $relatedPivotKey The pivot column → related; null
-     *        derives `{relatedTable}_id`.
-     * @param string|null $parentKey The parent's key column; null derives
-     *        its primary key.
-     * @param string|null $relatedKey The related model's key column; null
-     *        derives its primary key.
-     * @throws \InvalidArgumentException When a derived key is missing or
-     *         the models' keys are composite (pivot keys are scalar-only
-     *         in v1 — a composite tuple pivot has no portable eager
-     *         strategy).
+     * @param  Model  $parent
+     * @param  class-string<TRelated>  $related
+     * @param  string|null  $table
+     * @param  string|null  $foreignPivotKey
+     * @param  string|null  $relatedPivotKey
+     * @param  string|null  $parentKey
+     * @param  string|null  $relatedKey
+     * @throws \InvalidArgumentException
      */
     public function __construct(
         Model $parent,
@@ -127,11 +119,10 @@ class BelongsToMany extends Relation
     /**
      * A model's SINGLE primary-key column — pivot keys are scalar-only.
      *
-     * @param class-string<Model> $class The model to resolve.
-     * @param string $side Which side (for the message).
-     * @return string The PK column name.
-     * @throws \InvalidArgumentException When the model has no PK, an
-     *         unnamed PK, or a composite PK.
+     * @param  class-string<Model>  $class
+     * @param  string  $side
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private static function singlePrimaryKeyOf(string $class, string $side): string
     {
@@ -150,7 +141,7 @@ class BelongsToMany extends Relation
     /**
      * The pivot table name.
      *
-     * @return string The table.
+     * @return string
      */
     final public function getPivotTable(): string
     {
@@ -160,7 +151,7 @@ class BelongsToMany extends Relation
     /**
      * The pivot column pointing at the parent.
      *
-     * @return string The column.
+     * @return string
      */
     final public function getForeignPivotKey(): string
     {
@@ -170,7 +161,7 @@ class BelongsToMany extends Relation
     /**
      * The pivot column pointing at the related model.
      *
-     * @return string The column.
+     * @return string
      */
     final public function getRelatedPivotKey(): string
     {
@@ -182,16 +173,11 @@ class BelongsToMany extends Relation
      *
      * Each column is selected aliased `radiant_pivot_{column}` and readable
      * through `pivotValue()` on the related model. Calling it again
-     * REPLACES the list (Laravel's semantics). A pivot column must not
-     * start with the ORM's reserved `radiant_` prefix — the alias would
-     * collide with the reserved namespace the row lift treats as internal
-     * state.
+     * replaces the list.
      *
-     * @param string ...$columns The pivot columns to carry.
-     * @return static A NEW relation with the pivot columns declared; the
-     *         original is unchanged.
-     * @throws \InvalidArgumentException When a pivot column starts with
-     *         the reserved `radiant_` prefix.
+     * @param  string  ...$columns
+     * @return static
+     * @throws \InvalidArgumentException
      */
     final public function withPivot(string ...$columns): static
     {
@@ -209,7 +195,7 @@ class BelongsToMany extends Relation
      * Carry the pivot's created_at/updated_at pair — sugar for
      * `withPivot('created_at', 'updated_at')`.
      *
-     * @return static The relation (chainable).
+     * @return static
      */
     final public function withTimestamps(): static
     {
@@ -252,9 +238,9 @@ class BelongsToMany extends Relation
     /**
      * Qualify a column to its table — `table.column`.
      *
-     * @param string $table The owning table.
-     * @param string $column The column name.
-     * @return string The qualified spec.
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
      */
     final protected static function qualify(string $table, string $column): string
     {
@@ -264,11 +250,7 @@ class BelongsToMany extends Relation
     /**
      * Run the constrained query.
      *
-     * When `withPivot()` columns are declared, the lazy path selects them
-     * aliased `radiant_pivot_{column}` — the same lift the eager path's
-     * raw select performs, so `pivotValue()` works on both paths.
-     *
-     * @return Collection<TRelated> The related models.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -293,12 +275,8 @@ class BelongsToMany extends Relation
      * Run the eager query: join the pivot for ALL parents at once,
      * selecting the parent key alongside the related columns.
      *
-     * The per-row parent keys ride the EagerResult (the through-relation
-     * statelessness pattern — the relation object is cached and shared, so
-     * per-call state never lands on the instance).
-     *
-     * @param list<KeyValue> $parentKeys The parents' key values.
-     * @return EagerResult<TRelated> The models plus the per-row parent keys.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     public function eagerLoad(array $parentKeys): EagerResult
@@ -320,12 +298,10 @@ class BelongsToMany extends Relation
     }
 
     /**
-     * Run one eager-load query for a CHUNK of parent keys — the join +
-     * synthetic-parent-key select for one bounded key list.
+     * Run one eager-load query for a CHUNK of parent keys.
      *
-     * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return EagerResult<TRelated> The models plus the per-row parent keys,
-     *         positionally paired.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     protected function eagerLoadChunk(array $parentKeys): EagerResult
@@ -376,12 +352,10 @@ class BelongsToMany extends Relation
      * Distribute eager results onto parents, grouped by the parent key
      * carried on the EagerResult.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        The per-row parent keys from eagerLoad(), positionally paired
-     *        with the results.
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void
      */
     #[\Override]
@@ -416,11 +390,10 @@ class BelongsToMany extends Relation
 
     /**
      * The parent's SQL connection — the pivot writes run on the plain
-     * builder (no hydration, no events). A non-SQL connection fails fast:
-     * the pivot API is join-backed and cannot work on CSV.
+     * builder.
      *
-     * @return SqlConnection The connection.
-     * @throws UnsupportedFeatureException When the connection is not SQL.
+     * @return SqlConnection
+     * @throws UnsupportedFeatureException
      */
     protected function sqlConnection(): SqlConnection
     {
@@ -435,13 +408,8 @@ class BelongsToMany extends Relation
      * Stamp a pivot row about to be INSERTed — the subclass hook for
      * relation-specific columns.
      *
-     * Base: the row passes through unchanged. {@see MorphToMany} overrides
-     * this to stamp the `{morphName}_type` alias — EVERY insert path
-     * (attach/sync/toggle) funnels through here, so a polymorphic pivot
-     * can never gain a row without its type discriminator.
-     *
-     * @param array<string, mixed> $row The pivot row about to be written.
-     * @return array<string, mixed> The row to insert.
+     * @param  array<string, mixed>  $row
+     * @return array<string, mixed>
      */
     protected function stampRow(array $row): array
     {
@@ -451,12 +419,10 @@ class BelongsToMany extends Relation
     /**
      * Attach related models to the parent — INSERT into the pivot.
      *
-     * @param int|string|list<int|string>|array<string, mixed> $ids A single
-     *        id, a list of ids, or a map of id => pivot attributes.
-     * @param array<string, mixed> $pivotAttributes Attributes for EVERY
-     *        attached row (merged under any per-id map values).
+     * @param  int|string|list<int|string>|array<string, mixed>  $ids
+     * @param  array<string, mixed>  $pivotAttributes
      * @return void
-     * @throws \RuntimeException When the connection is not a SQL connection.
+     * @throws \RuntimeException
      */
     public function attach(int|string|array $ids, array $pivotAttributes = []): void
     {
@@ -482,15 +448,10 @@ class BelongsToMany extends Relation
 
     /**
      * A query builder on the pivot table — the shared entry point for
-     * every pivot READ/DELETE/UPDATE path (detach, sync's diff, toggle).
+     * every pivot READ/DELETE/UPDATE path.
      *
-     * Base: the plain table builder. {@see MorphToMany} overrides this to
-     * scope every path to the morph alias — the morph key column is SHARED
-     * across parent classes on the same pivot, so an unscoped delete or
-     * diff would touch another class's rows.
-     *
-     * @param SqlConnection $connection The parent's SQL connection.
-     * @return QueryBuilder The pivot-table builder.
+     * @param  SqlConnection  $connection
+     * @return QueryBuilder
      */
     protected function pivotQuery(SqlConnection $connection): QueryBuilder
     {
@@ -500,10 +461,9 @@ class BelongsToMany extends Relation
     /**
      * Detach related models from the parent — DELETE from the pivot.
      *
-     * @param int|string|list<int|string>|null $ids The ids to detach; null
-     *        detaches ALL of the parent's pivot rows.
-     * @return int The number of detached rows.
-     * @throws \RuntimeException When the connection is not a SQL connection.
+     * @param  int|string|list<int|string>|null  $ids  Null detaches all.
+     * @return int
+     * @throws \RuntimeException
      */
     final public function detach(int|string|array|null $ids = null): int
     {
@@ -520,20 +480,15 @@ class BelongsToMany extends Relation
     }
 
     /**
-     * Sync the pivot to EXACTLY the given ids — attach the missing,
+     * Sync the pivot to exactly the given ids — attach the missing,
      * detach the extra, update the shared.
      *
-     * Runs inside a transaction: a partial sync (attached but not
-     * detached) would leave the pivot in a state neither the caller nor
-     * the diff describes.
+     * Runs inside a transaction.
      *
-     * @param list<int|string>|array<string, mixed> $ids The desired ids —
-     *        a list, or a map of id => pivot attributes (shared attributes
-     *        update in place).
-     * @param bool $detaching Whether to detach ids NOT in the list (false
-     *        makes this `syncWithoutDetaching`).
-     * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>} The diff.
-     * @throws \RuntimeException When the connection is not a SQL connection.
+     * @param  list<int|string>|array<string, mixed>  $ids
+     * @param  bool  $detaching
+     * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>}
+     * @throws \RuntimeException
      */
     final public function sync(array $ids, bool $detaching = true): array
     {
@@ -590,12 +545,11 @@ class BelongsToMany extends Relation
     }
 
     /**
-     * Sync WITHOUT detaching the ids not in the list — attach the missing
+     * Sync without detaching the ids not in the list — attach the missing
      * only.
      *
-     * @param list<int|string>|array<string, mixed> $ids The desired ids.
-     * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>} The diff
-     *         (detached is always empty).
+     * @param  list<int|string>|array<string, mixed>  $ids
+     * @return array{attached: list<int|string>, detached: list<int|string>, updated: list<int|string>}
      */
     final public function syncWithoutDetaching(array $ids): array
     {
@@ -606,9 +560,9 @@ class BelongsToMany extends Relation
      * Toggle the given ids — attach the ones not attached, detach the
      * ones attached.
      *
-     * @param list<int|string> $ids The ids to flip.
-     * @return array{attached: list<int|string>, detached: list<int|string>} The diff.
-     * @throws \RuntimeException When the connection is not a SQL connection.
+     * @param  list<int|string>  $ids
+     * @return array{attached: list<int|string>, detached: list<int|string>}
+     * @throws \RuntimeException
      */
     final public function toggle(array $ids): array
     {
@@ -642,8 +596,8 @@ class BelongsToMany extends Relation
     /**
      * The parent's current pivot rows, keyed by related id.
      *
-     * @param SqlConnection $connection The connection.
-     * @return array<int|string, array<string, mixed>> id => pivot row.
+     * @param  SqlConnection  $connection
+     * @return array<int|string, array<string, mixed>>
      */
     private function currentPivotRows(SqlConnection $connection): array
     {
@@ -663,14 +617,11 @@ class BelongsToMany extends Relation
     /**
      * Normalize the attach/sync id input to a map of id => attributes.
      *
-     * The list/map distinction is VALUE-based, not key-based: a map like
-     * `[1 => ['position' => 'x'], 2]` has int keys but is not a list —
-     * any array value marks the input as a map (id => attributes), and a
-     * bare scalar under an int key in a map is an id without attributes.
+     * The list/map distinction is value-based, not key-based: any array
+     * value marks the input as a map.
      *
-     * @param int|string|list<int|string>|array<string, mixed> $ids The raw
-     *        input.
-     * @return array<int|string, array<string, mixed>> id => attributes.
+     * @param  int|string|list<int|string>|array<string, mixed>  $ids
+     * @return array<int|string, array<string, mixed>>
      */
     protected function normalizeIds(int|string|array $ids): array
     {

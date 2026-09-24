@@ -9,46 +9,31 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 
 /**
- * The shared where-family vocabulary — the ONE definition of every
+ * The shared where-family vocabulary — the one definition of every
  * where-derived helper.
  *
- * Every helper funnels into the {@see FiltersWhere::where()} sink —
- * the ONE abstract member (plus the {@see FiltersWhere::whereNested()}
+ * Every helper funnels into the {@see FiltersWhere::where()} sink — the
+ * one abstract member (plus the {@see FiltersWhere::whereNested()}
  * structural sink) — so a host implementing the two sinks gets the whole
- * vocabulary for free, and a NEW helper is added HERE once instead of
- * copy-pasted across the builders and wrapper traits.
- *
- * **Hosts are immutable**: both sinks return a NEW host (the original is
- * never modified), and every helper returns the sink's result directly —
- * a discarded helper call is a no-op. In a `whereNested()` callback,
- * RETURN the builder.
- *
- * Column parameters accept `string|Expression`: the builders' raw-column
- * path is part of the shared contract, not a builder-only extra. A wrapper
- * that genuinely cannot splice raw SQL narrows at its own sink instead.
+ * vocabulary for free. Hosts are immutable: both sinks return a new host,
+ * and every helper returns the sink's result directly. Column parameters
+ * accept `string|Expression`.
  *
  * Consumers:
- * - {@see \BlueprintAU\Radiant\Database\Query\QueryBuilder} — implements
- *   the sinks with full validation/binding machinery.
- * - {@see \BlueprintAU\Radiant\Database\Query\WhereBuilder} — the nested
- *   group facade; delegates both sinks to its owning builder.
- * - {@see FiltersQuery} — composes this trait and re-abstracts the sinks
- *   so a wrapping consumer (a Relation) stays the return type.
- *
- * The static twin {@see FiltersStaticQuery} mirrors this vocabulary by
- * hand: a PHP trait method cannot be static AND instance at once, so the
- * static forwarders cannot share this code.
+ * - {@see \BlueprintAU\Radiant\Database\Query\QueryBuilder}
+ * - {@see \BlueprintAU\Radiant\Database\Query\WhereBuilder}
+ * - {@see FiltersQuery}
  */
 trait FiltersWhere
 {
     /**
      * Add a where clause — the single sink every other filter funnels into.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to compare — or a raw SQL fragment wrapped in an Expression.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW host with the clause; the original is unchanged.
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     abstract public function where(
         string|\BlueprintAU\Radiant\Database\Query\Expression $column,
@@ -58,13 +43,11 @@ trait FiltersWhere
     ): static;
 
     /**
-     * Add a nested where group — the second sink (structural, not
-     * where-derivable: it wraps a parenthesized group around fresh clauses).
+     * Add a nested where group — the second sink.
      *
-     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
-     *        group's where-family facade and RETURNS the constrained group.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW host with the group; the original is unchanged.
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     abstract public function whereNested(
         callable $callback,
@@ -72,11 +55,10 @@ trait FiltersWhere
     ): static;
 
     /**
-     * Add a nested where group connected by AND — the explicit-naming form.
+     * Add a nested where group connected by AND.
      *
-     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
-     *        group's where-family facade and RETURNS the constrained group.
-     * @return static A NEW host with the group; the original is unchanged.
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
+     * @return static
      */
     public function whereNestedGroup(callable $callback): static
     {
@@ -86,9 +68,8 @@ trait FiltersWhere
     /**
      * Add an OR-connected nested where group.
      *
-     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
-     *        group's where-family facade and RETURNS the constrained group.
-     * @return static A NEW host with the group; the original is unchanged.
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
+     * @return static
      */
     public function orWhereNested(callable $callback): static
     {
@@ -98,10 +79,10 @@ trait FiltersWhere
     /**
      * Add an `or where` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @return static
      */
     public function orWhere(
         string|\BlueprintAU\Radiant\Database\Query\Expression $column,
@@ -114,10 +95,10 @@ trait FiltersWhere
     /**
      * Add a `where in` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param array<int, mixed> $values The list of values.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  array<int, mixed>  $values
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereIn(
         string|\BlueprintAU\Radiant\Database\Query\Expression $column,
@@ -130,10 +111,10 @@ trait FiltersWhere
     /**
      * Add a `where not in` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param array<int, mixed> $values The list of values.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  array<int, mixed>  $values
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNotIn(
         string|\BlueprintAU\Radiant\Database\Query\Expression $column,
@@ -146,9 +127,9 @@ trait FiltersWhere
     /**
      * Add a `where null` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNull(string|\BlueprintAU\Radiant\Database\Query\Expression $column, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -158,9 +139,9 @@ trait FiltersWhere
     /**
      * Add a `where not null` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNotNull(string|\BlueprintAU\Radiant\Database\Query\Expression $column, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -170,10 +151,10 @@ trait FiltersWhere
     /**
      * Add a `where between` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  array{0: mixed, 1: mixed}  $range
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereBetween(string|\BlueprintAU\Radiant\Database\Query\Expression $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -183,10 +164,10 @@ trait FiltersWhere
     /**
      * Add a `where not between` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param array{0: mixed, 1: mixed} $range The two-value range `[min, max]`.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  array{0: mixed, 1: mixed}  $range
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNotBetween(string|\BlueprintAU\Radiant\Database\Query\Expression $column, array $range, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -194,13 +175,12 @@ trait FiltersWhere
     }
 
     /**
-     * Add a `where like` clause — the pattern is a bound value (`%`/`_`
-     * are the wildcards; everything else matches literally).
+     * Add a `where like` clause — the pattern is a bound value.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param string $pattern The LIKE pattern (e.g. `'%@example.com'`).
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  string  $pattern
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -210,9 +190,9 @@ trait FiltersWhere
     /**
      * Add an OR-connected `where like` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param string $pattern The LIKE pattern.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  string  $pattern
+     * @return static
      */
     public function orWhereLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern): static
     {
@@ -222,10 +202,10 @@ trait FiltersWhere
     /**
      * Add a `where not like` clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression $column The column to test.
-     * @param string $pattern The LIKE pattern to exclude.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The host (chainable).
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  string  $pattern
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNotLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): static
     {

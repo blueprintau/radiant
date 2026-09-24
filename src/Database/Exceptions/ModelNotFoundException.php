@@ -38,8 +38,8 @@ final class ModelNotFoundException extends \RuntimeException
     public readonly mixed $key;
 
     /**
-     * @param class-string<\BlueprintAU\Radiant\Model> $modelClass The class-string of the model that had no matching row.
-     * @param mixed $key The lookup key, if any — scalar or composite column map.
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $modelClass
+     * @param  mixed  $key  Null when no key was involved; a scalar or a column => value map otherwise.
      */
     public function __construct(string $modelClass, mixed $key = null)
     {
@@ -58,8 +58,8 @@ final class ModelNotFoundException extends \RuntimeException
     /**
      * Renders the lookup key for the exception message.
      *
-     * @param mixed $key A scalar key or a composite column map.
-     * @return string The rendered key.
+     * @param  mixed  $key
+     * @return string
      */
     private static function renderKey(mixed $key): string
     {

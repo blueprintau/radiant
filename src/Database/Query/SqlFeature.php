@@ -8,17 +8,6 @@ namespace BlueprintAU\Radiant\Database\Query;
  * The SQL features a query builder can carry — the introspection surface
  * for feature-gating before execution.
  *
- * Each case maps to one query state the builder can hold; a custom
- * `ConnectionInterface` implementation can reject a query BEFORE running
- * it by naming every feature it can't handle. This is the builder-side
- * complement to the connection-side {@see \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException}:
- * instead of discovering an unsupported join at query time, a caller (or
- * a connection wrapper) checks up front.
- *
- * The cases deliberately mirror what the CSV connection rejects — the
- * portable subset (wheres, orders, aggregates) is simply the absence of
- * every case.
- *
  * @package BlueprintAU\Radiant\Database\Query
  */
 enum SqlFeature: string
@@ -50,9 +39,8 @@ enum SqlFeature: string
     /**
      * Which features this query uses, as a set.
      *
-     * @param \BlueprintAU\Radiant\Database\Query\QueryBuilder $query The query to inspect.
-     * @return list<self> Every feature the query uses (empty for a plain
-     *         filtered select — the universally portable shape).
+     * @param  \BlueprintAU\Radiant\Database\Query\QueryBuilder  $query
+     * @return list<self>
      */
     public static function usedBy(QueryBuilder $query): array
     {
@@ -105,8 +93,8 @@ enum SqlFeature: string
     /**
      * Whether any selected column is an aggregate.
      *
-     * @param list<string|Expression|Aggregate> $columns The select list.
-     * @return bool True when at least one column is an Aggregate.
+     * @param  list<string|Expression|Aggregate>  $columns
+     * @return bool
      */
     private static function columnsContainAggregate(array $columns): bool
     {
@@ -121,8 +109,8 @@ enum SqlFeature: string
     /**
      * Whether any having clause compares an Aggregate.
      *
-     * @param list<array{type: \BlueprintAU\Radiant\Database\Query\Enums\WhereType::Basic, column: string|Expression|Aggregate, operator: \BlueprintAU\Radiant\Database\Query\Enums\WhereOperator, value: mixed}> $havings The having clauses.
-     * @return bool True when at least one clause compares an Aggregate.
+     * @param  list<array{type: \BlueprintAU\Radiant\Database\Query\Enums\WhereType::Basic, column: string|Expression|Aggregate, operator: \BlueprintAU\Radiant\Database\Query\Enums\WhereOperator, value: mixed}>  $havings
+     * @return bool
      */
     private static function havingsContainAggregate(array $havings): bool
     {

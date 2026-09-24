@@ -24,24 +24,10 @@ use Override;
  *
  * Use it to run queries, raw SQL, transactions and schema changes. You
  * normally get one from a {@see \BlueprintAU\Radiant\Database\DatabaseManager}
- * rather than constructing it yourself. Subclasses provide the dialect
- * specifics (e.g. how savepoints work), so you don't have to think about
- * them.
+ * rather than constructing it yourself.
  *
- * ## Coroutine contract
- *
- * A connection is **not** safe for concurrent use by multiple coroutines
- * while a transaction is open. The transaction depth counter and savepoint
- * registry are per-connection state, not per-coroutine state: two coroutines
- * interleaving `beginTransaction()`/`commit()` frames on one shared
- * connection cross-commit each other's work. The rule:
- *
- * - **Use one connection per coroutine when a transaction is open.**
- * - As a backstop, the connection records the owning coroutine (fiber,
- *   Swoole coroutine, or process) when a transaction opens and throws a
- *   \LogicException if a *different* coroutine touches the transaction
- *   while it is open — the failure becomes loud instead of silently
- *   crossing commits. Queries on the same coroutine remain unrestricted.
+ * A connection is not safe for concurrent use by multiple coroutines while
+ * a transaction is open — use one connection per coroutine in that case.
  *
  * @see ConnectionInterface
  *
@@ -55,9 +41,6 @@ abstract class SqlConnection implements ConnectionInterface
     use DetectsConnectionLoss;
     /**
      * Converts values between PHP types and what the database driver expects.
-     *
-     * Handles dialect specifics (e.g. Postgres' microsecond datetime format)
-     * so you don't have to think about them when reading or writing values.
      *
      * @var ValueCodecInterface
      */
@@ -78,11 +61,7 @@ abstract class SqlConnection implements ConnectionInterface
     public readonly SchemaGrammar $schemaGrammar;
 
     /**
-     * Reads the live schema — the read-side twin of {@see $schemaGrammar},
-     * owned by the connection the same way (initialized in the constructor
-     * from {@see getDefaultSchemaInspector()}). The schema differ consumes
-     * `$db->schemaInspector`; the host never constructs one and never
-     * touches a PDO to do it.
+     * Reads the live schema — the read-side twin of {@see $schemaGrammar}.
      *
      * @var TSchemaInspector
      */
@@ -91,22 +70,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Create a new SQL connection wrapping a PDO instance.
      *
-     * Exception mode is forced here because the entire error contract of
-     * this class depends on it: every path (`run()`, transactions,
-     * savepoints) assumes failures surface as \PDOException rather than
-     * silent `false` returns. Setting it at this single construction choke
-     * point is un-overridable and covers PDO instances built directly and
-     * handed in, independent of the connector's own forced-options layer.
-     * Setting (rather than validating and throwing) keeps construction
-     * idempotent and never fails — the class owns its PDO configuration.
-     *
-     * The codec is initialised from {@see getDefaultValueCodec()}, the
-     * grammar from {@see getDefaultQueryGrammar()}, and the schema grammar
-     * from {@see getDefaultSchemaGrammar()} so subclasses can provide
-     * dialect-specific value adaptation, SQL compilation, and DDL
-     * compilation.
-     *
-     * @param \PDO $pdo The underlying PDO connection.
+     * @param  \PDO  $pdo
      */
     public function __construct(protected \Pdo $pdo)
     {
@@ -120,15 +84,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Assert the connection speaks SQL — throw when it does not.
      *
-     * The narrowing assert: at runtime a non-SQL connection is a
-     * feature-contract violation (SQL-only work on a backend that can't
-     * do it), so it throws {@see UnsupportedFeatureException} rather than
-     * letting the caller explode later on the first raw SQL / transaction
-     * / schema call. For the type system, the {@see \phpstan-assert}
-     * annotation narrows the argument to `SqlConnection` after the call —
-     * no `@var` docblock needed at the call site.
-     *
-     * @param ConnectionInterface $connection The connection to check.
+     * @param  ConnectionInterface  $connection
      * @phpstan-assert SqlConnection<Grammar, SchemaGrammar, \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector> $connection
      */
     final public static function assertSql(ConnectionInterface $connection): void
@@ -139,22 +95,12 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Narrow a connection to SQL AND to this dialect — return it typed, or
+     * Narrow a connection to SQL and to this dialect — return it typed, or
      * throw.
      *
-     * The return-value twin of {@see assertSql()}: the fail-fast contract
-     * is stricter here, because `static` promises the CONCRETE dialect —
-     * `SqliteConnection::from(...)` guarantees a SqliteConnection, not
-     * merely some SQL connection. Three failure modes, three precise
-     * errors: a non-SQL backend delegates to {@see assertSql()} (one place
-     * owns the generic message); a SQL-but-wrong-dialect connection throws
-     * its own message naming the expected class.
-     *
-     * @param ConnectionInterface $connection The connection to narrow.
-     * @return static The same connection, typed as the calling dialect.
-     * @throws UnsupportedFeatureException When the connection is not a
-     *         {@see SqlConnection} at all, or is SQL but not the calling
-     *         dialect.
+     * @param  ConnectionInterface  $connection
+     * @return static
+     * @throws UnsupportedFeatureException
      */
     final public static function from(ConnectionInterface $connection): static
     {
@@ -173,8 +119,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Start a fluent query against a table, bound to this connection.
      *
-     * @param string $identifier The table name (or fully-qualified identifier).
-     * @return QueryBuilder A new query builder, pre-bound to the table.
+     * @param  string  $identifier
+     * @return QueryBuilder
      */
     #[Override]
     final public function table(string $identifier): QueryBuilder
@@ -185,17 +131,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run the query and return the matching rows.
      *
-     * A query carrying a row lock (`lockForUpdate()` / `sharedLock()`) is
-     * rejected outside a transaction: row locks are released at transaction
-     * end, and in autocommit mode that is the END OF THE STATEMENT — the
-     * lock is acquired and immediately released, silently degrading the
-     * "lock the row, then update" pattern to an unlocked read-modify-write.
-     * The library's fail-fast contract (no silent fallbacks) applies: the
-     * caller must open the transaction the lock needs.
-     *
-     * @param QueryBuilder $query The query to run, built via {@see table()}.
-     * @return Collection<int,\stdClass> The matching rows, each as an object.
-     * @throws \LogicException When the query locks rows with no transaction open.
+     * @param  QueryBuilder  $query
+     * @return Collection<int,\stdClass>
+     * @throws \LogicException
      */
     #[Override]
     final public function select(QueryBuilder $query): Collection
@@ -213,18 +151,11 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Run the query and return the FIRST selected column's values.
+     * Run the query and return the first selected column's values.
      *
-     * The columnar scalar-read path: compiles exactly as {@see select()}
-     * does, but the driver fetches the single column directly
-     * (`PDO::FETCH_COLUMN`) instead of materializing one `\stdClass` per
-     * row — the allocation the builders' `value()`/`pluck()` reads used to
-     * pay per row. Values are bound through the codec, identical to
-     * {@see select()}.
-     *
-     * @param QueryBuilder $query The query to run.
-     * @return Collection<int, mixed> The first selected column's values, one per row.
-     * @throws QueryException When the statement fails to prepare or execute.
+     * @param  QueryBuilder  $query
+     * @return Collection<int, mixed>
+     * @throws QueryException
      */
     #[Override]
     final public function selectColumn(QueryBuilder $query): Collection
@@ -236,10 +167,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Insert one or more rows into the table.
      *
-     * @param QueryBuilder $query The query for the table to insert into.
-     * @param array<string,mixed>|list<array<string,mixed>> $values A single
-     *        row or a list of rows.
-     * @return int The number of rows inserted.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>|list<array<string,mixed>>  $values
+     * @return int
      */
     #[Override]
     final public function insert(QueryBuilder $query, array $values): int
@@ -251,9 +181,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Insert a single row and return its generated id.
      *
-     * @param QueryBuilder $query The query for the table to insert into.
-     * @param array<string,mixed> $values The row to insert.
-     * @return string|int|null The generated id, or null when there is none.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return string|int|null
      */
     #[Override]
     final public function insertGetId(QueryBuilder $query, array $values): string|int|null
@@ -315,9 +245,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Update the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to update.
-     * @param array<string,mixed> $values The columns to change and their new values.
-     * @return int How many rows were updated.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return int
      */
     #[Override]
     final public function update(QueryBuilder $query, array $values): int
@@ -329,8 +259,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Delete the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to delete.
-     * @return int How many rows were deleted.
+     * @param  QueryBuilder  $query
+     * @return int
      */
     #[Override]
     final public function delete(QueryBuilder $query): int
@@ -340,19 +270,11 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Run a compiled builder query and yield each matching row as it
-     * arrives — the streaming counterpart of {@see select()}.
+     * Run the query and yield each matching row as it arrives.
      *
-     * Compiles the builder exactly as {@see select()} does, but fetches row
-     * by row so PHP-side memory stays bounded by one row, not the result
-     * size. Use it when a fluent query may match more rows than fit in
-     * memory comfortably. Consuming rules are the same as
-     * {@see cursorSql()} — finish the generator (or let it be collected)
-     * before the next query on this connection.
-     *
-     * @param QueryBuilder $query The query to stream.
-     * @return \Generator<int, \stdClass> The matching rows, one at a time.
-     * @throws QueryException When the statement fails to prepare or execute.
+     * @param  QueryBuilder  $query
+     * @return \Generator<int, \stdClass>
+     * @throws QueryException
      */
     #[Override]
     final public function cursor(QueryBuilder $query): \Generator
@@ -364,9 +286,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Flatten a single row or a list of rows into one binding list (row-major).
      *
-     * @param array<string,mixed>|list<array<string,mixed>> $values A single
-     *        row or a list of rows.
-     * @return list<mixed> The flattened values.
+     * @param  array<string,mixed>|list<array<string,mixed>>  $values
+     * @return list<mixed>
      */
     protected function flattenInsertValues(array $values): array
     {
@@ -384,14 +305,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a raw SQL query and return every matching row as an object.
      *
-     * Use this for ad-hoc queries that don't fit the fluent builder. Values
-     * are bound through the codec, so datetimes and other types are adapted
-     * to the dialect automatically.
-     *
-     * @param string $sql The raw SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind, keyed by
-     *        column (named) or position (unnamed).
-     * @return Collection<int,\stdClass> The matching rows, each as an object.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @return Collection<int,\stdClass>
      */
     final public function selectSql(string $sql, array $bindings = []): Collection
     {
@@ -399,17 +315,11 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Run a raw SQL query and return the FIRST selected column's values.
+     * Run a raw SQL query and return the first selected column's values.
      *
-     * The columnar counterpart of {@see selectSql()}: the driver fetches the
-     * single column directly (`PDO::FETCH_COLUMN`), so no per-row object is
-     * materialized and no property lookup runs — the same result shape
-     * {@see selectColumn()} produces for a builder query, for ad-hoc SQL.
-     *
-     * @param string $sql The raw SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind, keyed by
-     *        column (named) or position (unnamed).
-     * @return Collection<int, mixed> The first selected column's values, one per row.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @return Collection<int, mixed>
      */
     final public function selectColumnSql(string $sql, array $bindings = []): Collection
     {
@@ -421,23 +331,14 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a raw SQL query and yield each matching row as it arrives.
      *
-     * Unlike {@see selectSql()}, which materializes the whole result set as
-     * PHP objects, this fetches row by row: PHP-side memory stays O(1) in
-     * the result size regardless of row count. (The driver's client-side
-     * buffer is a separate matter — see the note on buffered mode below.)
-     *
      * Consume the generator fully (or let it be garbage collected) before
      * running another query on this connection — an unfinished cursor holds
-     * the statement. All bundled connectors default to *buffered* mode, so
-     * the result set is already fully transferred at execute time and a
-     * second query works fine; the restriction only bites when a user opts
-     * into MySQL's unbuffered mode via `options` — there, a second query is
-     * forbidden until the first result set is drained.
+     * the statement.
      *
-     * @param string $sql The SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind.
-     * @return \Generator<int, \stdClass> The matching rows, one at a time.
-     * @throws QueryException When the statement fails to prepare or execute.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @return \Generator<int, \stdClass>
+     * @throws QueryException
      */
     final public function cursorSql(string $sql, array $bindings = []): \Generator
     {
@@ -454,28 +355,16 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a callback over the query's rows in fixed-size chunks.
      *
-     * Memory stays bounded by the chunk size, not the result size — the
-     * convenient wrapper over {@see cursorSql()} for batch processing.
+     * The callback returning `false` (strictly) stops the iteration
+     * immediately; any other return value continues.
      *
-     * **Chunk sizing.** Every chunk passed to the callback is exactly
-     * `$size` rows, except possibly the last, which holds the remaining
-     * rows (1..$size). A chunk is never larger than `$size`: the cursor
-     * yields one row at a time and the buffer flushes as soon as it reaches
-     * `$size`, so there is no code path that can over-fill it.
-     *
-     * **Early stop.** The callback returning `false` (strictly) stops the
-     * iteration immediately — the cursor is abandoned and closed. Any other
-     * return value, including `void`, `null`, and `0`, continues; return
-     * `false` deliberately, not as a by-product.
-     *
-     * @param string $sql The SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind.
-     * @param int $size Rows per chunk (must be >= 1).
-     * @param callable(list<\stdClass>): mixed $callback Receives each chunk;
-     *        return `false` to stop early.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @param  int  $size
+     * @param  callable(list<\stdClass>): mixed  $callback
      * @return void
-     * @throws \InvalidArgumentException When the chunk size is below 1.
-     * @throws QueryException When the statement fails to prepare or execute.
+     * @throws \InvalidArgumentException
+     * @throws QueryException
      */
     final public function chunkSql(string $sql, array $bindings, int $size, callable $callback): void
     {
@@ -499,12 +388,12 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Prepare, bind, and execute — returning the statement for callers
-     * that manage the cursor themselves ({@see cursorSql()}).
+     * that manage the cursor themselves.
      *
-     * @param string $sql The SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind.
-     * @return \PDOStatement The executed statement.
-     * @throws QueryException When the statement fails to prepare or execute.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @return \PDOStatement
+     * @throws QueryException
      */
     private function prepareAndExecute(string $sql, array $bindings): \PDOStatement
     {
@@ -524,12 +413,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a raw SQL statement that returns no result set.
      *
-     * Use this for schema changes and other statements where you don't care
-     * about the outcome beyond whether it succeeded.
-     *
-     * @param string $sql The raw SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind, keyed by
-     *        column (named) or position (unnamed).
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
      */
     final public function statement(string $sql, array $bindings = []): void
     {
@@ -539,13 +424,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Run a raw SQL statement and return how many rows it affected.
      *
-     * Use this for INSERT, UPDATE, DELETE and similar statements where the
-     * affected-row count matters.
-     *
-     * @param string $sql The raw SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind, keyed by
-     *        column (named) or position (unnamed).
-     * @return int How many rows the statement affected.
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @return int
      */
     final public function affectingStatement(string $sql, array $bindings = []): int
     {
@@ -555,19 +436,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Bind values to the statement, adapting them through the codec.
      *
-     * The bind guard — the last line of defence before PDO. By the time a
-     * value reaches here it must already be part of the bindable union
-     * (scalars + \DateTimeInterface): the column cast has run on the model
-     * path, ToSqlValue objects have been extracted and inlined by the
-     * QueryBuilder/Grammar, and the codec has formatted datetimes to strings.
-     * Anything else is a bug upstream — fail fast rather than let PDO
-     * silently stringify an object.
-     *
-     * @param \PDOStatement $stmt The prepared statement to bind to.
-     * @param array<string|int, mixed> $bindings The values to bind, keyed by
-     *        column (named) or position (unnamed).
-     * @throws \InvalidArgumentException If a binding is not a scalar, null,
-     *         or \DateTimeInterface.
+     * @param  \PDOStatement  $stmt
+     * @param  array<string|int, mixed>  $bindings
+     * @throws \InvalidArgumentException
      */
     protected function bindValues(\PDOStatement $stmt, array $bindings): void
     {
@@ -603,13 +474,12 @@ abstract class SqlConnection implements ConnectionInterface
      * Prepare, bind, execute, and run the callback — the single run path.
      *
      * @template T
-     * 
-     * @param string $sql The SQL to run.
-     * @param array<string|int, mixed> $bindings The values to bind.
-     * @param callable(\PDOStatement): T $callback Receives the executed
-     *        statement and returns the operation's result.
-     * @return T The callback's result.
-     * @throws QueryException When the statement fails to prepare or execute.
+     *
+     * @param  string  $sql
+     * @param  array<string|int, mixed>  $bindings
+     * @param  callable(\PDOStatement): T  $callback
+     * @return T
+     * @throws QueryException
      */
     final protected function run(string $sql, array $bindings, callable $callback): mixed
     {
@@ -629,11 +499,9 @@ abstract class SqlConnection implements ConnectionInterface
     // ---- Encoding and Grammar ----
 
     /**
-     * The default codec for this connection — subclasses override to provide
-     * dialect-specific value adaptation (e.g. Postgres' microsecond
-     * datetimes).
+     * The default codec for this connection.
      *
-     * @return ValueCodecInterface The codec used for encode/decode.
+     * @return ValueCodecInterface
      */
     protected function getDefaultValueCodec(): ValueCodecInterface
     {
@@ -641,44 +509,30 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * The default query grammar for this connection — subclasses override to
-     * provide the dialect's SQL compilation (identifier quoting, RETURNING,
-     * locks, limit/offset).
+     * The default query grammar for this connection.
      *
-     * @return TGrammar The grammar used to compile queries.
+     * @return TGrammar
      */
     abstract protected function getDefaultQueryGrammar(): Grammar;
 
     /**
-     * The default schema grammar for this connection — subclasses override
-     * to provide the dialect's DDL compilation (identifier quoting, type
-     * mapping, auto-increment clause).
+     * The default schema grammar for this connection.
      *
-     * @return TSchemaGrammar The grammar used to compile schema changes.
+     * @return TSchemaGrammar
      */
     abstract protected function getDefaultSchemaGrammar(): SchemaGrammar;
 
     /**
-     * The dialect's live-schema reader — the factory hook for
-     * {@see $schemaInspector}, the read-side twin of the schema grammar.
+     * The dialect's live-schema reader.
      *
-     * @return TSchemaInspector The inspector used to read the live schema.
+     * @return TSchemaInspector
      */
     abstract protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 
     /**
-     * Whether this dialect's DDL is transactional — schema statements can
-     * run inside a transaction and roll back on failure.
+     * Whether this dialect's DDL is transactional.
      *
-     * SQLite and Postgres: YES (transactional DDL — a failed multi-change
-     * apply rolls back cleanly). MySQL: NO (every DDL statement performs
-     * an implicit commit — a mid-apply failure leaves earlier changes
-     * applied, and wrapping them in a transaction would silently commit
-     * them one by one while appearing atomic).
-     *
-     * The synchronizer's `transactional` option gates on this.
-     *
-     * @return bool True when DDL can run inside a transaction.
+     * @return bool
      */
     public function supportsTransactionalDdl(): bool
     {
@@ -690,9 +544,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Create a table from a blueprint, plus any indexes declared on it.
      *
-     * The table name comes from the blueprint itself — one source of truth.
-     *
-     * @param Blueprint $blueprint The table and columns to create.
+     * @param  Blueprint  $blueprint
      */
     final public function create(Blueprint $blueprint): void
     {
@@ -706,12 +558,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Alter a table — add or drop columns.
      *
-     * The table name comes from the blueprint itself — one source of truth.
-     * The operation picks the compile root (one public compiler per SQL
-     * statement — the grammar has no operation-enum dispatch).
-     *
-     * @param SchemaOperation $operation The operation to perform.
-     * @param Blueprint $blueprint The table and columns involved.
+     * @param  SchemaOperation  $operation
+     * @param  Blueprint  $blueprint
      */
     final public function alter(SchemaOperation $operation, Blueprint $blueprint): void
     {
@@ -728,7 +576,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Drop a table.
      *
-     * @param string $table The table name.
+     * @param  string  $table
      */
     final public function drop(string $table): void
     {
@@ -736,17 +584,10 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Apply a differ-produced change — dispatches create/alter/drop
-     * so the host never writes the match itself. The `create` case routes
-     * through {@see create()} so declared indexes are emitted too.
+     * Apply a differ-produced change — dispatches create/alter/drop so the
+     * host never writes the match itself.
      *
-     * NOTE: applying changes is NOT serialized across processes by itself.
-     * Wrap the whole `diff → apply` loop in a cross-process lock —
-     * {@see withLock()} (schema-sync convention: the name `'radiant:schema'`)
-     * or a {@see \BlueprintAU\Radiant\Database\Locks\Lock} adapter — when
-     * more than one deployment instance can migrate concurrently.
-     *
-     * @param \BlueprintAU\Radiant\Database\Schema\SchemaChange $change The change to apply.
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
      */
     final public function apply(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
     {
@@ -770,12 +611,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Rename a table.
      *
-     * Portable across all three dialects (`ALTER TABLE ... RENAME TO`).
-     * Non-destructive: the table and every row move together; indexes and
-     * constraints travel with the table.
-     *
-     * @param string $from The live table name.
-     * @param string $to The new table name.
+     * @param  string  $from
+     * @param  string  $to
      */
     final public function renameTable(string $from, string $to): void
     {
@@ -785,13 +622,9 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Rename a column on a table.
      *
-     * MySQL 8.0+, Postgres, and SQLite 3.25+ all support `RENAME COLUMN`
-     * with the same syntax. Non-destructive: the column's data travels
-     * with the rename.
-     *
-     * @param string $table The table the column is on.
-     * @param string $from The live column name.
-     * @param string $to The new column name.
+     * @param  string  $table
+     * @param  string  $from
+     * @param  string  $to
      */
     final public function renameColumn(string $table, string $from, string $to): void
     {
@@ -800,9 +633,9 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Apply every column rename declared on the blueprint, in declaration
-     * order — the `RenameColumn` change's execution body.
+     * order.
      *
-     * @param Blueprint $blueprint The blueprint carrying the renames.
+     * @param  Blueprint  $blueprint
      */
     private function applyColumnRenames(Blueprint $blueprint): void
     {
@@ -814,14 +647,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Modify one or more columns in place — the content-drift path.
      *
-     * The base executes the grammar's `compileModifyColumn()` statements
-     * (MySQL `MODIFY`, Postgres `ALTER COLUMN` clauses). Dialects without
-     * an in-place form (SQLite) OVERRIDE this method to route through
-     * {@see rebuildTable()} instead — the grammar's base throw is never
-     * reached on those dialects.
-     *
-     * @param Blueprint $blueprint The table-bound blueprint carrying the
-     *        desired (modified) column shapes.
+     * @param  Blueprint  $blueprint
      */
     public function modifyColumn(Blueprint $blueprint): void
     {
@@ -833,14 +659,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Add a foreign-key constraint to an existing table.
      *
-     * The base executes the grammar's `compileAddForeignKey()` (MySQL and
-     * Postgres). SQLite overrides to route through {@see rebuildTable()}.
-     * The change's blueprint carries the constraint shape AND its final
-     * name (derived at declaration — the same doctrine as indexes and
-     * checks); the connection renders it verbatim, no naming decisions.
-     *
-     * @param string $table The table to attach the constraint to.
-     * @param Blueprint $blueprint The blueprint carrying the FK shape.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     public function addForeignKey(string $table, Blueprint $blueprint): void
     {
@@ -859,13 +679,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Drop a foreign-key constraint from an existing table.
      *
-     * The base executes the grammar's `compileDropForeignKey()` (MySQL
-     * and Postgres). SQLite overrides to route through
-     * {@see rebuildTable()}. The blueprint carries the constraint name to
-     * drop (the live handle captured by the inspector).
-     *
-     * @param string $table The table the constraint is on.
-     * @param Blueprint $blueprint The blueprint carrying the drop target.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     public function dropForeignKey(string $table, Blueprint $blueprint): void
     {
@@ -880,11 +695,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Add a CHECK constraint to an existing table.
      *
-     * The base executes the grammar's `compileAddCheck()` (MySQL and
-     * Postgres). SQLite overrides to route through {@see rebuildTable()}.
-     *
-     * @param string $table The table to attach the constraint to.
-     * @param Blueprint $blueprint The blueprint carrying the CHECK shape.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     public function addCheck(string $table, Blueprint $blueprint): void
     {
@@ -903,11 +715,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Drop a CHECK constraint from an existing table.
      *
-     * The base executes the grammar's `compileDropCheck()` (Postgres).
-     * MySQL and SQLite override or route through {@see rebuildTable()}.
-     *
-     * @param string $table The table the constraint is on.
-     * @param Blueprint $blueprint The blueprint carrying the drop target.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     public function dropCheck(string $table, Blueprint $blueprint): void
     {
@@ -920,15 +729,10 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Rebuild a table's indexes — drop each index named on the blueprint
-     * (a differ-produced `AlterIndexes` change carries exactly the drifted
-     * indexes), then re-create it from the blueprint's declaration, options
-     * included (`WHERE` predicate, `NULLS NOT DISTINCT`).
+     * Rebuild a table's indexes — drop each index named on the blueprint,
+     * then re-create it from the blueprint's declaration.
      *
-     * Drops run before creates so a re-created index never collides with
-     * its stale self. Non-destructive: index rebuilds never touch rows.
-     *
-     * @param Blueprint $blueprint The indexes to rebuild (table-bound).
+     * @param  Blueprint  $blueprint
      */
     final public function rebuildIndexes(Blueprint $blueprint): void
     {
@@ -942,32 +746,16 @@ abstract class SqlConnection implements ConnectionInterface
     }
 
     /**
-     * Run the callback while holding a cross-process lock taken on THIS
-     * connection — the general serialization gate for anything that must
-     * not run twice concurrently (the schema `diff → apply` loop, cron
-     * overlap, cache warmups).
-     *
-     * `$name` is the mutual-exclusion domain: one name is one lock, so
-     * distinct jobs use distinct names and never serialize each other. The
-     * schema-sync convention is `'radiant:schema'` — only code doing schema
-     * work should pass it.
-     *
-     * Each dialect takes the lock natively: MySQL `GET_LOCK`/`RELEASE_LOCK`,
-     * Postgres a session advisory lock, SQLite a `BEGIN IMMEDIATE` write
-     * transaction (which serializes ALL writes and refuses to run inside an
-     * already-open transaction). The lock is held on THIS connection, so
-     * the guarded work must run on this same connection — pass a closure
-     * that closes over `$this` (or use the facade while this connection is
-     * current).
+     * Run the callback while holding a cross-process lock taken on this
+     * connection.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The work to run under lock.
-     * @param string $name The lock domain — distinct jobs, distinct names.
-     * @return TReturn The callback's return value.
-     * @throws UnsupportedFeatureException When the dialect has no native
-     *         cross-process lock (overridable — supply a Lock adapter then).
-     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     * @param  callable(): TReturn  $callback
+     * @param  string  $name  The lock domain — distinct jobs, distinct names.
+     * @return TReturn
+     * @throws UnsupportedFeatureException
+     * @throws \Throwable
      */
     public function withLock(callable $callback, string $name): mixed
     {
@@ -981,11 +769,6 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * The current transaction nesting depth.
      *
-     * Zero means no active transaction. Every nested
-     * {@see beginTransaction()} increments it; every commit/rollback
-     * decrements it. Savepoints are used for depth > 1 when the dialect
-     * supports them.
-     *
      * @var int
      */
     private int $transactionLevel = 0;
@@ -993,21 +776,13 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Monotonic savepoint sequence — makes savepoint names unique.
      *
-     * Depth-based names (`trans2`) collided when one connection served
-     * interleaved nested transactions from two coroutines: both frames
-     * would create `trans2`, and a `rollBack()` from one frame rolled back
-     * the other's unit of work. Names now carry a per-connection sequence
-     * number, so every frame's savepoint is distinct.
-     *
      * @var int
      */
     private int $savepointSequence = 0;
 
     /**
      * The savepoint created by the currently-innermost open nested frame,
-     * per depth (depth => name). commit/rollBack need the name of THE
-     * savepoint that frame created — with unique names this is tracked at
-     * creation time, not re-derived from depth.
+     * per depth.
      *
      * @var array<int, string>
      */
@@ -1016,14 +791,6 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * The coroutine that opened the current transaction.
      *
-     * Null when no transaction is open. When a transaction is open and a
-     * DIFFERENT coroutine calls begin/commit/rollback on this connection,
-     * the guard throws — see the class docblock's coroutine contract. The
-     * identifier is best-effort: a fiber's object id, a Swoole coroutine
-     * id, or the process id when no coroutine runtime is detected (in
-     * which case every caller matches and the guard is inert — classic
-     * FPM behavior is unchanged).
-     *
      * @var string|null
      */
     private ?string $transactionOwner = null;
@@ -1031,7 +798,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * The current transaction nesting depth.
      *
-     * @return int Zero when no transaction is active, otherwise the depth.
+     * @return int
      */
     final public function transactionLevel(): int
     {
@@ -1041,42 +808,35 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Whether this dialect supports savepoints for nested transactions.
      *
-     * @return bool True when savepoints can be used.
+     * @return bool
      */
     abstract protected function supportsSavepoints(): bool;
 
     /**
      * Create a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     abstract protected function createSavepoint(string $name): void;
 
     /**
      * Release a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     abstract protected function releaseSavepoint(string $name): void;
 
     /**
      * Roll back to a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     abstract protected function rollbackToSavepoint(string $name): void;
 
     /**
      * Begin a transaction, nesting via savepoints when supported.
      *
-     * When a transaction is already open on this connection and the caller
-     * is a different coroutine than the one that opened it, this throws —
-     * the level counter and savepoint registry are shared connection state,
-     * and interleaved frames would cross-commit each other's work. See the
-     * class docblock's coroutine contract.
-     *
-     * @throws \LogicException When a different coroutine touches an open
-     *         transaction on this connection.
+     * @throws \LogicException
      */
     final public function beginTransaction(): void
     {
@@ -1097,21 +857,6 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Commit the current transaction (or release the innermost savepoint).
-     *
-     * The level is decremented *before* the PDO call: if `commit()` throws
-     * (e.g. the connection dropped mid-transaction), the counter stays
-     * consistent with the database — the transaction is over server-side
-     * either way. Without this, one failed commit leaves the connection
-     * permanently convinced it is in a transaction.
-     *
-     * A failed top-level commit is reconciled with a best-effort server
-     * rollback before the exception propagates: a deferred-constraint
-     * violation or a deadlock kill aborts the *transaction*, not the
-     * *connection* — the server still holds the aborted transaction, and
-     * the next `beginTransaction()` on it would fail (or silently nest)
-     * for the rest of the process on a long-running runtime. Clearing it
-     * makes the connection reusable; the original exception is what the
-     * caller sees.
      */
     final public function commit(): void
     {
@@ -1133,10 +878,6 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Roll back the current transaction (or to the innermost savepoint).
-     *
-     * As with {@see commit()}, the level is decremented before the PDO call:
-     * a failed `rollBack()` must not leave the connection stuck believing a
-     * transaction exists that the server has already aborted.
      */
     final public function rollBack(): void
     {
@@ -1159,13 +900,6 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Best-effort clear of a server-side transaction after a failed
      * top-level commit/rollback.
-     *
-     * Both Postgres ("current transaction is aborted") and MySQL accept a
-     * rollback of an already-aborted transaction, so this succeeds in the
-     * deferred-constraint/deadlock cases and silently no-ops in the
-     * connection-drop case (where it throws — discarded: the original
-     * failure is the caller's problem, and a dead connection is evicted by
-     * the staleness machinery anyway).
      */
     private function reconcileFailedCommit(): void
     {
@@ -1180,13 +914,7 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * The current coroutine's identity, best-effort.
      *
-     * Distinguishes fibers, Swoole coroutines, and (when neither is
-     * detected) collapses to the process id — under classic FPM every
-     * caller is the same "coroutine", so the ownership guard is inert and
-     * adds no overhead beyond the comparison.
-     *
-     * @return string A stable identifier for the current execution
-     *         context.
+     * @return string
      */
     private function coroutineId(): string
     {
@@ -1208,14 +936,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * Fail fast when a different coroutine touches an open transaction.
      *
-     * The guard converts the silent cross-commit/cross-rollback race into a
-     * loud contract violation. Only fires when a transaction is open AND
-     * the caller's coroutine identity differs from the owner's; under a
-     * non-coroutine runtime every caller resolves to the same process id,
-     * so the check always passes.
-     *
-     * @param string $operation The operation name for the error message.
-     * @throws \LogicException When the coroutine contract is violated.
+     * @param  string  $operation
+     * @throws \LogicException
      */
     private function assertSameCoroutine(string $operation): void
     {
@@ -1234,8 +956,8 @@ abstract class SqlConnection implements ConnectionInterface
     /**
      * The savepoint name the frame at a given depth created, forgetting it.
      *
-     * @param int $level The depth of the frame being closed.
-     * @return string The savepoint name.
+     * @param  int  $level
+     * @return string
      */
     private function savepointNameFor(int $level): string
     {
@@ -1251,17 +973,9 @@ abstract class SqlConnection implements ConnectionInterface
      * Run a callback inside a transaction, committing on success and
      * rolling back on any exception.
      *
-     * If the rollback itself fails (a frequent companion of whatever threw
-     * in the first place — usually the connection died), the *original*
-     * exception propagates; the rollback failure is discarded rather than
-     * replacing it. The level was already decremented, so the connection is
-     * not left believing it is still in a transaction.
-     *
-     * @param callable(SqlConnection): mixed $callback The work to run inside
-     *        the transaction; receives this connection.
-     * @return mixed The callback's return value.
-     * @throws \Throwable Re-throws whatever the callback threw, after
-     *         rolling back.
+     * @param  callable(SqlConnection): mixed  $callback
+     * @return mixed
+     * @throws \Throwable
      */
     final public function transaction(callable $callback): mixed
     {
@@ -1283,14 +997,6 @@ abstract class SqlConnection implements ConnectionInterface
 
     /**
      * Best-effort rollback of an abandoned transaction at teardown.
-     *
-     * The `transaction()` helper already rolls back on exception; the MANUAL
-     * begin/commit/rollback API does not — a host exception that escapes
-     * without `rollBack()` leaves the transaction (and its row locks) open
-     * on a connection the manager caches, effectively forever under a
-     * long-running worker. The destructor reclaims it: rolling back on GC
-     * releases locks and unpoisons the connection's depth counter for the
-     * next borrower. It never throws — a destructor must not.
      *
      * @return void
      */

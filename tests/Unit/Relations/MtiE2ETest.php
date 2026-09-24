@@ -160,4 +160,23 @@ final class MtiE2ETest extends DatabaseTestCase
         self::assertSame(0, $this->connection->table('mti_users')->count());
         self::assertSame(0, $this->connection->table('mti_admins')->count());
     }
+
+    /**
+     * THE MTI NULL-KEY GUARD: a keyless delete throws instead of issuing
+     * `WHERE pk IS NULL` per partition.
+     */
+    public function testDeleteWithoutResolvedKeyThrows(): void
+    {
+        $admin = new MtiChild();
+        $admin->email = 'ghost@example.com';
+        $admin->level = 'junior';
+
+        $ref = new \ReflectionProperty(\BlueprintAU\Radiant\Model::class, 'exists');
+        $ref->setValue($admin, true);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('cannot target its row');
+
+        $admin->delete();
+    }
 }

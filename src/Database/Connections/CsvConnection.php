@@ -25,20 +25,8 @@ use Override;
  * features (joins, transactions, raw SQL) throw
  * {@see UnsupportedFeatureException}.
  *
- * The file is read in full on every select and rewritten on every write, so
- * this is for small, simple datasets — it exists to prove the backend
- * contract is portable, not for production workloads.
- *
- * ## Concurrency guarantee boundary
- *
- * The advisory lock guarantees consistency **only between CsvConnection
- * instances of this library** cooperating through the sidecar lock file.
- * Non-participating writers (another process using file_put_contents, an
- * editor save, any code that does not take the lock) can tear or truncate
- * the file a reader is processing — the `readonly` flag gates *this*
- * connection's writes, not the file's. The blocking file I/O
- * (fopen/flock/fputcsv/rename) is also not coroutine-aware: under
- * Swoole/Fiber runtimes it stalls the worker for the I/O duration.
+ * The advisory lock guarantees consistency only between CsvConnection
+ * instances of this library cooperating through the sidecar lock file.
  */
 final class CsvConnection implements ConnectionInterface
 {
@@ -48,10 +36,8 @@ final class CsvConnection implements ConnectionInterface
     private const LOCK_SHARED = false;
 
     /**
-     * @param string $filePath The CSV file to read from and write to.
-     * @param bool $readOnly When true, write operations (insert, update,
-     *        delete) throw {@see UnsupportedFeatureException} instead of
-     *        modifying the file.
+     * @param  string  $filePath  The CSV file to read from and write to.
+     * @param  bool  $readOnly  When true, write operations throw instead of modifying the file.
      */
     public function __construct(
         protected string $filePath,
@@ -61,8 +47,8 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Start a fluent query against a table, bound to this connection.
      *
-     * @param string $identifier The table name.
-     * @return QueryBuilder A new query builder, pre-bound to the table.
+     * @param  string  $identifier
+     * @return QueryBuilder
      */
     #[Override]
     public function table(string $identifier): QueryBuilder
@@ -73,16 +59,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Run the query and return the matching rows.
      *
-     * Applies the wheres, orders, limit/offset, and aggregates entirely in
-     * PHP. The feature gate is the SAME one user code can pre-flight: this
-     * connection names every feature it CAN execute, so a query rejected
-     * here is rejected by the identical check
-     * {@see QueryBuilder::assertSupports()} would have run.
-     *
-     * @param QueryBuilder $query The query to run.
-     * @return Collection<int,\stdClass> The matching rows, each as an object.
-     * @throws UnsupportedFeatureException When the query uses any feature
-     *         outside the CSV-supported set (only aggregates supported).
+     * @param  QueryBuilder  $query
+     * @return Collection<int,\stdClass>
+     * @throws UnsupportedFeatureException
      */
     #[Override]
     public function select(QueryBuilder $query): Collection
@@ -120,19 +99,11 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Run the query and return the FIRST selected column's values.
+     * Run the query and return the first selected column's values.
      *
-     * The dataset already lives fully in memory, so there is no driver
-     * columnar fetch to exploit — the win here is only skipping the
-     * per-row `(object)` casts {@see select()} performs. The evaluation
-     * pipeline is IDENTICAL (wheres → orders → limit/aggregates, the same
-     * feature gate); the projected rows are then reduced to the first
-     * field's values positionally.
-     *
-     * @param QueryBuilder $query The query to run.
-     * @return Collection<int, mixed> The first selected column's values, one per row.
-     * @throws UnsupportedFeatureException When the query uses any feature
-     *         outside the CSV-supported set (only aggregates supported).
+     * @param  QueryBuilder  $query
+     * @return Collection<int, mixed>
+     * @throws UnsupportedFeatureException
      */
     #[Override]
     public function selectColumn(QueryBuilder $query): Collection
@@ -192,23 +163,10 @@ final class CsvConnection implements ConnectionInterface
      * Group the filtered rows and compute the aggregates — the shared
      * aggregate pipeline behind {@see select()} and {@see selectColumn()}.
      *
-     * One row per group, carrying the group field values alongside the
-     * aggregates — the same shape the SQL backend produces. SQL's ungrouped
-     * aggregate ALWAYS returns exactly one row — an empty filtered dataset
-     * yields one row of neutral values (count 0, max/min/avg null, sum 0),
-     * not zero rows; that row is synthesized here.
-     *
-     * SQL orders AFTER grouping: the declared order-by applies to the
-     * AGGREGATED rows (whose keys are group columns and aggregate aliases
-     * like `count(*)`), not to the pre-sort of the raw rows. applyOrders()
-     * handles aliases because the order column is looked up on the computed
-     * row, where the alias IS a key.
-     *
-     * @param QueryBuilder $query The query (for groups + post-aggregate orders).
-     * @param list<array<string,mixed>> $rows The filtered, pre-ordered rows.
-     * @param array<string, array{0: string, string|Expression}> $aggregates
-     *        Alias → [function, column] from splitColumns().
-     * @return list<array<string,mixed>> One computed row per group, ordered.
+     * @param  QueryBuilder  $query
+     * @param  list<array<string,mixed>>  $rows
+     * @param  array<string, array{0: string, string|Expression}>  $aggregates  Alias → [function, column].
+     * @return list<array<string,mixed>>
      */
     private function aggregateRows(QueryBuilder $query, array $rows, array $aggregates): array
     {
@@ -238,16 +196,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Run the query and yield each matching row as it arrives.
      *
-     * The dataset already lives fully in memory (the file is read whole for
-     * every query), so there is nothing further to stream — this yields
-     * exactly the rows {@see select()} would return, one at a time. It keeps
-     * the portable contract honest: the same builder code runs against any
-     * backend, with per-backend materialization.
-     *
-     * @param QueryBuilder $query The query to run.
-     * @return \Generator<int,\stdClass> The matching rows, one at a time.
-     * @throws UnsupportedFeatureException When the query uses a feature CSV
-     *         can't support (joins, having, unions, locks).
+     * @param  QueryBuilder  $query
+     * @return \Generator<int,\stdClass>
+     * @throws UnsupportedFeatureException
      */
     #[Override]
     public function cursor(QueryBuilder $query): \Generator
@@ -258,10 +209,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Insert one or more rows into the file.
      *
-     * @param QueryBuilder $query The query for the table to insert into.
-     * @param array<string,mixed>|list<array<string,mixed>> $values A single
-     *        row or a list of rows.
-     * @return int The number of rows inserted.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>|list<array<string,mixed>>  $values
+     * @return int
      */
     #[Override]
     public function insert(QueryBuilder $query, array $values): int
@@ -288,9 +238,9 @@ final class CsvConnection implements ConnectionInterface
      *
      * CSV has no auto-increment id, so always returns null.
      *
-     * @param QueryBuilder $query The query.
-     * @param array<string,mixed> $values The row.
-     * @return string|int|null Always null.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return string|int|null
      */
     #[Override]
     public function insertGetId(QueryBuilder $query, array $values): string|int|null
@@ -302,9 +252,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Update the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to update.
-     * @param array<string,mixed> $values The columns to change and their new values.
-     * @return int How many rows were updated.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $values
+     * @return int
      */
     #[Override]
     public function update(QueryBuilder $query, array $values): int
@@ -333,8 +283,8 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Delete the rows matching the query's conditions.
      *
-     * @param QueryBuilder $query The query whose conditions select the rows to delete.
-     * @return int How many rows were deleted.
+     * @param  QueryBuilder  $query
+     * @return int
      */
     #[Override]
     public function delete(QueryBuilder $query): int
@@ -360,11 +310,10 @@ final class CsvConnection implements ConnectionInterface
      * Apply the query's where clauses to the rows, honoring boolean
      * connectors and nested groups.
      *
-     * @param QueryBuilder $query The query.
-     * @param list<array<string,mixed>> $rows The rows.
-     * @return list<array<string,mixed>> The filtered rows.
-     * @throws UnsupportedFeatureException When a where type CSV can't
-     *         evaluate is present.
+     * @param  QueryBuilder  $query
+     * @param  list<array<string,mixed>>  $rows
+     * @return list<array<string,mixed>>
+     * @throws UnsupportedFeatureException
      */
     private function applyWheres(QueryBuilder $query, array $rows): array
     {
@@ -383,11 +332,10 @@ final class CsvConnection implements ConnectionInterface
      * Evaluate a list of where clauses against a row, honoring the boolean
      * connectors between them.
      *
-     * @param list<array<string,mixed>> $wheres The where clauses.
-     * @param array<string,mixed> $row The row to test.
-     * @return bool True when the row matches.
-     * @throws UnsupportedFeatureException When a where type CSV can't
-     *         evaluate is hit.
+     * @param  list<array<string,mixed>>  $wheres
+     * @param  array<string,mixed>  $row
+     * @return bool
+     * @throws UnsupportedFeatureException
      */
     private function matchesWheres(array $wheres, array $row): bool
     {
@@ -410,11 +358,10 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Evaluate a single where clause against a row.
      *
-     * @param array<string,mixed> $where The where clause.
-     * @param array<string,mixed> $row The row to test.
-     * @return bool True when the row matches.
-     * @throws UnsupportedFeatureException When the where type is not
-     *         supported by the CSV backend.
+     * @param  array<string,mixed>  $where
+     * @param  array<string,mixed>  $row
+     * @return bool
+     * @throws UnsupportedFeatureException
      */
     private function matchesWhere(array $where, array $row): bool
     {
@@ -432,15 +379,13 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Evaluate an IS NULL / IS NOT NULL clause.
      *
-     * An EMPTY CELL counts as null: CSV has no null representation — a null
-     * written by update()/restore() lands as an empty cell and reads back
-     * as `''` — so treating `''` as null is the only way IS NULL semantics
-     * survive a write/read round trip (without it, a soft-deleted row that
-     * was restored stays invisible to the whereNull scope forever).
+     * An empty cell counts as null — CSV has no null representation, so
+     * treating `''` as null is the only way IS NULL semantics survive a
+     * write/read round trip.
      *
-     * @param mixed $value The row value.
-     * @param WhereOperator $operator The null operator.
-     * @return bool True when the value is (or is not) null.
+     * @param  mixed  $value
+     * @param  WhereOperator  $operator
+     * @return bool
      */
     private function matchesNull(mixed $value, WhereOperator $operator): bool
     {
@@ -451,10 +396,10 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Evaluate a BETWEEN / NOT BETWEEN clause.
      *
-     * @param mixed $value The row value.
-     * @param WhereOperator $operator The between operator.
-     * @param array{0: mixed, 1: mixed} $range The two bounds.
-     * @return bool True when the value is (or is not) between the bounds.
+     * @param  mixed  $value
+     * @param  WhereOperator  $operator
+     * @param  array{0: mixed, 1: mixed}  $range
+     * @return bool
      */
     private function matchesBetween(mixed $value, WhereOperator $operator, array $range): bool
     {
@@ -465,11 +410,11 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Evaluate a basic comparison (also handles IN / NOT IN, LIKE / NOT LIKE).
      *
-     * @param mixed $value The row value.
-     * @param WhereOperator $operator The comparison operator.
-     * @param mixed $operand The value to compare against.
-     * @return bool True when the comparison holds.
-     * @throws UnsupportedFeatureException When the operator is not supported.
+     * @param  mixed  $value
+     * @param  WhereOperator  $operator
+     * @param  mixed  $operand
+     * @return bool
+     * @throws UnsupportedFeatureException
      */
     private function matchesBasic(mixed $value, WhereOperator $operator, mixed $operand): bool
     {
@@ -493,23 +438,13 @@ final class CsvConnection implements ConnectionInterface
     /**
      * The canonical CSV comparator.
      *
-     * CSV cells are strings, but callers bind typed values (`where('id', 5)`,
-     * `where('id', 'IN', [5])`), so `'5'` must match `5`. PHP's loose `==`
-     * did that — but over-matched: `'0e1' == 0`, `'1e3' == 1000`,
-     * `'abc' == 0` are all true under `==`, so a filter against a
-     * low-trust file (uploaded CSV, shared export) matched rows it should
-     * not. The comparator is now the same strict-after-int-normalization
-     * comparison the model layer uses ({@see \BlueprintAU\Radiant\Collection::keyMatches()}):
-     * numeric integer strings collapse to int on BOTH sides, everything
-     * else compares strictly — `'5'` still matches `5`, `'0e1'` no longer
-     * matches `0`. One comparator serves equality and set membership, so
-     * `=` and `IN` stay consistent with each other and with the SQL
-     * backend's affinity semantics for integer columns.
+     * Numeric integer strings collapse to int on both sides, everything
+     * else compares strictly — `'5'` matches `5`, `'0e1'` does not match
+     * `0`.
      *
-     * @param mixed $value The row value.
-     * @param mixed $operand The bound operand.
-     * @return bool True when the values are equal under the normalized
-     *         strict comparison.
+     * @param  mixed  $value
+     * @param  mixed  $operand
+     * @return bool
      */
     private function valuesEqual(mixed $value, mixed $operand): bool
     {
@@ -531,14 +466,10 @@ final class CsvConnection implements ConnectionInterface
 
     /**
      * Normalize a scalar for strict comparison — integer numeric strings
-     * collapse to int (canonical), everything else passes through.
+     * collapse to int, everything else passes through.
      *
-     * Mirrors {@see \BlueprintAU\Radiant\Collection}'s key normalization:
-     * only `/^-?\d+$/` strings normalize, so `'0e1'`, `'1e3'`, and `'0x1A'
-     * stay strings and never equal a bound int.
-     *
-     * @param mixed $value The scalar value.
-     * @return mixed The normalized value.
+     * @param  mixed  $value
+     * @return mixed
      */
     private function normalizeCell(mixed $value): mixed
     {
@@ -553,9 +484,9 @@ final class CsvConnection implements ConnectionInterface
      * Set membership through the same canonical comparator as equality —
      * `IN` must never be stricter than `=` on the same backend.
      *
-     * @param mixed $value The row value.
-     * @param array<mixed> $operands The bound list.
-     * @return bool True when the value matches any operand.
+     * @param  mixed  $value
+     * @param  array<mixed>  $operands
+     * @return bool
      */
     private function valuesIn(mixed $value, array $operands): bool
     {
@@ -570,17 +501,12 @@ final class CsvConnection implements ConnectionInterface
     /**
      * SQL LIKE semantics for the few basic operators that need it.
      *
-     * The pattern is translated BEFORE quoting: each `%` becomes `.*` and
-     * each `_` becomes `.`, and every other character is preg_quoted — so
-     * a pattern like `a%b` compiles to `a.*b` (matching `ab`, `axb`), not
-     * the corrupted `a\\..*b` that quoting-first produced. The `s` flag
-     * makes `.` match newlines, so `%` spans multi-line cells like SQL's
-     * `%`. Matching is case-insensitive (a documented divergence from the
+     * Matching is case-insensitive (a documented divergence from the
      * case-sensitive LIKE of Postgres/SQLite).
      *
-     * @param string $value The subject.
-     * @param string $pattern The SQL pattern (% and _ wildcards).
-     * @return bool True when the value matches.
+     * @param  string  $value
+     * @param  string  $pattern
+     * @return bool
      */
     private function like(string $value, string $pattern): bool
     {
@@ -598,9 +524,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Apply the query's order-by clauses to the rows.
      *
-     * @param QueryBuilder $query The query builder.
-     * @param list<array<string,mixed>> $rows The rows.
-     * @return list<array<string,mixed>> The sorted rows.
+     * @param  QueryBuilder  $query
+     * @param  list<array<string,mixed>>  $rows
+     * @return list<array<string,mixed>>
      */
     private function applyOrders(QueryBuilder $query, array $rows): array
     {
@@ -623,14 +549,12 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Compare two CSV cells for ordering.
      *
-     * When BOTH cells are numeric, compare as numbers so `'10'` sorts after
-     * `'9'` (SQL numeric-column semantics); otherwise compare as strings.
-     * This normalizes the all-string storage against the mixed-width
-     * numeric columns real files contain.
+     * When both cells are numeric, compare as numbers; otherwise compare
+     * as strings.
      *
-     * @param mixed $a The first cell.
-     * @param mixed $b The second cell.
-     * @return int Negative, zero, or positive per spaceship semantics.
+     * @param  mixed  $a
+     * @param  mixed  $b
+     * @return int
      */
     private function compareCells(mixed $a, mixed $b): int
     {
@@ -643,9 +567,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Apply the limit and offset.
      *
-     * @param QueryBuilder $query The query.
-     * @param list<array<string,mixed>> $rows The rows.
-     * @return list<array<string,mixed>> The sliced rows.
+     * @param  QueryBuilder  $query
+     * @param  list<array<string,mixed>>  $rows
+     * @return list<array<string,mixed>>
      */
     private function applyLimit(QueryBuilder $query, array $rows): array
     {
@@ -657,16 +581,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Split the requested columns into plain fields and aggregates.
      *
-     * An {@see Aggregate} is evaluated in PHP over each group's rows (the
-     * supported functions are count, max, min, sum and avg); an
-     * {@see Expression} is raw SQL — not something a CSV connection can
-     * evaluate — so it is rejected.
-     *
-     * @param list<string|Expression|Aggregate> $columns The requested columns.
+     * @param  list<string|Expression|Aggregate>  $columns
      * @return array{0: list<string>, 1: array<string, array{0: string, string|Expression}>}
-     *         The plain fields, and aggregate result keys mapped to
-     *         [function, column].
-     * @throws UnsupportedFeatureException When a raw Expression is selected.
+     * @throws UnsupportedFeatureException
      */
     private function splitColumns(array $columns): array
     {
@@ -698,10 +615,10 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Project a row to only the requested plain fields.
      *
-     * @param array<string,mixed> $row The row.
-     * @param list<string> $fields The fields to keep.
-     * @return array<string,mixed> The projected row.
-     * @throws \InvalidArgumentException When a requested field is missing.
+     * @param  array<string,mixed>  $row
+     * @param  list<string>  $fields
+     * @return array<string,mixed>
+     * @throws \InvalidArgumentException
      */
     private function project(array $row, array $fields): array
     {
@@ -721,15 +638,11 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Compute aggregate functions over a group of rows.
      *
-     * @param list<array<string,mixed>> $rows The group's rows.
-     * @param array<string, array{0: string, string|Expression}> $aggregates
-     *        Alias → [function, column].
-     * @return array<string, mixed> Alias → computed value.
-     * @throws \InvalidArgumentException When the aggregate function is
-     *         unsupported.
-     * @throws UnsupportedFeatureException When an aggregate's argument is a
-     *         raw Expression — the CSV connection computes in PHP and
-     *         cannot evaluate arbitrary SQL.
+     * @param  list<array<string,mixed>>  $rows
+     * @param  array<string, array{0: string, string|Expression}>  $aggregates  Alias → [function, column].
+     * @return array<string, mixed>
+     * @throws \InvalidArgumentException
+     * @throws UnsupportedFeatureException
      */
     private function computeAggregates(array $rows, array $aggregates): array
     {
@@ -758,7 +671,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Fail fast when the connection is read-only.
      *
-     * @throws UnsupportedFeatureException When the connection is read-only.
+     * @throws UnsupportedFeatureException
      */
     private function assertWritable(): void
     {
@@ -770,10 +683,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * A file-backed connection has no transport to lose — it is never stale.
      *
-     * The interface method exists so a caching layer can treat every
-     * backend uniformly; the CSV backend simply never asks to be evicted.
-     *
-     * @return bool Always false.
+     * @return bool
      */
     #[Override]
     public function isStale(): bool
@@ -793,9 +703,9 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Whether a row matches every where clause of the query.
      *
-     * @param QueryBuilder $query The query.
-     * @param array<string,mixed> $row The row to test.
-     * @return bool True when the row matches.
+     * @param  QueryBuilder  $query
+     * @param  array<string,mixed>  $row
+     * @return bool
      */
     private function matchesAll(QueryBuilder $query, array $row): bool
     {
@@ -803,15 +713,11 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Read the CSV file into an array of associative rows, under a SHARED
+     * Read the CSV file into an array of associative rows, under a shared
      * lock that is released before returning.
      *
-     * A shared lock lets concurrent readers proceed in parallel while still
-     * excluding writers mid-rename — readers serialize only against writes,
-     * not against each other.
-     *
-     * @return list<array<string,mixed>> The rows.
-     * @throws \RuntimeException When the file cannot be opened or read.
+     * @return list<array<string,mixed>>
+     * @throws \RuntimeException
      */
     private function readRows(): array
     {
@@ -826,14 +732,11 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Read rows from the CSV file without taking any lock.
      *
-     * Used by the mutation path, which holds the sidecar lock across the
-     * whole read-modify-write cycle and hands the lock to
-     * {@see writeRows()}. The data handle is opened and closed here — it
-     * must never be confused with the lock handle, because the data file's
-     * inode is replaced by rename() on every write while the lock file's
-     * is stable.
+     * The data handle is opened and closed here — it must never be confused
+     * with the lock handle, because the data file's inode is replaced by
+     * rename() on every write while the lock file's is stable.
      *
-     * @return list<array<string,mixed>> The rows.
+     * @return list<array<string,mixed>>
      */
     private function readRowsUnlocked(): array
     {
@@ -860,11 +763,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Best-effort lock release on a failure path.
      *
-     * After writeRows() succeeded it has already released the lock; this
-     * guard makes double-release harmless so the mutation methods can use
-     * one catch block for every failure point.
-     *
-     * @param resource|null $lock The lock to release, if still held.
+     * @param  resource|null  $lock
      */
     private function releaseIfHeld($lock): void
     {
@@ -874,25 +773,16 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Acquire an advisory lock on the CSV file's **sidecar lock file**.
+     * Acquire an advisory lock on the CSV file's sidecar lock file.
      *
-     * The lock must NOT be taken on the CSV file itself: writes go through
-     * temp-file + rename(), which replaces the CSV's inode. A writer holding
-     * flock on the old inode would not exclude a second writer whose flock
-     * succeeds on the new inode — the lost-update race this sidecar exists
-     * to close. The sidecar's inode never changes, so every cooperating
-     * process serializes on the same object for the file's whole lifetime.
+     * The lock must not be taken on the CSV file itself: writes go through
+     * temp-file + rename(), which replaces the CSV's inode. The sidecar's
+     * inode never changes, so every cooperating process serializes on the
+     * same object for the file's whole lifetime.
      *
-     * The sidecar is created on demand and deliberately never deleted: a
-     * delete-then-recreate window would reintroduce the same inode race.
-     * It contains no data and is safe to leave in place.
-     *
-     * @param bool $exclusive True for LOCK_EX (writes — the read-modify-write
-     *        cycle), false for LOCK_SH (reads — concurrent readers proceed).
-     * @return resource The locked sidecar handle. Keep it; pass to
-     *         {@see releaseLock()} (or {@see writeRows()}, which takes
-     *         ownership of the lock).
-     * @throws \RuntimeException When the lock file cannot be opened or locked.
+     * @param  bool  $exclusive  True for LOCK_EX (writes), false for LOCK_SH (reads).
+     * @return resource
+     * @throws \RuntimeException
      */
     private function acquireLock(bool $exclusive = true)
     {
@@ -911,7 +801,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * The sidecar lock file path for the CSV file.
      *
-     * @return string The lock file path.
+     * @return string
      */
     private function lockPath(): string
     {
@@ -921,7 +811,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Release the sidecar lock and close its handle.
      *
-     * @param resource $lock The lock from {@see acquireLock()}.
+     * @param  resource  $lock
      */
     private function releaseLock($lock): void
     {
@@ -930,33 +820,16 @@ final class CsvConnection implements ConnectionInterface
     }
 
     /**
-     * Write rows back to the file atomically, replacing the write path's
-     * old truncate-then-write behavior.
-     *
-     * The data goes to a sibling temp file which then `rename()`s over the
-     * original — rename is atomic on POSIX, so a crash, OOM, or kill at any
-     * point leaves either the complete old file or the complete new one,
-     * never a truncated half-dataset. Call with the lock from
-     * {@see acquireLock()} to keep the exclusive lock across the whole
-     * read-modify-write; call with null to take the lock for a write-only
-     * cycle.
-     *
-     * The rename() replaces the CSV file's inode — harmless now that the
-     * lock lives on the stable sidecar file, which is exactly why the two
-     * handles must never be conflated.
+     * Write rows back to the file atomically via temp-file + rename().
      *
      * Every value is passed through {@see neutralizeFormula()} so a value
      * that begins with `=`, `+`, `-`, `@`, tab, or CR cannot execute as a
-     * spreadsheet formula when the file is opened in Excel/Sheets.
+     * spreadsheet formula when the file is opened in Excel/Sheets. Rows are
+     * aligned to the canonical column order — the header row.
      *
-     * Rows are aligned to the canonical column order — the header row —
-     * so a row whose keys were reordered (e.g. by an update adding a new
-     * column) cannot drift out of alignment with its neighbors.
-     *
-     * @param list<array<string,mixed>> $rows The rows to write.
-     * @param resource|null $lock An existing locked sidecar handle to reuse,
-     *        or null to acquire the lock for this write.
-     * @throws \RuntimeException When the file cannot be opened or written.
+     * @param  list<array<string,mixed>>  $rows
+     * @param  resource|null  $lock  An existing locked sidecar handle to reuse, or null to acquire the lock for this write.
+     * @throws \RuntimeException
      */
     private function writeRows(array $rows, $lock = null): void
     {
@@ -1040,13 +913,8 @@ final class CsvConnection implements ConnectionInterface
      * The canonical column order for a write: the union of the header row's
      * keys and every row's keys, in first-seen order.
      *
-     * Every row is then aligned to this order in {@see writeRows()}, so a
-     * row that gained or reordered columns cannot shift its values under
-     * the wrong header — the silent-corruption mode of the old
-     * `array_keys($rows[0])` header.
-     *
-     * @param list<array<string,mixed>> $rows The rows.
-     * @return list<string> The column names.
+     * @param  list<array<string,mixed>>  $rows
+     * @return list<string>
      */
     private function canonicalColumns(array $rows): array
     {
@@ -1064,15 +932,8 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Neutralize a value that a spreadsheet would evaluate as a formula.
      *
-     * Leading whitespace is stripped and the TRIMMED value is written with
-     * the quote prefix — spreadsheets trim before evaluating, so writing
-     * `'` + the original (space-prefixed) value would leave a cell that
-     * Excel/Sheets trims straight into a live formula. The prefix set
-     * covers `=`, `@`, `|` (LibreOffice DDE), tab, CR, and non-numeric
-     * `+`/`-`.
-     *
-     * @param string $value The raw value.
-     * @return string The neutralized value.
+     * @param  string  $value
+     * @return string
      */
     private function neutralizeFormula(string $value): string
     {

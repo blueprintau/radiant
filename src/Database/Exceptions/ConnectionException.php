@@ -15,9 +15,9 @@ namespace BlueprintAU\Radiant\Database\Exceptions;
 final class ConnectionException extends \RuntimeException
 {
     /**
-     * @param string $message The exception message.
-     * @param int $code The exception code.
-     * @param \Throwable|null $previous The underlying driver exception, if any.
+     * @param  string  $message
+     * @param  int  $code
+     * @param  \Throwable|null  $previous
      */
     public function __construct(
         string $message,

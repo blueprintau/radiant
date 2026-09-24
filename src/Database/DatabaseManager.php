@@ -56,12 +56,9 @@ final class DatabaseManager
     /**
      * Create a manager with the injected connections map.
      *
-     * @param array<string, array<string, mixed>> $connections The named
-     *        connections map — each value is a connection's settings
-     *        (driver, host, database, …).
-     * @param string $default The name of the active connection.
-     * @throws \InvalidArgumentException When the connections map is not
-     *         shaped like a connection map.
+     * @param  array<string, array<string, mixed>>  $connections
+     * @param  string  $default
+     * @throws \InvalidArgumentException
      */
     public function __construct(
         protected array $connections,
@@ -74,16 +71,8 @@ final class DatabaseManager
     /**
      * Validate the shape of the injected connections map.
      *
-     * Each entry must be an array declaring a string `driver` that is
-     * registered in the connector registry. A malformed map is a
-     * configuration error, not a runtime condition — it fails fast at
-     * construction time with a message that names the problem, rather than
-     * surfacing later as a confusing "undefined array key" or a null
-     * connector lookup.
-     *
-     * @param array<string, mixed> $connections The injected connections map.
-     * @throws \InvalidArgumentException When the map is not shaped like a
-     *         connection map.
+     * @param  array<string, mixed>  $connections
+     * @throws \InvalidArgumentException
      */
     private function validateConfig(array $connections): void
     {
@@ -95,15 +84,8 @@ final class DatabaseManager
     /**
      * Validate the shape of a single named connection's config.
      *
-     * Every connection must be an array declaring a string `driver` that is
-     * registered in the connector registry. The driver-specific fields are
-     * validated by the connector itself via {@see ConnectorInterface::validConfig()}.
-     *
-     * @param mixed $config The raw connection config value from the
-     *        connections map.
-     * @throws \InvalidArgumentException When the connection config is not an
-     *         array, does not declare a string `driver`, or names a driver
-     *         with no registered connector.
+     * @param  mixed  $config  Must be an array declaring a non-empty string `driver` key.
+     * @throws \InvalidArgumentException
      */
     private function validConnectionConfig(mixed $config): void
     {
@@ -135,14 +117,10 @@ final class DatabaseManager
     /**
      * Get a connection by name, building and caching it on first use.
      *
-     * A cached connection that has been marked stale — its run path hit a
-     * connection-loss error (server restart, network blip) — is discarded
-     * and rebuilt here, so one transient outage does not poison the
-     * connection for the life of the process.
+     * A cached connection marked stale is discarded and rebuilt here.
      *
-     * @param string|null $name The connection name; defaults to the
-     *        current connection.
-     * @return ConnectionInterface The resolved connection.
+     * @param  string|null  $name
+     * @return ConnectionInterface
      */
     public function connection(?string $name = null): ConnectionInterface
     {
@@ -159,18 +137,11 @@ final class DatabaseManager
     /**
      * Evict resolved connection(s) from the cache.
      *
-     * The lifecycle hook the staleness machinery cannot cover: a database
-     * restart that does not surface as a connection-loss error, a credential
-     * rotation, or a long-running worker that must not carry a connection
-     * across request/job boundaries. The next {@see connection()} call
-     * rebuilds from the (possibly new) config.
+     * Evicting rolls back any open transaction on the connection first.
      *
-     * Evicting rolls back any open transaction on the connection first —
-     * uncommitted work and its row locks must not survive eviction.
-     *
-     * @param string|null $name The connection to evict; null evicts all.
+     * @param  string|null  $name
      * @return void
-     * @throws \InvalidArgumentException When a named connection does not exist.
+     * @throws \InvalidArgumentException
      */
     public function flush(?string $name = null): void
     {
@@ -197,17 +168,10 @@ final class DatabaseManager
     /**
      * Replace a named connection's configuration and evict its instance.
      *
-     * The supported path for runtime credential rotation: the new config is
-     * validated exactly like boot-time config (same fail-fast contract),
-     * and the previously resolved connection — if any — is flushed, so the
-     * next {@see connection()} call builds with the new settings. Rebuilding
-     * a manager is NOT required.
-     *
-     * @param string $name The connection to reconfigure.
-     * @param array<string, mixed> $config The new settings.
+     * @param  string  $name
+     * @param  array<string, mixed>  $config
      * @return void
-     * @throws \InvalidArgumentException When the connection does not exist
-     *         or the new config is invalid.
+     * @throws \InvalidArgumentException
      */
     public function setConnectionConfig(string $name, array $config): void
     {
@@ -226,7 +190,7 @@ final class DatabaseManager
     /**
      * Evict one connection — a readable alias for {@see flush($name)}.
      *
-     * @param string $name The connection to disconnect.
+     * @param  string  $name
      * @return void
      */
     public function disconnect(string $name): void
@@ -237,14 +201,7 @@ final class DatabaseManager
     /**
      * Best-effort cleanup before a connection is evicted.
      *
-     * An evicted connection may still hold an open transaction (uncommitted
-     * work + row locks). The connection's own destructor rolls back on GC,
-     * but host-held references can outlive the cache slot — so eviction
-     * triggers the rollback NOW, non-throwing. The connection is dead
-     * anyway (that is why it is being evicted): a failed rollback means the
-     * server already aborted the transaction, which is the same end state.
-     *
-     * @param SqlConnection $connection The connection being evicted.
+     * @param  SqlConnection  $connection
      * @return void
      */
     private function discardConnection(SqlConnection $connection): void
@@ -261,17 +218,9 @@ final class DatabaseManager
     /**
      * Get a connection by name, narrowed to a SQL connection.
      *
-     * A convenience over {@see connection()} for call sites that need the
-     * SQL-only surface — raw SQL, transactions, schema. The narrowing is
-     * fail-fast: a non-SQL backend is a feature-contract violation, not a
-     * runtime condition to work around, so it throws rather than returning
-     * a connection that would explode later on the first SQL-only call.
-     *
-     * @param string|null $name The connection name; defaults to the
-     *        current connection.
-     * @return SqlConnection The resolved connection.
-     * @throws UnsupportedFeatureException When the connection is not a
-     *         {@see SqlConnection}.
+     * @param  string|null  $name
+     * @return SqlConnection
+     * @throws UnsupportedFeatureException
      */
     public function sqlConnection(?string $name = null): SqlConnection
     {
@@ -286,17 +235,9 @@ final class DatabaseManager
     /**
      * Register a new named connection at runtime.
      *
-     * The config is validated the same way as the constructor-injected
-     * map, so a malformed entry fails fast here rather than later as a
-     * confusing connector lookup. Adding a connection that already exists
-     * is a configuration error — it would silently shadow the original
-     * config, so it throws instead.
-     *
-     * @param string $name The connection name.
-     * @param array<string, mixed> $connection The connection settings
-     *        (driver, host, database, …).
-     * @throws \InvalidArgumentException When the config is invalid or a
-     *         connection with that name already exists.
+     * @param  string  $name
+     * @param  array<string, mixed>  $connection
+     * @throws \InvalidArgumentException
      */
     public function addConnection(string $name, array $connection): void
     {
@@ -313,10 +254,9 @@ final class DatabaseManager
     /**
      * Build a connection from its config via the registered connector.
      *
-     * @param array<string, mixed> $config The connection config.
-     * @return ConnectionInterface The built connection.
-     * @throws \InvalidArgumentException When no connector is registered
-     *         for the config's driver.
+     * @param  array<string, mixed>  $config
+     * @return ConnectionInterface
+     * @throws \InvalidArgumentException
      */
     protected function makeConnection(array $config): ConnectionInterface
     {
@@ -336,8 +276,8 @@ final class DatabaseManager
     /**
      * Whether a named connection exists in the connections map.
      *
-     * @param string $name The connection name.
-     * @return bool True when the connection is configured.
+     * @param  string  $name
+     * @return bool
      */
     public function hasConnection(string $name): bool
     {
@@ -347,7 +287,7 @@ final class DatabaseManager
     /**
      * The name of the active connection.
      *
-     * @return string The active connection name.
+     * @return string
      */
     public function currentConnection(): string
     {
@@ -359,9 +299,9 @@ final class DatabaseManager
      * previous one afterwards.
      *
      * @template T
-     * @param string $name The connection name to use inside the callback.
-     * @param \Closure(): T $callback The work to run.
-     * @return T Whatever the callback returns.
+     * @param  string  $name
+     * @param  \Closure(): T  $callback
+     * @return T
      */
     public function usingConnection(string $name, \Closure $callback): mixed
     {
@@ -377,11 +317,9 @@ final class DatabaseManager
     /**
      * Register a connector class for a driver.
      *
-     * @param string $driver The driver name (e.g. 'sqlite').
-     * @param class-string<ConnectorInterface> $connectorClass The connector
-     *        class, which must implement {@see ConnectorInterface}.
-     * @throws \InvalidArgumentException When the class does not implement
-     *         {@see ConnectorInterface}.
+     * @param  string  $driver
+     * @param  class-string<ConnectorInterface>  $connectorClass
+     * @throws \InvalidArgumentException
      */
     public function extendConnector(string $driver, string $connectorClass): void
     {

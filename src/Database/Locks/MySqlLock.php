@@ -21,8 +21,7 @@ use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
 final class MySqlLock extends SqlLock
 {
     /**
-     * @param MySqlConnection $connection The connection to lock on — the
-     *        guarded work must run on the same session.
+     * @param  MySqlConnection  $connection
      */
     public function __construct(MySqlConnection $connection)
     {
@@ -30,16 +29,13 @@ final class MySqlLock extends SqlLock
     }
 
     /**
-     * The lock acquisition statement — blocks up to 30s, then fails. The
-     * lock name is a bound parameter (position 1), not interpolated SQL.
+     * The lock acquisition statement — blocks up to 30s, then fails.
      *
-     * GET_LOCK returns 0 on timeout and NULL on error; making the failure
-     * visible requires converting the result to an error. The SELECT wraps
-     * the call in a signal expression that raises an error via a division
-     * by zero on a non-1 result — a portable SQL trick MySQL evaluates
-     * deterministically here.
+     * GET_LOCK returns 0 on timeout and NULL on error; the SELECT wraps the
+     * call in a signal expression that raises an error via a division by
+     * zero on a non-1 result.
      *
-     * @return string The parameterized lock SQL.
+     * @return string
      */
     #[\Override]
     protected function lockStatement(): string
@@ -48,9 +44,9 @@ final class MySqlLock extends SqlLock
     }
 
     /**
-     * The lock release statement. The lock name is a bound parameter.
+     * The lock release statement.
      *
-     * @return string The parameterized unlock SQL.
+     * @return string
      */
     #[\Override]
     protected function unlockStatement(): string

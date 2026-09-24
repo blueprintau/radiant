@@ -18,17 +18,11 @@ trait ConcatenatesStatements
     /**
      * Join statement segments with a single space, dropping empty ones.
      *
-     * This is the STATEMENT ASSEMBLY join: each argument is an optional part
-     * of one statement (a clause that may not apply, e.g. an empty WHERE),
-     * and an empty segment means "not present", not "zero items".
-     *
      * Do NOT use this to join list items (columns, orders, bindings) — those
-     * are non-optional and joined with plain `implode(', ' ...)` or
-     * `implode(' ' ...)`; silently filtering a genuinely empty list item
-     * there would hide a bug instead of surfacing it.
+     * are non-optional and joined with plain `implode`.
      *
-     * @param list<string> $segments The SQL segments.
-     * @return string The joined SQL.
+     * @param  list<string>  $segments
+     * @return string
      */
     protected function concatenate(array $segments): string
     {

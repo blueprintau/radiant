@@ -14,21 +14,9 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 /**
  * A fluent column definition for a `CREATE TABLE` / `ALTER TABLE`.
  *
- * Uses the same field vocabulary the ORM's `#[Column]` attribute will use
- * (type, length, nullable, unique, index, foreign, …) so a model's metadata
- * can drive DDL directly. The schema layer is DB-only:
- * it lives under `Database\` and is consumed by
- * {@see \BlueprintAU\Radiant\Database\Connections\SqlConnection::create()}
- * and {@see alter()}, independent of the ORM.
- *
- * **Blueprints are immutable.** Every declaration call (`column()`,
- * `index()`, `foreignKey()`, `check()`, the drops, the renames) returns a
- * NEW blueprint — the original is never modified, so a blueprint can be
- * shared, reused, and chained safely. Chain the results:
- *
- *     $bp = (new Blueprint('users'))
- *         ->id()
- *         ->string('name', 255);
+ * Uses the same field vocabulary the ORM's `#[Column]` attribute uses
+ * (type, length, nullable, unique, index, foreign, …) so a model's
+ * metadata can drive DDL directly.
  *
  * @phpstan-type ColumnShape array{
  *     type: ColumnType,
@@ -48,34 +36,21 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 final class Blueprint
 {
     /**
-     * The table this blueprint builds — required at construction, so
-     * index names can be derived (with the table prefix) the moment they
-     * are declared. Read via {@see getTable()}.
+     * The table this blueprint builds.
      *
      * @var string
      */
     private readonly string $table;
 
     /**
-     * The table this blueprint RENAMES, when the blueprint declares a
-     * table rename — the differ turns a declared rename into a real
-     * `RenameTable` change instead of a create+drop pair.
-     *
-     * A rename is a decision, not a guess: the differ's automatic
-     * detection stays advisory-only; the ONLY way to get an executable
-     * rename is to declare the old name here.
+     * The table this blueprint renames, when it declares a table rename.
      *
      * @var string|null
      */
     private string|null $renamedFrom = null;
 
     /**
-     * Column renames declared on this blueprint, in declaration order.
-     *
-     * Same rule as {@see $renamedFrom}: declaring the mapping
-     * (`renameColumn('name', 'full_name')`) makes the differ emit a real
-     * `RenameColumn` change instead of the (data-losing) drop-and-add
-     * advisory.
+     * The column renames declared on this blueprint.
      *
      * @var list<array{from: string, to: string}>
      */
@@ -84,7 +59,7 @@ final class Blueprint
     /**
      * Create a table-bound blueprint.
      *
-     * @param string $table The table the blueprint builds.
+     * @param  string  $table
      */
     public function __construct(string $table)
     {
@@ -94,7 +69,7 @@ final class Blueprint
     /**
      * The table this blueprint builds.
      *
-     * @return string The table name the blueprint is bound to.
+     * @return string
      */
     final public function getTable(): string
     {
@@ -102,16 +77,14 @@ final class Blueprint
     }
 
     /**
-     * A copy of this blueprint bound to a DIFFERENT table name.
+     * A copy of this blueprint bound to a different table name.
      *
-     * Used by the SQLite table rebuild: the desired shape must render
-     * against a temporary table name before the rename makes it the real
-     * name again. Everything carries over EXCEPT the indexes — derived
-     * index names embed the table name, and the rebuild re-creates them
-     * from the ORIGINAL blueprint after the rename.
+     * Indexes are not carried — derived index names embed the table name,
+     * and the rebuild re-creates them from the original blueprint after
+     * the rename.
      *
-     * @param string $table The new table name.
-     * @return static A copy bound to `$table`, without indexes.
+     * @param  string  $table
+     * @return static
      */
     public function forTable(string $table): static
     {
@@ -125,26 +98,18 @@ final class Blueprint
         $copy->columnRenames = $this->columnRenames;
         $copy->renamedFrom = $this->renamedFrom;
 
-        // Indexes are deliberately NOT carried: derived index names embed
-        // the bound table name (see the docblock).
         $copy->indexes = [];
 
         return $copy;
     }
 
     /**
-     * Declare that this blueprint RENAMES an existing table.
+     * Declare that this blueprint renames an existing table.
      *
-     * The blueprint's own table ({@see getTable()}) is the NEW name; the
-     * declared value is the OLD (live) name the rename starts from. The
-     * differ verifies the declaration against the live schema (old exists,
-     * new absent) before emitting an executable `RenameTable` change — a
-     * declaration that does not match reality falls through to the usual
-     * create/drop handling, never a wrong rename.
+     * @param  string  $oldTable
+     * @return static
      *
-     * @param string $oldTable The live table name being renamed.
-     * @return static A new blueprint with the rename declared; the original is unchanged.
-     * @throws \InvalidArgumentException When the old name is empty.
+     * @throws \InvalidArgumentException
      */
     public function renamedFrom(string $oldTable): static
     {
@@ -160,7 +125,7 @@ final class Blueprint
     /**
      * The table this blueprint renames, or null when it is not a rename.
      *
-     * @return string|null The old (live) table name, or null.
+     * @return string|null
      */
     final public function getRenamedFrom(): string|null
     {
@@ -170,16 +135,11 @@ final class Blueprint
     /**
      * Declare a column rename: the live column `$from` becomes `$to`.
      *
-     * The differ emits an executable `RenameColumn` change for each
-     * declared rename (after verifying the old column exists live) — the
-     * declaration IS the decision, so the data-losing drop-and-add shape
-     * never happens for a declared rename.
+     * @param  string  $from
+     * @param  string  $to
+     * @return static
      *
-     * @param string $from The live column name.
-     * @param string $to The new column name.
-     * @return static A new blueprint with the rename declared; the original is unchanged.
-     * @throws \InvalidArgumentException When either name is empty or the
-     *         names are equal.
+     * @throws \InvalidArgumentException
      */
     public function renameColumn(string $from, string $to): static
     {
@@ -239,33 +199,18 @@ final class Blueprint
     private array $dropChecks = [];
 
     /**
-     * Indexes (single or composite), each with its FINAL name.
-     *
-     * Every name stored here is exactly what the database will see: user-
-     * set names pass through verbatim; derived names are built at
-     * declaration time ({table}_{columns}_{kind}). The grammar renders
-     * them verbatim — it makes NO naming decisions.
-     *
-     * `where` is the partial-index predicate (spliced verbatim — the raw
-     * escape hatch); `nullsNotDistinct` upgrades a UNIQUE index to `NULLS
-     * NOT DISTINCT` semantics (Postgres 15+ — dialects that cannot render
-     * it fail fast at compile time).
+     * Indexes (single or composite), each with its final name.
      *
      * @var list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     private array $indexes = [];
 
     /**
-     * Derive the FINAL index name from its kind and columns.
+     * Derive the final index name from its kind and columns.
      *
-     * Shape: `{table}_{columns}_{kind}` for plain indexes,
-     * `{table}_{columns}_unique` for uniques (the kind suffix says WHAT
-     * the index is, so a unique and a plain index over the same columns
-     * can coexist).
-     *
-     * @param list<string> $columns The covered columns.
-     * @param bool $unique Whether the index is unique.
-     * @return string The final index name.
+     * @param  list<string>  $columns
+     * @param  bool  $unique
+     * @return string
      */
     private function deriveIndexName(array $columns, bool $unique): string
     {
@@ -275,20 +220,11 @@ final class Blueprint
     /**
      * Normalize a `foreign` reference to its `table.column` form.
      *
-     * Accepted inputs:
-     * - `table.column` — passes through (already explicit).
-     * - `table` — references that table's primary key (resolved as
-     *   `table.id` by convention).
-     * - a model class-string — resolves to its table, and the primary-key
-     *   column comes from the model's metadata when it declares a single
-     *   PK (a composite PK has no single default — use the explicit
-     *   `table.column` form instead).
+     * @param  class-string<\BlueprintAU\Radiant\Model>|string  $foreign
+     * @param  string  $column
+     * @return string
      *
-     * @param class-string<\BlueprintAU\Radiant\Model>|string $foreign The raw reference.
-     * @param string $column The local column name (for the message).
-     * @return string The normalized `table.column` reference.
-     * @throws \InvalidArgumentException When the reference is malformed or
-     *         a model reference cannot resolve.
+     * @throws \InvalidArgumentException
      */
     private function normalizeForeignReference(string $foreign, string $column): string
     {
@@ -339,25 +275,17 @@ final class Blueprint
     /**
      * Add an index over one or more columns.
      *
-     * A single column gets a derived name; multiple columns form a
-     * composite. When `$name` is given it is the WHOLE final name (used
-     * verbatim); when omitted the name is derived as
-     * `{table}_{columns}_{kind}`.
+     * When `$name` is given it is the whole final name; when omitted the
+     * name is derived as `{table}_{columns}_{kind}`.
      *
-     * @param string|null $name The final index name, or null to derive.
-     * @param list<string> $columns The columns to index.
-     * @param bool $unique Whether the index is unique.
-     * @param string|null $where The partial-index predicate, spliced
-     *        verbatim after `WHERE` (e.g. `deleted_at IS NULL`). Postgres
-     *        and SQLite render it; MySQL fails fast at compile time.
-     * @param bool $nullsNotDistinct Whether a UNIQUE index uses `NULLS NOT
-     *        DISTINCT` semantics (Postgres 15+; other dialects fail fast
-     *        at compile time). Meaningless on a non-unique index — fails
-     *        fast at declaration.
-     * @return static A new blueprint with the index declared; the original is unchanged.
-     * @throws \InvalidArgumentException When no columns are given, the
-     *         `where` predicate is empty, or `nullsNotDistinct` is set on
-     *         a non-unique index.
+     * @param  string|null  $name
+     * @param  list<string>  $columns
+     * @param  bool  $unique
+     * @param  string|null  $where  Partial-index predicate (Postgres, SQLite).
+     * @param  bool  $nullsNotDistinct  `NULLS NOT DISTINCT` (Postgres 15+).
+     * @return static
+     *
+     * @throws \InvalidArgumentException
      */
     public function index(
         ?string $name,
@@ -395,23 +323,19 @@ final class Blueprint
     /**
      * Add a column to the table.
      *
-     * @param ColumnType $type The column type.
-     * @param string $name The column name.
-     * @param bool $primaryKey Whether this is the primary key.
-     * @param bool $autoIncrement Whether the column auto-increments.
-     * @param bool $nullable Whether the column allows null.
-     * @param bool $unique Whether the column has a unique constraint.
-     * @param bool $index Whether the column has a plain index.
-     * @param int|null $length The column length (required for
-     *        {@see ColumnType::String}).
-     * @param mixed $default The column default.
-     * @param string|null $foreign A foreign key reference, `table.column`.
-     * @param ForeignKeyAction|string|null $onDelete The foreign key ON DELETE
-     *        action — validated via {@see ForeignKeyAction::fromChecked()} and
-     *        stored as the enum, so no raw string reaches the compiled DDL.
-     * @param ForeignKeyAction|string|null $onUpdate The foreign key ON UPDATE
-     *        action — validated the same way.
-     * @return static A new blueprint with the column appended; the original is unchanged.
+     * @param  ColumnType  $type
+     * @param  string  $name
+     * @param  bool  $primaryKey
+     * @param  bool  $autoIncrement
+     * @param  bool  $nullable
+     * @param  bool  $unique
+     * @param  bool  $index
+     * @param  int|null  $length
+     * @param  mixed  $default
+     * @param  string|null  $foreign
+     * @param  ForeignKeyAction|string|null  $onDelete
+     * @param  ForeignKeyAction|string|null  $onUpdate
+     * @return static
      */
     public function column(
         ColumnType $type,
@@ -468,10 +392,10 @@ final class Blueprint
     /**
      * Add a primary-key column.
      *
-     * @param string $name The column name.
-     * @param ColumnType $type The column type (default {@see ColumnType::BigInt}).
-     * @param bool $autoIncrement Whether the key auto-increments.
-     * @return static A new blueprint with the column appended; the original is unchanged.
+     * @param  string  $name
+     * @param  ColumnType  $type
+     * @param  bool  $autoIncrement
+     * @return static
      */
     public function id(string $name = 'id', ColumnType $type = ColumnType::BigInt, bool $autoIncrement = true): static
     {
@@ -481,9 +405,9 @@ final class Blueprint
     /**
      * Add a string column.
      *
-     * @param string $name The column name.
-     * @param int $length The column length (required).
-     * @return static A new blueprint with the column appended; the original is unchanged.
+     * @param  string  $name
+     * @param  int  $length
+     * @return static
      */
     public function string(string $name, int $length): static
     {
@@ -493,8 +417,8 @@ final class Blueprint
     /**
      * Add a nullable datetime column.
      *
-     * @param string $name The column name.
-     * @return static A new blueprint with the column appended; the original is unchanged.
+     * @param  string  $name
+     * @return static
      */
     public function timestamp(string $name): static
     {
@@ -504,14 +428,13 @@ final class Blueprint
     /**
      * Add a foreign-key column referencing another table.
      *
-     * @param string $name The column name.
-     * @param string $references The referenced table and column, `table.column`.
-     * @param ColumnType $type The column type (default {@see ColumnType::BigInt}).
-     * @param int|null $length The column length (required when the type is
-     *        {@see ColumnType::String}).
-     * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
-     * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
-     * @return static A new blueprint with the column appended; the original is unchanged.
+     * @param  string  $name
+     * @param  string  $references
+     * @param  ColumnType  $type
+     * @param  int|null  $length
+     * @param  ForeignKeyAction|string|null  $onDelete
+     * @param  ForeignKeyAction|string|null  $onUpdate
+     * @return static
      */
     public function foreignId(
         string $name,
@@ -527,18 +450,11 @@ final class Blueprint
     /**
      * Add a polymorphic (morph) column pair: `{name}_type` + `{name}_id`.
      *
-     * The pair carries NO foreign key: `{name}_type` names the target
-     * table at runtime (the related model's class-string), so no static
-     * FK can express the reference — the integrity is the relation's job,
-     * not the schema's. `{name}_type` is a 255-char string (room for a
-     * full class-string); `{name}_id` is a bigint.
+     * @param  string  $name
+     * @param  bool  $nullable
+     * @return static
      *
-     * @param string $name The morph alias prefix — emits `{name}_type` and
-     *        `{name}_id`.
-     * @param bool $nullable Whether both columns allow null (an optional
-     *        polymorphic relation).
-     * @return static A new blueprint with both columns appended; the original is unchanged.
-     * @throws \InvalidArgumentException When `$name` is empty.
+     * @throws \InvalidArgumentException
      */
     public function morphs(string $name, bool $nullable = false): static
     {
@@ -552,29 +468,14 @@ final class Blueprint
     }
 
     /**
-     * Foreign-key constraints — single-column ones declared via
-     * `foreign:` on a column are inline; this holds table-level
-     * (composite) constraints.
-     *
-     * Every entry carries its FINAL name (derived at declaration as
-     * `{table}_{columns}_foreign`) — the name is the drop handle, so the
-     * connection and the differ read the same string the database will
-     * see.
-     *
-     * `deferrable`/`initiallyDeferred` are Postgres-only options (MySQL and
-     * SQLite fail fast at compile time when set).
+     * The table-level foreign-key constraints declared on this blueprint.
      *
      * @var list<array{name: string, columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
     private array $foreignKeys = [];
 
     /**
-     * Table-level CHECK constraints, in declaration order.
-     *
-     * A CHECK is portable across all three dialects. The expression is
-     * spliced verbatim — the raw escape hatch. The NAME follows the same
-     * rule as {@see index()}: when given it is the WHOLE final name; when
-     * omitted it is DERIVED (`{table}_{columns}_check`).
+     * The table-level CHECK constraints declared on this blueprint.
      *
      * @var list<array{name: string, expression: string}>
      */
@@ -583,24 +484,19 @@ final class Blueprint
     /**
      * Add a foreign-key constraint over one or more columns.
      *
-     * Use this for composite foreign keys (e.g. a join table referencing a
-     * composite primary key). The referenced table and columns must have
-     * matching arity.
+     * Use this for composite foreign keys (e.g. a join table referencing
+     * a composite primary key).
      *
-     * @param list<string> $columns The local columns.
-     * @param string $referencesTable The referenced table.
-     * @param list<string> $referencesColumns The referenced columns.
-     * @param ForeignKeyAction|string|null $onDelete The ON DELETE action.
-     * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
-     * @param bool $deferrable Whether the constraint is DEFERRABLE
-     *        (Postgres only — other dialects fail fast at compile time).
-     * @param bool $initiallyDeferred Whether the constraint starts
-     *        INITIALLY DEFERRED (implies `$deferrable`; fails fast when
-     *        set without it).
-     * @return static A new blueprint with the constraint declared; the original is unchanged.
-     * @throws \InvalidArgumentException When the column/reference arity
-     *         mismatches, either list is empty, or `initiallyDeferred` is
-     *         set without `deferrable`.
+     * @param  list<string>  $columns
+     * @param  string  $referencesTable
+     * @param  list<string>  $referencesColumns
+     * @param  ForeignKeyAction|string|null  $onDelete
+     * @param  ForeignKeyAction|string|null  $onUpdate
+     * @param  bool  $deferrable  Postgres only.
+     * @param  bool  $initiallyDeferred  Postgres only; implies `$deferrable`.
+     * @return static
+     *
+     * @throws \InvalidArgumentException
      */
     public function foreignKey(
         array $columns,
@@ -643,20 +539,11 @@ final class Blueprint
     /**
      * Add a table-level CHECK constraint.
      *
-     * The expression is spliced verbatim after `CHECK` — the raw escape
-     * hatch for dialect functions and predicates (e.g. `price >= 0`,
-     * `status IN ('draft', 'published')`).
+     * @param  string  $expression
+     * @param  string|null  $name
+     * @return static
      *
-     * The NAME follows the same rule as {@see index()}: when given it is
-     * the WHOLE final name (used verbatim); when omitted it is derived as
-     * `{table}_{columns}_check` (the covered columns joined with
-     * underscores).
-     *
-     * @param string $expression The CHECK predicate, spliced verbatim.
-     * @param string|null $name The final constraint name, or null to
-     *        derive `{table}_{columns}_check`.
-     * @return static A new blueprint with the constraint declared; the original is unchanged.
-     * @throws \InvalidArgumentException When the expression is empty.
+     * @throws \InvalidArgumentException
      */
     public function check(string $expression, ?string $name = null): static
     {
@@ -673,16 +560,10 @@ final class Blueprint
     }
 
     /**
-     * Derive the FINAL CHECK name from the expression's column
-     * references.
+     * Derive the CHECK name from the expression's column references.
      *
-     * The columns are the declared column names appearing in the
-     * expression (longest-first so `user_id` wins over `id`); a CHECK
-     * over no declared column (e.g. `1 = 1`) falls back to a positional
-     * suffix.
-     *
-     * @param string $expression The CHECK predicate.
-     * @return string The final CHECK name.
+     * @param  string  $expression
+     * @return string
      */
     private function deriveCheckName(string $expression): string
     {
@@ -709,7 +590,7 @@ final class Blueprint
     }
 
     /**
-     * The CHECK constraints — every entry carries a final name.
+     * The CHECK constraints declared on this blueprint.
      *
      * @return list<array{name: string, expression: string}>
      */
@@ -719,12 +600,8 @@ final class Blueprint
     }
 
     /**
-     * Foreign-key constraints — derived single-column plus explicit
-     * composite.
-     *
-     * Single-column FKs come from columns declared with `foreign`;
-     * explicit {@see foreignKey()} declarations (single or composite) are
-     * appended after. Each entry's `references` is `[table, ...columns]`.
+     * The foreign-key constraints declared on this blueprint — derived
+     * single-column plus explicit composite.
      *
      * @return list<array{name: string, columns: list<string>, references: list<string>, onDelete: ForeignKeyAction|null, onUpdate: ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}>
      */
@@ -758,8 +635,8 @@ final class Blueprint
     /**
      * Drop a column (ALTER only).
      *
-     * @param string $name The column name.
-     * @return static A new blueprint with the drop declared; the original is unchanged.
+     * @param  string  $name
+     * @return static
      */
     public function dropColumn(string $name): static
     {
@@ -769,13 +646,10 @@ final class Blueprint
     }
 
     /**
-     * Drop a foreign-key constraint by its LIVE name (ALTER only).
+     * Drop a foreign-key constraint by its live name (ALTER only).
      *
-     * The name is the drop handle captured from the live schema, so the
-     * drop addresses the constraint that actually exists.
-     *
-     * @param string $name The live constraint name.
-     * @return static A new blueprint with the drop declared; the original is unchanged.
+     * @param  string  $name
+     * @return static
      */
     public function dropForeignKey(string $name): static
     {
@@ -785,10 +659,10 @@ final class Blueprint
     }
 
     /**
-     * Drop a CHECK constraint by its LIVE name (ALTER only).
+     * Drop a CHECK constraint by its live name (ALTER only).
      *
-     * @param string $name The live constraint name.
-     * @return static A new blueprint with the drop declared; the original is unchanged.
+     * @param  string  $name
+     * @return static
      */
     public function dropCheck(string $name): static
     {
@@ -838,8 +712,7 @@ final class Blueprint
     }
 
     /**
-     * The indexes — every index declared on the blueprint, each with its
-     * final name.
+     * The indexes declared on the blueprint.
      *
      * @return list<array{name: string, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
@@ -849,18 +722,12 @@ final class Blueprint
     }
 
     /**
-     * Build the desired-state Blueprint for a model from its cached
-     * metadata — the one place ORM metadata and DDL meet.
+     * Build the desired-state blueprint for a model from its metadata.
      *
-     * A pure mapping, no I/O: every `#[Column]` folds into a `column()`
-     * call (with its unique/index/foreign flags); the class-level
-     * `#[Unique]` / `#[ForeignKey]` / `#[Index]` attributes become
-     * explicit `index()` / `foreignKey()` declarations.
+     * @param  class-string<Model>  $model
+     * @return static
      *
-     * @param class-string<Model> $model The model class.
-     * @return static The desired-state blueprint.
-     * @throws \InvalidArgumentException When the model resolves no table
-     *         (a column-less model has nothing to sync).
+     * @throws \InvalidArgumentException
      */
     public static function fromMetadata(string $model): static
     {
@@ -876,9 +743,9 @@ final class Blueprint
 
         $blueprint = new static($tableName);
 
-        // MTI children: the child table holds ONLY the child's own columns
-        // plus the derived key — the inherited columns live on the parent's
-        // table (that is what multi-table inheritance means).
+        // MTI children: the child table holds only the child's own columns
+        // plus the derived key — the inherited columns live on the
+        // parent's table.
         foreach ($metadata->properties as $mapping) {
             $column = $mapping->column;
 
@@ -902,19 +769,9 @@ final class Blueprint
             );
         }
 
-        // Class-level composite constraints (the single-column flag cases
-        // already rode the column() calls above). For an MTI child, only
-        // constraints over the CHILD'S OWN columns belong on the child's
-        // table — a constraint covering an inherited column travels with
-        // the parent's table.
-        //
-        // Unique index naming: the default derives from the covered
-        // columns with a `_unique` suffix, so it cannot collide with a
-        // #[Index] over the same columns (which derives the bare column
-        // name); an explicit #[Unique(name: ...)] always wins. The
-        // duplicate-name guard at the bottom of this method catches any
-        // remaining collision at blueprint-build time instead of at DDL
-        // time.
+        // Class-level composite constraints. For an MTI child, only
+        // constraints over the child's own columns belong on the child's
+        // table.
         $ownColumns = null;
 
         if ($metadata->parentModel !== null) {
@@ -933,8 +790,7 @@ final class Blueprint
             }
 
             // null name → the blueprint derives the final
-            // `{table}_{columns}_unique` name; a user-set name passes
-            // through verbatim.
+            // `{table}_{columns}_unique` name.
             $blueprint = $blueprint->index(
                 $unique->name,
                 $unique->columns,

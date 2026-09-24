@@ -18,15 +18,14 @@ namespace BlueprintAU\Radiant\Database\Locks;
 final class NoopLock implements Lock
 {
     /**
-     * Run the callback immediately — no lock is taken. The name is
-     * accepted for signature parity with real adapters and ignored.
+     * Run the callback immediately — no lock is taken.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The work.
-     * @param string $name Ignored — nothing is locked.
-     * @return TReturn The callback's return value.
-     * @throws \Throwable Whatever the callback throws.
+     * @param  callable(): TReturn  $callback
+     * @param  string  $name  Ignored.
+     * @return TReturn
+     * @throws \Throwable
      */
     #[\Override]
     public function withLock(callable $callback, string $name): mixed

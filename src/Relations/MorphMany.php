@@ -24,8 +24,7 @@ final class MorphMany extends MorphOneOrMany
     /**
      * Run the constrained query.
      *
-     * @return Collection<TRelated> Every related model matching the
-     *         parent's key AND morph alias.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -36,17 +35,13 @@ final class MorphMany extends MorphOneOrMany
     /**
      * Distribute eager results onto parents, keyed by the FK value.
      *
-     * The type filter already ran in the eager query, so every result
-     * belongs to THIS parent class; grouping by FK value alone is correct.
      * Parents with no matching children get an empty collection — the
      * relation is loaded either way.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        Unused here — the FK lives on each related model (accepted for
-     *        signature parity with the through relations).
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
      */
     #[\Override]

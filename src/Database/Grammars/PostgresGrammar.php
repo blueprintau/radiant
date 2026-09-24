@@ -21,8 +21,8 @@ final class PostgresGrammar extends Grammar
     /**
      * Wrap an identifier in Postgres double quotes.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     protected function wrap(string $value): string
     {
@@ -32,7 +32,7 @@ final class PostgresGrammar extends Grammar
     /**
      * Whether the dialect supports `INSERT ... RETURNING`.
      *
-     * @return bool True — Postgres supports RETURNING.
+     * @return bool
      */
     public function usesReturning(): bool
     {
@@ -42,8 +42,8 @@ final class PostgresGrammar extends Grammar
     /**
      * Compile the row lock for Postgres.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The lock clause, or an empty string when there is none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileLock(QueryBuilder $builder): string
     {

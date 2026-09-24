@@ -209,8 +209,7 @@ property stays honestly uninitialized.
 ## Soft deletes
 
 Opt in by applying the `SoftDeletes` trait — the delete column
-(`deleted_at` by default, overridable via `deletedAtColumn()`) is declared
-for you if you haven't:
+(`deleted_at` by default) is declared for you if you haven't:
 
 ```php
 use BlueprintAU\Radiant\Model;
@@ -231,6 +230,30 @@ Queries exclude trashed rows automatically; `withTrashed()` includes them
 and `onlyTrashed()` returns just them. Soft deletes use only the portable
 core (`update()` + `whereKey()`), so they work on any backend — CSV
 included.
+
+**Renaming the delete column.** Override `deletedAtColumn()` to return
+the column's name — the returned name MUST match a declared `#[Column]`
+on the model (datetime, nullable), otherwise metadata building fails
+fast: an override is an explicit claim that the column is declared, so a
+typo or forgotten declaration is a build-time error instead of a silently
+injected phantom column. Returning `null` (the default) uses `deleted_at`
+and injects a synthetic column unless you declare your own `#[Column]` of
+that name (a user declaration wins):
+
+```php
+class Post extends Model
+{
+    use SoftDeletes;
+
+    public static function deletedAtColumn(): ?string
+    {
+        return 'removed_at';
+    }
+
+    #[Column(type: ColumnType::DateTime, name: 'removed_at', nullable: true)]
+    public ?\Carbon\Carbon $removedAt;
+}
+```
 
 ## Multi-table inheritance
 

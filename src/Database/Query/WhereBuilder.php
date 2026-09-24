@@ -12,19 +12,9 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * The where-family builder handed to {@see QueryBuilder::whereNested()}
  * callbacks — the vocabulary a parenthesized group may legally carry.
  *
- * A nested group is a filter, not a query: it cannot JOIN, select, order,
- * or page. This class exposes ONLY the where-family, so a callback cannot
- * reach for structure a group has no place declaring.
- *
  * It holds no clauses itself — it delegates everything to the underlying
  * query builder, where the clause list, bindings, and validation already
- * live. That keeps one source of truth: no duplicated validation, no
- * merge step, and no drift when a clause shape changes.
- *
- * **The builder is immutable like the query builder it wraps.** Every
- * method returns a NEW WhereBuilder — the original is never modified. In
- * a `whereNested()` callback, RETURN the result; a discarded return is a
- * no-op.
+ * live.
  *
  * @phpstan-import-type WhereClause from \BlueprintAU\Radiant\Database\Query\QueryBuilder
  */
@@ -35,7 +25,7 @@ final class WhereBuilder
     /**
      * Create a builder over the given query.
      *
-     * @param QueryBuilder $query The builder the clauses land on.
+     * @param  QueryBuilder  $query
      */
     public function __construct(
         private readonly QueryBuilder $query,
@@ -43,14 +33,13 @@ final class WhereBuilder
     }
 
     /**
-     * Add a where clause — every other filter funnels into this.
+     * Add a where clause to the query.
      *
-     * @param string|Expression $column The column to compare — or a raw SQL
-     *        fragment wrapped in an Expression.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW builder with the clause; the original is unchanged.
+     * @param  string|Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function where(
         string|Expression $column,
@@ -62,12 +51,11 @@ final class WhereBuilder
     }
 
     /**
-     * Add a nested where group — a parenthesized set of conditions.
+     * Add a nested where group to the query.
      *
-     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
-     *        group's builder and RETURNS the constrained group.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW builder with the group; the original is unchanged.
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereNested(
         callable $callback,
@@ -77,12 +65,12 @@ final class WhereBuilder
     }
 
     /**
-     * Add a raw SQL where clause (e.g. `lower(email) = ?`).
+     * Add a raw where clause to the query.
      *
-     * @param string $sql The raw SQL condition.
-     * @param array<int, mixed> $bindings The values to bind into the condition.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW builder with the clause; the original is unchanged.
+     * @param  string  $sql
+     * @param  array<int, mixed>  $bindings
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -90,13 +78,13 @@ final class WhereBuilder
     }
 
     /**
-     * Add a column-to-column comparison.
+     * Add a where clause comparing two columns to the query.
      *
-     * @param string $first The first column.
-     * @param \BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW builder with the comparison; the original is unchanged.
+     * @param  string  $first
+     * @param  \BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator|string  $operator
+     * @param  string  $second
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereColumn(string $first, \BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -104,9 +92,9 @@ final class WhereBuilder
     }
 
     /**
-     * The group's compiled where clauses.
+     * Get the where clauses of the query.
      *
-     * @return list<WhereClause> The where clauses.
+     * @return list<WhereClause>
      */
     public function getWheres(): array
     {
@@ -114,10 +102,9 @@ final class WhereBuilder
     }
 
     /**
-     * The underlying query builder this builder delegates to (internal —
-     * used by whereNested()'s storage path).
+     * Get the underlying query builder.
      *
-     * @return QueryBuilder The wrapped builder.
+     * @return QueryBuilder
      */
     public function getNestedQuery(): QueryBuilder
     {

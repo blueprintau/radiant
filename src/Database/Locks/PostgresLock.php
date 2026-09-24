@@ -19,8 +19,7 @@ use BlueprintAU\Radiant\Database\Connections\PostgresConnection;
 final class PostgresLock extends SqlLock
 {
     /**
-     * @param PostgresConnection $connection The connection to lock on — the
-     *        guarded work must run on the same session.
+     * @param  PostgresConnection  $connection
      */
     public function __construct(PostgresConnection $connection)
     {
@@ -28,10 +27,9 @@ final class PostgresLock extends SqlLock
     }
 
     /**
-     * The lock acquisition statement — blocks until acquired. The lock
-     * name is a bound parameter (position 1), not interpolated SQL.
+     * The lock acquisition statement — blocks until acquired.
      *
-     * @return string The parameterized lock SQL.
+     * @return string
      */
     #[\Override]
     protected function lockStatement(): string
@@ -40,9 +38,9 @@ final class PostgresLock extends SqlLock
     }
 
     /**
-     * The lock release statement. The lock name is a bound parameter.
+     * The lock release statement.
      *
-     * @return string The parameterized unlock SQL.
+     * @return string
      */
     #[\Override]
     protected function unlockStatement(): string

@@ -18,9 +18,7 @@ use Override;
 final class PostgresConnector extends SqlConnector
 {
     /**
-     * `sslmode` values Postgres accepts. The config field is allowlisted so
-     * the DSN-integrated setting cannot be hijacked by a metacharacter
-     * trick or set to a non-TLS mode by accident.
+     * `sslmode` values Postgres accepts.
      *
      * @var list<string>
      */
@@ -29,9 +27,9 @@ final class PostgresConnector extends SqlConnector
     /**
      * Validate a configured sslmode against the allowlist.
      *
-     * @param mixed $sslmode The raw sslmode config value.
-     * @return string The validated sslmode.
-     * @throws \InvalidArgumentException When the sslmode is not one Postgres accepts.
+     * @param  mixed  $sslmode
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private function validSslmode(mixed $sslmode): string
     {
@@ -46,12 +44,11 @@ final class PostgresConnector extends SqlConnector
     /**
      * Create a Postgres connection from the given config.
      *
-     * @param array{host?: mixed, port?: mixed, database?: mixed, sslmode?: mixed,
+     * @param  array{host?: mixed, port?: mixed, database?: mixed, sslmode?: mixed,
      *        username?: string|null, password?: string|null, options?: PdoOptions,
-     *        ...<mixed>} $config The connection config (host, port, database,
-     *        sslmode, username, password, …).
-     * @return PostgresConnection A ready-to-use Postgres connection.
-     * @throws \InvalidArgumentException If $host or $database is missing.
+     *        ...<mixed>}  $config
+     * @return PostgresConnection
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function connect(array $config): SqlConnection
@@ -100,13 +97,8 @@ final class PostgresConnector extends SqlConnector
     /**
      * Validate the shape of a Postgres connection config.
      *
-     * Postgres needs `host` and `database` — the only fields it consumes. The
-     * shared `driver` key is owned (and validated) by
-     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
-     *
-     * @param array<string,mixed> $config The connection config to validate.
-     * @throws \InvalidArgumentException When a required field is missing or
-     *         malformed.
+     * @param  array<string,mixed>  $config
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function validConfig(array $config): void

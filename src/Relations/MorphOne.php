@@ -43,7 +43,7 @@ final class MorphOne extends MorphOneOrMany
     /**
      * Run the constrained query and keep only the first match.
      *
-     * @return Collection<TRelated> A one-element (or empty) collection.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -56,8 +56,8 @@ final class MorphOne extends MorphOneOrMany
     /**
      * Order the eager-load query stably, mirroring the lazy path.
      *
-     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
+     * @param  ModelQueryBuilder<TRelated>  $query
+     * @return ModelQueryBuilder<TRelated>
      */
     #[\Override]
     protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
@@ -74,15 +74,10 @@ final class MorphOne extends MorphOneOrMany
     /**
      * Distribute eager results onto parents — first match per FK value.
      *
-     * The type filter already ran in the eager query, so every result
-     * belongs to THIS parent class; grouping by FK value alone is correct.
-     *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        Unused here — the FK lives on each related model (accepted for
-     *        signature parity with the through relations).
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
      */
     #[\Override]

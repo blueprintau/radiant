@@ -24,10 +24,8 @@ final class Check
     /**
      * Create a CHECK constraint declaration.
      *
-     * @param string $expression The CHECK predicate, spliced verbatim
-     *        (e.g. `price >= 0`, `status IN ('draft', 'published')`).
-     * @param string|null $name The constraint name; `{table}_{name}_check`
-     *        is derived when null.
+     * @param  string  $expression
+     * @param  string|null  $name
      */
     public function __construct(
         public string $expression,

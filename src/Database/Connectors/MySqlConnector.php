@@ -21,12 +21,6 @@ final class MySqlConnector extends SqlConnector
      * Charsets MySQL accepts on `SET NAMES` — the allowlist the configured
      * charset must match.
      *
-     * The charset is interpolated into both the DSN and a raw `SET NAMES`
-     * statement, so an unvalidated value is a config-driven SQL-injection
-     * sink. Collation suffixes (`utf8mb4_unicode_ci`-style) are not accepted:
-     * `SET NAMES` takes a charset, with an optional separate collation —
-     * pass a bare charset here.
-     *
      * @var list<string>
      */
     private const ALLOWED_CHARSETS = [
@@ -39,9 +33,9 @@ final class MySqlConnector extends SqlConnector
     /**
      * Validate a configured charset against the allowlist.
      *
-     * @param mixed $charset The raw charset config value.
-     * @return string The validated charset.
-     * @throws \InvalidArgumentException When the charset is not a known MySQL charset.
+     * @param  mixed  $charset
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private function validCharset(mixed $charset): string
     {
@@ -56,15 +50,11 @@ final class MySqlConnector extends SqlConnector
     }
 
     /**
-     * MySQL-mandated PDO attributes — merged over the base forced layer by
-     * {@see SqlConnector::createPdo()}, so only the MySQL addition is
-     * declared here.
+     * MySQL-mandated PDO attributes — merged over the base forced layer.
      *
      * `PDO::MYSQL_ATTR_FOUND_ROWS` makes UPDATE/DELETE return the number of
-     * rows *actually changed* rather than rows *matched*. The update()
-     * contract is "affected rows", and dirty-tracking save() depends on that
-     * being honest — so this is forced on. (ERRMODE and EMULATE_PREPARES are
-     * forced by the base connector for every dialect.)
+     * rows actually changed rather than rows matched, which the update()
+     * contract depends on.
      *
      * @return array<int, int|bool>
      */
@@ -79,16 +69,11 @@ final class MySqlConnector extends SqlConnector
     /**
      * Create a MySQL connection from the given config.
      *
-     * The charset is set once at connect time, driven by config, so it can't
-     * be a static forced option.
-     *
-     * @param array{host?: mixed, port?: mixed, database?: mixed, username?: string|null,
+     * @param  array{host?: mixed, port?: mixed, database?: mixed, username?: string|null,
      *        password?: string|null, charset?: string, options?: PdoOptions,
-     *        ...<mixed>} $config The connection config (host, port, database,
-     *        username, password, charset, …).
-     * @return MySqlConnection A ready-to-use MySQL connection.
-     * @throws \InvalidArgumentException If a required field is missing or
-     *         malformed.
+     *        ...<mixed>}  $config
+     * @return MySqlConnection
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function connect(array $config): SqlConnection
@@ -130,13 +115,8 @@ final class MySqlConnector extends SqlConnector
     /**
      * Validate the shape of a MySQL connection config.
      *
-     * MySQL needs `host`, `port` and `database` — the only fields it consumes.
-     * The shared `driver` key is owned (and validated) by
-     * {@see \BlueprintAU\Radiant\Database\DatabaseManager}.
-     *
-     * @param array<string,mixed> $config The connection config to validate.
-     * @throws \InvalidArgumentException When a required field is missing or
-     *         malformed.
+     * @param  array<string,mixed>  $config
+     * @throws \InvalidArgumentException
      */
     #[Override]
     public function validConfig(array $config): void

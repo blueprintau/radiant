@@ -7,12 +7,6 @@ namespace BlueprintAU\Radiant\Database\Schema\Enums;
 /**
  * The referential actions a foreign key's `ON DELETE` / `ON UPDATE` clause
  * can take.
- *
- * The action text is interpolated verbatim into the compiled DDL, so it is
- * validated through {@see ForeignKeyAction::fromChecked()} at the API
- * boundary — a raw string here is a SQL-injection sink, not a convenience.
- * Using an enum at the call site makes an invalid action a static-analysis
- * error instead of a runtime throw.
  */
 enum ForeignKeyAction: string
 {
@@ -34,12 +28,9 @@ enum ForeignKeyAction: string
     /**
      * Resolve a string to a case, failing fast on anything else.
      *
-     * Case-insensitive and space-insensitive, so `'cascade'`, `'CASCADE'`,
-     * and `'set null'` all resolve to their canonical case.
-     *
-     * @param string $action The raw action string.
-     * @return self The matching case.
-     * @throws \InvalidArgumentException When the string is not a referential action.
+     * @param  string  $action
+     * @return self
+     * @throws \InvalidArgumentException
      */
     public static function fromChecked(string $action): self
     {

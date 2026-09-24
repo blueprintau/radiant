@@ -26,11 +26,7 @@ use BlueprintAU\Radiant\Attributes\Unique;
 final class ClassMetadata
 {
     /**
-     * The column → owning-table map (computed by the factory at build —
-     * resolving an owner's table must consult the metadata cache, and the
-     * class's OWN entry is not seeded until construction returns, so the
-     * self-reference is resolved by the factory, which already knows the
-     * table name).
+     * The column → owning-table map (computed by the factory at build).
      *
      * @var array<string, string>
      */
@@ -40,11 +36,6 @@ final class ClassMetadata
      * The DB column name → mapping hash map (precomputed in the
      * constructor).
      *
-     * The hot paths — `attribute()`, `castForWrite()`, key reads during
-     * eager matching — used to walk the property-keyed list per call
-     * (O(columns) each, O(columns × rows) per load). This map makes every
-     * lookup O(1).
-     *
      * @var array<string, PropertyMapping>
      */
     private readonly array $columnsByDbName;
@@ -52,30 +43,16 @@ final class ClassMetadata
     /**
      * Create class metadata.
      *
-     * @param string|null $tableName The resolved table name, or null for a
-     *        class with no columns of its own (rule 4).
-     * @param PropertyMapping[] $properties The merged column mappings,
-     *        keyed by property name (leaf declaration wins).
-     * @param list<Column> $primaryKeys The primary-key column declarations.
-     * @param list<Unique> $uniques Every `#[Unique]` on the class hierarchy.
-     *        Column names are validated against `$properties` at build.
-     * @param list<Index> $indexes Every `#[Index]`.
-     * @param list<ForeignKey> $foreignKeys Every `#[ForeignKey]`.
-     * @param list<Check> $checks Every `#[Check]` on the class hierarchy.
-     * @param string|null $softDeleteColumn The resolved soft-delete column
-     *        name when the class uses {@see SoftDeletes}, else null. Carried
-     *        on the metadata so query building can apply the scope without
-     *        calling the trait's static method on a model class that may
-     *        not have it.
-     * @param class-string<Model>|null $parentModel The nearest TABLE-OWNING
-     *        ancestor when this class is a multi-table-inheritance child —
-     *        a concrete subclass that declares its own `#[Table]` (and, by
-     *        the derivation rules, its own columns), whose table holds its
-     *        own columns while the ancestor's table holds the inherited
-     *        ones. Null for every non-MTI class.
-     * @param array<string, string> $tablePartitions The column →
-     *        owning-table map, precomputed by the factory (see the
-     *        property docblock for why it cannot be derived here).
+     * @param  string|null  $tableName
+     * @param  PropertyMapping[]  $properties
+     * @param  list<Column>  $primaryKeys
+     * @param  list<Unique>  $uniques
+     * @param  list<Index>  $indexes
+     * @param  list<ForeignKey>  $foreignKeys
+     * @param  list<Check>  $checks
+     * @param  string|null  $softDeleteColumn  The column name when the class uses {@see SoftDeletes}.
+     * @param  class-string<Model>|null  $parentModel
+     * @param  array<string, string>  $tablePartitions
      */
     public function __construct(
         public readonly ?string $tableName,
@@ -107,9 +84,9 @@ final class ClassMetadata
     /**
      * The mapping for a DB column name — O(1) via the hash map.
      *
-     * @param string $columnName The DB column name.
-     * @return PropertyMapping The mapping.
-     * @throws \InvalidArgumentException When the column is unknown.
+     * @param  string  $columnName
+     * @return PropertyMapping
+     * @throws \InvalidArgumentException
      */
     public function mappingFor(string $columnName): PropertyMapping
     {
@@ -122,8 +99,8 @@ final class ClassMetadata
     /**
      * Whether a DB column name exists on this class — O(1).
      *
-     * @param string $columnName The DB column name.
-     * @return bool True when the column is declared.
+     * @param  string  $columnName
+     * @return bool
      */
     public function hasColumn(string $columnName): bool
     {
@@ -134,8 +111,7 @@ final class ClassMetadata
     /**
      * Whether this class is a multi-table-inheritance child.
      *
-     * @return bool True when the class owns its own table AND an ancestor
-     *         table holds the inherited columns.
+     * @return bool
      */
     public function isMtiChild(): bool
     {
@@ -145,15 +121,9 @@ final class ClassMetadata
     /**
      * The table that owns a given column — the partition map.
      *
-     * Every `#[Column]` mapping records the class that declared it
-     * ({@see PropertyMapping::$owner}); the partition resolves that owner
-     * to its table through the metadata cache. For a plain model the answer
-     * is always its own table; for an MTI child the inherited columns
-     * resolve to the ancestor's table and the own columns to the child's.
-     *
-     * @param string $columnName The DB column name.
-     * @return string The owning table name.
-     * @throws \InvalidArgumentException When the column is unknown.
+     * @param  string  $columnName
+     * @return string
+     * @throws \InvalidArgumentException
      */
     public function tableFor(string $columnName): string
     {

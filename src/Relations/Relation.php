@@ -16,38 +16,25 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 
 /**
- * A relation between two models — the query plus the stitching rules.
+ * A relation between two models.
  *
  * A relation is a lazily-executed query: constructing it runs nothing;
- * {@see Relation::getResults()} materializes it. The constraint (the FK
- * match against the parent's key) is applied to the relation's builder in
- * the constructor, so the builder composes like any other —
- * `$user->posts()->getQuery()->orderBy(...)` keeps the constraint AND adds
- * to it.
+ * {@see Relation::getResults()} runs it. The FK constraint against the
+ * parent's key is applied in the constructor, so any filters you add are
+ * on top of it.
  *
- * Eager loading shares the machinery: the loader runs the same FK match as
- * an `IN` over many parents' keys once, then {@see Relation::match()}
- * distributes the results back onto each parent by FK value. No JOINs, no
- * row multiplication — pagination stays correct.
- *
- * HasOne/HasMany/BelongsTo ride the portable core (`whereIn` + `select`
- * work on every backend, CSV included). Through relations need joins and
- * are SQL-only at execution.
+ * Eager loading runs the same FK match as an `IN` over many parents' keys
+ * once, then {@see Relation::match()} distributes the results back onto
+ * each parent — no joins, no row multiplication.
  *
  * Keys are scalar by default. A relation over a composite key declares
  * BOTH sides as column lists (`['region_id', 'country']`) — the constraint
  * compiles as per-column `=` wheres and the eager load as an OR of AND
- * groups. Tuple `IN` (`(a, b) IN ((?, ?), ...)`) is deliberately avoided:
- * support and placeholder semantics differ per dialect, so the portable
- * shape wins. Scalar and composite are mutually exclusive — one side
- * cannot be a list while the other is a single column.
+ * groups. Scalar and composite are mutually exclusive.
  *
- * **Relations are immutable.** Every filter (`where()`, `orderBy()`,
- * `limit()`, ...) and every configurator (`withName()`, `withPivot()`,
- * ...) returns a NEW relation — the original is never modified. A
- * discarded call is a no-op, and a composed chain can never affect the
- * shared cached relation (the cache holds the un-composed original;
- * composition happens on copies).
+ * **Relations are immutable.** Every filter and configurator returns a
+ * NEW relation — the original is never modified, and a discarded call is
+ * a no-op.
  *
  * @template TRelated of Model
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
@@ -57,36 +44,29 @@ abstract class Relation
     use FiltersQuery;
 
     /**
-     * How many parent keys to include in one eager-load query.
+     * The maximum number of parent keys per eager-load query.
      *
-     * Databases cap how many values a single query can hold (SQLite
-     * allows 999, MySQL limits total query size). If a load needs more
-     * keys than this, it simply runs a few queries instead of failing.
+     * Databases cap how many values a single query can hold. A larger
+     * load simply runs a few queries instead of failing.
      */
     protected const EAGER_KEY_CHUNK = 500;
 
     /**
-     * The constrained builder on the related model.
+     * The query builder for the related model.
      *
      * @var ModelQueryBuilder<TRelated>
      */
     protected ModelQueryBuilder $query;
 
     /**
-     * The relation-method name this relation was built from (e.g. `posts`),
-     * used to find eagerly-loaded results on the parent. Null when the
-     * relation was created outside a relation method — in that case every
-     * read runs a fresh query.
+     * The relation method name this relation was built from.
      *
      * @var string|null
      */
     private ?string $name = null;
 
     /**
-     * Whether a filter has been added to this relation. A filtered
-     * relation always runs a fresh query — the eagerly-loaded result was
-     * fetched WITHOUT the filter, so serving it would silently ignore
-     * what you asked for.
+     * Whether a filter has been added to this relation.
      *
      * @var bool
      */
@@ -95,20 +75,11 @@ abstract class Relation
     /**
      * Create a relation.
      *
-     * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class. For
-     *        the DYNAMIC-related {@see MorphTo} the abstract
-     *        {@see Model::class} marker passes through a documented
-     *        narrowing in its constructor — no fixed class exists, the
-     *        real one resolves per row, and MorphTo's own template (bound
-     *        to its allowlist) carries the static type.
-     * @param string|list<string> $foreignKey The FK column carrying the
-     *        link — or the composite column list.
-     * @param string|list<string> $localKey The parent-side key column —
-     *        or the composite column list (same shape as `$foreignKey`).
-     * @throws \InvalidArgumentException When one side is composite and the
-     *         other is not, a composite list is empty, or the lists'
-     *         arities differ.
+     * @param  Model  $parent
+     * @param  class-string<TRelated>  $related
+     * @param  string|list<string>  $foreignKey
+     * @param  string|list<string>  $localKey
+     * @throws \InvalidArgumentException
      */
     public function __construct(
         protected readonly Model $parent,
@@ -150,7 +121,7 @@ abstract class Relation
      * Whether the related model is resolved per row (MorphTo) rather than
      * fixed at construction.
      *
-     * @return bool True to skip building the query in the constructor.
+     * @return bool
      */
     protected function defersConstraints(): bool
     {
@@ -161,12 +132,10 @@ abstract class Relation
      * Name this relation after the model method that created it.
      *
      * This lets `getResults()` reuse an eagerly-loaded result when one
-     * exists. Passing null does nothing — it will not remove an existing
-     * name.
+     * exists. Passing null does nothing.
      *
-     * @param string|null $name The relation method's name.
-     * @return static A NEW relation with the name set; the same instance
-     *         when $name is null.
+     * @param  string|null  $name
+     * @return static
      */
     final public function withName(?string $name): static
     {
@@ -181,13 +150,13 @@ abstract class Relation
     }
 
     /**
-     * Return a copy of this relation marked as "modified" — used by
-     * configurators like {@see BelongsToMany::withPivot()} that change what
-     * a fresh read returns without adding a where clause. A modified
-     * relation never reuses an eagerly-loaded result.
+     * Return a copy of this relation marked as modified.
      *
-     * @return static A NEW relation marked as modified; the original is
-     *         unchanged.
+     * Used by configurators like {@see BelongsToMany::withPivot()} that
+     * change what a fresh read returns without adding a where clause. A
+     * modified relation never reuses an eagerly-loaded result.
+     *
+     * @return static
      */
     protected function markComposed(): static
     {
@@ -198,13 +167,9 @@ abstract class Relation
     }
 
     /**
-     * The builder that filters are added to.
+     * The query builder that filters are added to.
      *
-     * MorphTo has no fixed related model, so it has no builder to filter —
-     * this throws a clear error for that case instead of failing with a
-     * confusing internal message.
-     *
-     * @return ModelQueryBuilder<TRelated> The constrained builder.
+     * @return ModelQueryBuilder<TRelated>
      */
     protected function compositionQuery(): ModelQueryBuilder
     {
@@ -219,10 +184,9 @@ abstract class Relation
     }
 
     /**
-     * Apply the relation's constraint (the FK match) to the builder.
+     * Apply the relation's FK constraint to the query.
      *
-     * Called once from the constructor, so every relation starts out
-     * correctly constrained and any filters you add are on top of it.
+     * Called once from the constructor.
      *
      * @return void
      */
@@ -231,33 +195,24 @@ abstract class Relation
     /**
      * Distribute eagerly-loaded results onto their parents.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key on the parents).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        The per-row parent keys from {@see eagerLoad()}, positionally
-     *        paired with $results. Only through relations consume it (their
-     *        models do not carry the parent key themselves); the others
-     *        ignore it.
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void
      */
     abstract public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void;
 
     /**
-     * Run the eager query for MANY parents at once.
+     * Run the eager query for many parents at once.
      *
      * Instead of one query per parent, this fetches everything in a
      * single `IN (...)` query and lets {@see match()} hand each parent its
-     * own results. Relations that need joins (the "through" family)
-     * override this with their own strategy.
+     * own results. Very large key lists are split into batches of
+     * {@see EAGER_KEY_CHUNK} so no database limit is ever hit.
      *
-     * Very large key lists are split into batches of
-     * {@see EAGER_KEY_CHUNK} so no database limit is ever hit — a huge
-     * load just runs a few queries instead of failing.
-     *
-     * @param list<KeyValue> $parentKeys The parents' key values.
-     * @return EagerResult<TRelated> The related models, ready for match()
-     *         to distribute.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     public function eagerLoad(array $parentKeys): EagerResult
     {
@@ -284,8 +239,8 @@ abstract class Relation
     /**
      * Run one eager-load query for a batch of parent keys.
      *
-     * @param list<KeyValue> $parentKeys The batch's key values.
-     * @return EagerResult<TRelated> The related models for this batch.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     protected function eagerLoadChunk(array $parentKeys): EagerResult
     {
@@ -322,12 +277,13 @@ abstract class Relation
     }
 
     /**
-     * Apply the eager query's ordering. One-to-one relations override
-     * this to order by the related model's primary key, so "take the
-     * first match" always picks the same row.
+     * Apply the eager query's ordering.
      *
-     * @param ModelQueryBuilder<TRelated> $query The eager query.
-     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) query.
+     * One-to-one relations override this to order by the related model's
+     * primary key, so "take the first match" always picks the same row.
+     *
+     * @param  ModelQueryBuilder<TRelated>  $query
+     * @return ModelQueryBuilder<TRelated>
      */
     protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
@@ -339,15 +295,11 @@ abstract class Relation
      * Get the related models — reusing an eagerly-loaded result when one
      * applies.
      *
-     * The loaded result is reused only when ALL of these hold: the
-     * relation was named (via {@see withName()}), no filter has been
-     * added, and the parent actually has the relation loaded (an eager
-     * `with()` ran). Everything else runs a fresh query — a filtered
-     * chain must hit the database, since the loaded result was fetched
-     * unfiltered.
+     * The loaded result is reused only when the relation was named, no
+     * filter has been added, and the parent actually has the relation
+     * loaded. Everything else runs a fresh query.
      *
-     * @return Collection<TRelated> The related models (a single model wraps
-     *         in a one-element collection; HasOne unwraps at the accessor).
+     * @return Collection<TRelated>
      */
     final public function getResults(): Collection
     {
@@ -359,11 +311,10 @@ abstract class Relation
     }
 
     /**
-     * Wrap a cached relation value (a model, a collection, or null) into
-     * the collection shape {@see getResults()} returns.
+     * Wrap a cached relation value into the collection shape.
      *
-     * @param Model|Collection<Model>|null $value The cached entry.
-     * @return Collection<TRelated> The wrapped shape.
+     * @param  Model|Collection<Model>|null  $value
+     * @return Collection<TRelated>
      */
     private function wrapCached(Model|Collection|null $value): Collection
     {
@@ -377,10 +328,9 @@ abstract class Relation
     }
 
     /**
-     * Run the query and return the related models — the always-executes
-     * read behind {@see getResults()}.
+     * Run the query and return the related models.
      *
-     * @return Collection<TRelated> The related models.
+     * @return Collection<TRelated>
      */
     protected function executeResults(): Collection
     {
@@ -388,15 +338,11 @@ abstract class Relation
     }
 
     /**
-     * The first related model — or throw when the relation matches none.
+     * Get the first related model or throw if no related models exist.
      *
-     * On a one-to-one relation this is the natural "must exist" read; on
-     * a to-many relation it takes the first of the matches (use
-     * {@see sole()} when there must be exactly one).
-     *
-     * @return TRelated The first related model.
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
+     * @return TRelated
+n     *
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
     final public function firstOrFail(): Model
     {
@@ -404,17 +350,12 @@ abstract class Relation
     }
 
     /**
-     * Require the relation to match EXACTLY ONE related model.
+     * Require the relation to match exactly one related model.
      *
-     * Zero matches throw
-n     * {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
-     * more than one throw
-n     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
+     * @return TRelated
      *
-     * @return TRelated The single related model.
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When the relation matches no rows.
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When the relation matches multiple rows.
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
      */
     final public function sole(): Model
     {
@@ -422,11 +363,9 @@ n     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundExcep
     }
 
     /**
-     * The underlying query builder for the related model — already
-     * constrained to this parent. Filters added to it are on top of the
-n     * relation's own constraint.
+     * The underlying query builder for the related model.
      *
-     * @return ModelQueryBuilder<TRelated> The builder.
+     * @return ModelQueryBuilder<TRelated>
      */
     final public function getQuery(): ModelQueryBuilder
     {
@@ -436,13 +375,11 @@ n     * relation's own constraint.
     /**
      * Add a where clause to the relation's query.
      *
-     * @param string|Expression $column The column to compare — or a raw
-     *        SQL fragment wrapped in an Expression.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW relation with the filter added; the original
-     *         is unchanged.
+     * @param  string|Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     final public function where(
         string|Expression $column,
@@ -458,19 +395,13 @@ n     * relation's own constraint.
     }
 
     /**
-     * Add a nested where group — a parenthesized set of conditions.
+     * Add a nested (parenthesized) where group to the relation's query.
      *
-     * The callback receives the group's builder and MUST return it:
+     * The callback receives the group's builder and must return it.
      *
-     * ```php
-     * $relation->whereNested(fn ($nested) => $nested->where('a', '=', 1)->orWhere('b', '=', 2));
-     * ```
-     *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
-     *        builder and RETURNS the constrained group.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A NEW relation with the group added; the original is
-     *         unchanged.
+     * @param  callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder  $callback
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     final public function whereNested(
         callable $callback,
@@ -484,13 +415,11 @@ n     * relation's own constraint.
     }
 
     /**
-     * Add an order-by clause to the relation's query.
+     * Add an "order by" clause to the relation's query.
      *
-     * @param string|Expression $column The column to order by — or a raw
-     *        SQL fragment wrapped in an Expression.
-     * @param SortDirection|string $direction `ASC` or `DESC`.
-     * @return static A NEW relation with the ordering added; the original
-     *         is unchanged.
+     * @param  string|Expression  $column
+     * @param  SortDirection|string  $direction
+     * @return static
      */
     final public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
@@ -502,11 +431,10 @@ n     * relation's own constraint.
     }
 
     /**
-     * Set the maximum number of rows to return.
+     * Set the "limit" value of the relation's query.
      *
-     * @param int $limit The row limit.
-     * @return static A NEW relation with the limit added; the original is
-     *         unchanged.
+     * @param  int  $limit
+     * @return static
      */
     final public function limit(int $limit): static
     {
@@ -518,11 +446,10 @@ n     * relation's own constraint.
     }
 
     /**
-     * Set the number of rows to skip.
+     * Set the "offset" value of the relation's query.
      *
-     * @param int $offset The number of rows to skip.
-     * @return static A NEW relation with the offset added; the original is
-     *         unchanged.
+     * @param  int  $offset
+     * @return static
      */
     final public function offset(int $offset): static
     {
@@ -534,11 +461,10 @@ n     * relation's own constraint.
     }
 
     /**
-     * Set an explicit column selection on the relation's query.
+     * Set the columns to be selected.
      *
-     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return static A NEW relation with the selection added; the original
-     *         is unchanged.
+     * @param  string|Expression|Aggregate  ...$columns
+     * @return static
      */
     final public function select(string|Expression|Aggregate ...$columns): static
     {
@@ -551,11 +477,10 @@ n     * relation's own constraint.
     }
 
     /**
-     * Group the results by one or more columns (for use with aggregates).
+     * Add a "group by" clause to the relation's query.
      *
-     * @param string|array<int, string> $columns The column(s) to group by.
-     * @return static A NEW relation with the grouping added; the original
-     *         is unchanged.
+     * @param  string|array<int, string>  $columns
+     * @return static
      */
     final public function groupBy(string|array $columns): static
     {
@@ -567,13 +492,12 @@ n     * relation's own constraint.
     }
 
     /**
-     * Filter groups after aggregation (HAVING).
+     * Add a "having" clause to the relation's query.
      *
-     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return static A NEW relation with the filter added; the original is
-     *         unchanged.
+     * @param  string|Expression|Aggregate  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @return static
      */
     final public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
@@ -587,7 +511,7 @@ n     * relation's own constraint.
     /**
      * The related model class.
      *
-     * @return class-string<TRelated> The class.
+     * @return class-string<TRelated>
      */
     final public function getRelated(): string
     {
@@ -598,13 +522,9 @@ n     * relation's own constraint.
      * The related classes a dotted eager-load path's deeper segments
      * resolve against.
      *
-     * A single-element list for every relation with a fixed related model.
-     * An EMPTY list means the related model varies per row (MorphTo) —
-     * deeper path segments are then resolved from the actually-loaded
-n     * models at runtime.
+     * An empty list means the related model varies per row (MorphTo).
      *
-     * @return list<class-string<Model>> The related classes, or [] when
-     *         dynamic.
+     * @return list<class-string<Model>>
      */
     public function relatedClasses(): array
     {
@@ -614,9 +534,8 @@ n     * models at runtime.
     /**
      * The scalar form of a relation key.
      *
-     * @return string The single column.
-     * @throws \LogicException When the key is composite (call the plural
-     *         accessor instead).
+     * @return string
+     * @throws \LogicException
      */
     final public function getForeignKey(): string
     {
@@ -628,11 +547,10 @@ n     * models at runtime.
     }
 
     /**
-     * The scalar form of the parent-side key.
+     * The single parent-side key column.
      *
-     * @return string The single column.
-     * @throws \LogicException When the key is composite (call the plural
-     *         accessor instead).
+     * @return string
+     * @throws \LogicException
      */
     final public function getLocalKey(): string
     {
@@ -644,11 +562,10 @@ n     * models at runtime.
     }
 
     /**
-     * The composite form of the FK columns.
+     * The composite foreign key columns.
      *
-     * @return list<string> The column list.
-     * @throws \LogicException When the key is scalar (call getForeignKey()
-     *         instead).
+     * @return list<string>
+     * @throws \LogicException
      */
     final public function getForeignKeys(): array
     {
@@ -660,11 +577,10 @@ n     * models at runtime.
     }
 
     /**
-     * The composite form of the parent-side key columns.
+     * The composite parent-side key columns.
      *
-     * @return list<string> The column list.
-     * @throws \LogicException When the key is scalar (call getLocalKey()
-     *         instead).
+     * @return list<string>
+     * @throws \LogicException
      */
     final public function getLocalKeys(): array
     {
@@ -678,7 +594,7 @@ n     * models at runtime.
     /**
      * Whether the relation is keyed by a composite key.
      *
-     * @return bool True when both key sides are column lists.
+     * @return bool
      */
     final public function isComposite(): bool
     {
@@ -688,11 +604,7 @@ n     * models at runtime.
     /**
      * The parent column(s) the eager loader collects key values from.
      *
-     * The default is the parent's local key. {@see BelongsTo} overrides
-n     * this: there the FK lives on the PARENT, so the loader must collect
-     * the parent's FK values instead.
-     *
-     * @return string|list<string> The column (or columns) on the parent.
+     * @return string|list<string>
      */
     public function eagerKeyColumn(): string|array
     {
@@ -700,16 +612,16 @@ n     * this: there the FK lives on the PARENT, so the loader must collect
     }
 
     /**
-     * Apply one composite key match to a builder — every FK column must
-     * equal the corresponding parent value (a null component becomes IS
-     * NULL, since SQL `= NULL` never matches).
+     * Apply one composite key match to a builder.
      *
-     * @param WhereBuilder $query The builder to constrain.
-     * @param list<string> $foreignKeys The FK columns (related side).
-     * @param list<string> $localKeys The local columns (parent side).
-     * @param array<string, int|string|null> $values The parent's key values
-     *        keyed by local column name.
-     * @return \BlueprintAU\Radiant\Database\Query\WhereBuilder The constrained group.
+     * Every FK column must equal the corresponding parent value; a null
+     * component becomes IS NULL (SQL `= NULL` never matches).
+     *
+     * @param  WhereBuilder  $query
+     * @param  list<string>  $foreignKeys
+     * @param  list<string>  $localKeys
+     * @param  array<string, int|string|null>  $values
+     * @return WhereBuilder
      */
     final protected static function applyKeyTuple(
         WhereBuilder $query,
@@ -728,8 +640,8 @@ n     * this: there the FK lives on the PARENT, so the loader must collect
     /**
      * Collect the parent's key tuple as a column => value map.
      *
-     * @param list<string> $localKeys The local key columns.
-     * @return array<string, int|string|null> The key map.
+     * @param  list<string>  $localKeys
+     * @return array<string, int|string|null>
      */
     final protected function parentKeyValues(array $localKeys): array
     {
@@ -743,17 +655,15 @@ n     * this: there the FK lives on the PARENT, so the loader must collect
     }
 
     /**
-     * Read a model's composite key tuple as a POSITIONAL value list.
+     * Read a model's composite key tuple as a positional value list.
      *
-     * Matching is position-based, not name-based: the related side's
-     * values are keyed by FK column names while the parent's are keyed by
-     * local column names — the two maps would never compare equal even
-     * for a genuine match. Positional lists match because both sides
-     * declare their columns in the same order.
+     * Matching is position-based: the related side's values are keyed by
+     * FK column names while the parent's are keyed by local column names,
+     * so name-based comparison would never match.
      *
-     * @param Model $model The model to read.
-     * @param list<string> $columns The key columns, in declared order.
-     * @return list<int|string|null> The values, in declared order.
+     * @param  Model  $model
+     * @param  list<string>  $columns
+     * @return list<int|string|null>
      */
     final protected static function tupleValues(Model $model, array $columns): array
     {
@@ -769,9 +679,10 @@ n     * this: there the FK lives on the PARENT, so the loader must collect
     /**
      * Serialize a key value to a stable string for array indexing.
      *
-     * @param mixed $key The scalar or column => value map.
-     * @return string The serialized key.
-     * @throws \JsonException When a composite key cannot be encoded.
+     * @param  mixed  $key
+     * @return string
+     *
+     * @throws \JsonException
      */
     final protected static function serializeKey(mixed $key): string
     {

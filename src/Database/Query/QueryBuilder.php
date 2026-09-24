@@ -20,29 +20,9 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * Builds a database query fluently.
  *
  * Chain methods like `where()`, `orderBy()`, and `limit()` to describe what
- * you want, then run it with `get()`. For example:
- *
- *     $users = $db->table('users')
- *         ->where('active', 1)
- *         ->orderBy('name')
- *         ->get();
- *
- * The same builder works against any backend: SQL databases compile it to
- * SQL, while a CSV connection applies the filters directly in PHP. Features
- * that only make sense for SQL (joins, having, transactions) throw an
- * {@see \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException}
- * on backends that don't support them.
- *
- * **Bindings are stored per category** — {@see BindingCategory} — so a
- * statement root only flattens the categories it actually compiled (an
- * `update` never pulls in `having`/`order`/`union` bindings it doesn't use).
- * The Grammar emits `?` placeholders in the same canonical category order, so
- * the flattened list always matches the compiled SQL.
- *
- * **Builders are immutable.** Every filter/select/order/limit call returns
- * a NEW builder — the original is never modified, so a builder can be
- * shared, reused, and chained safely (`$base = ...; $a = $base->where(...)`
- * leaves `$base` untouched).
+ * you want, then run it with `get()`. The same builder works against any
+ * backend: SQL databases compile it to SQL, while a CSV connection applies
+ * the filters directly in PHP.
  *
  * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
@@ -159,11 +139,7 @@ class QueryBuilder
     protected ?string $insertIdColumn = null;
 
     /**
-     * Whether the {@see $insertIdColumn} is auto-increment (server-generated).
-     *
-     * Null when no id column is declared. Distinguishes "the database will
-     * generate this key" from "the caller supplies it" — insertGetId()'s
-     * lastInsertId() fallback is only meaningful for the former.
+     * Whether the insert-id column is auto-increment (server-generated).
      *
      * @var bool|null
      */
@@ -189,8 +165,8 @@ class QueryBuilder
     /**
      * Create a new query builder bound to a table on a connection.
      *
-     * @param ConnectionInterface $connection The backend the query will run on.
-     * @param string $table The table (or fully-qualified identifier) to query.
+     * @param  ConnectionInterface  $connection
+     * @param  string  $table
      */
     public function __construct(
         public readonly ConnectionInterface $connection,
@@ -204,20 +180,10 @@ class QueryBuilder
     /**
      * Set the columns to select.
      *
-     * A raw SQL fragment is expressed by passing an {@see Expression} — the
-     * only raw-select path, and a greppable one: every verbatim splice in
-     * an app is a visible `new Expression(...)`.
+     * Calling with no arguments resets to the `['*']` default select.
      *
-     * An aggregate is declared as an {@see Aggregate} object (static
-     * factories cover the common five; `new Aggregate(...)` covers
-     * server-specific functions). The old string form
-     * (`'count(*) as total'`) is no longer accepted.
-     *
-     * VARIADIC: one column per argument. Calling with NO arguments resets
-     * to the `['*']` default select — the explicit reset form.
-     *
-     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return static A new builder with the select applied; the original is unchanged.
+     * @param  string|Expression|Aggregate  ...$columns
+     * @return static
      */
     public function select(string|Expression|Aggregate ...$columns): static
     {
@@ -229,7 +195,7 @@ class QueryBuilder
     /**
      * Make the select distinct.
      *
-     * @return static A new builder with the distinct flag set; the original is unchanged.
+     * @return static
      */
     final public function distinct(): static
     {
@@ -243,18 +209,11 @@ class QueryBuilder
     /**
      * Set the from clause to a subquery.
      *
-     * Set-once like the table: the from cannot be changed after the builder
-     * is created, so calling this on a builder that already has a subquery
-     * from fails fast.
+     * @param  QueryBuilder  $query
+     * @param  string  $alias
+     * @return static
      *
-     * The sub-builder's bindings are SNAPSHOT onto the returned clone
-     * immediately — a builder is a value, so the sub-builder is expected to
-     * be final when fromSub() is called. No compile pass ever writes to a
-     * builder: compilation stays a pure snapshot.
-     *
-     * @param QueryBuilder $query The subquery to select from.
-     * @param string $alias The alias the subquery is referenced by.
-     * @return static A new builder with the subquery from; the original is unchanged.
+     * @throws \LogicException
      */
     final public function fromSub(QueryBuilder $query, string $alias): static
     {
@@ -275,13 +234,13 @@ class QueryBuilder
     // ---- Joins ----
 
     /**
-     * Add an inner join.
+     * Add an inner join to the query.
      *
-     * @param string $table The table to join.
-     * @param string $first The first column of the join condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the join condition.
-     * @return static A new builder with the join appended; the original is unchanged.
+     * @param  string  $table
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      */
     public function join(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -289,13 +248,13 @@ class QueryBuilder
     }
 
     /**
-     * Add a left join.
+     * Add a left join to the query.
      *
-     * @param string $table The table to join.
-     * @param string $first The first column of the join condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the join condition.
-     * @return static A new builder with the join appended; the original is unchanged.
+     * @param  string  $table
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      */
     public function leftJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -303,13 +262,13 @@ class QueryBuilder
     }
 
     /**
-     * Add a right join.
+     * Add a right join to the query.
      *
-     * @param string $table The table to join.
-     * @param string $first The first column of the join condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the join condition.
-     * @return static A new builder with the join appended; the original is unchanged.
+     * @param  string  $table
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      */
     public function rightJoin(string $table, string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -317,10 +276,10 @@ class QueryBuilder
     }
 
     /**
-     * Add a cross join.
+     * Add a cross join to the query.
      *
-     * @param string $table The table to join.
-     * @return static A new builder with the join appended; the original is unchanged.
+     * @param  string  $table
+     * @return static
      */
     final public function crossJoin(string $table): static
     {
@@ -328,21 +287,18 @@ class QueryBuilder
     }
 
     /**
-     * Append an additional ON condition to the most recent join.
+     * Add an additional ON condition to the most recent join.
      *
-     * The first condition comes from the `join()` call itself; each `on()`
-     * call adds another, connected by AND: `join('posts', 'posts.user_id', '=', 'users.id')->on('posts.active', '=', 'users.active')`
-     * compiles to `ON "posts"."user_id" = "users"."id" AND "posts"."active" = "users"."active"`.
+     * Conditions are strictly column-to-column — values belong in where()
+     * after the join, not in the ON clause.
      *
-     * Like the join condition itself, `on()` is strictly column-to-column —
-     * values belong in `where()` after the join, not in the ON clause.
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      *
-     * @param string $first The first column of the condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the condition.
-     * @return static A new builder with the ON condition appended; the original is unchanged.
-     * @throws \LogicException When no join has been added yet.
-     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     * @throws \LogicException
+     * @throws \InvalidArgumentException
      */
     public function on(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -350,14 +306,15 @@ class QueryBuilder
     }
 
     /**
-     * Append an additional OR-connected ON condition to the most recent join.
+     * Add an additional OR-connected ON condition to the most recent join.
      *
-     * @param string $first The first column of the condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the condition.
-     * @return static A new builder with the ON condition appended; the original is unchanged.
-     * @throws \LogicException When no join has been added yet.
-     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
+     *
+     * @throws \LogicException
+     * @throws \InvalidArgumentException
      */
     public function orOn(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -365,19 +322,16 @@ class QueryBuilder
     }
 
     /**
-     * Append an ON condition to the last added join.
+     * Add an ON condition to the last added join.
      *
-     * Conditions are strictly column-to-column ({@see WhereType::Column}) —
-     * the join clause never binds values. The last join is targeted because
-     * an ON condition always belongs to the join it follows.
+     * @param  WhereBoolean  $boolean
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      *
-     * @param WhereBoolean $boolean The connector to the join's previous condition.
-     * @param string $first The first column of the condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the condition.
-     * @return static A new builder with the ON condition appended; the original is unchanged.
-     * @throws \LogicException When no join has been added yet.
-     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     * @throws \LogicException
+     * @throws \InvalidArgumentException
      */
     protected function addOn(WhereBoolean $boolean, string $first, ColumnOperator|string $operator, string $second): static
     {
@@ -401,20 +355,16 @@ class QueryBuilder
     }
 
     /**
-     * Append a join clause to the query.
+     * Add a join clause to the query.
      *
-     * The operator is resolved to a {@see ColumnOperator} — either passed as
-     * the enum directly, or validated from a string — and stored as the
-     * enum. The compiled SQL renders `->value`, so no raw string ever
-     * reaches the statement.
+     * @param  JoinType  $type
+     * @param  string  $table
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
      *
-     * @param JoinType $type The join type.
-     * @param string $table The table to join.
-     * @param string $first The first column of the join condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the join condition.
-     * @return static A new builder with the join appended; the original is unchanged.
-     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     * @throws \InvalidArgumentException
      */
     protected function addJoin(JoinType $type, string $table, string $first, ColumnOperator|string $operator, string $second): static
     {
@@ -438,13 +388,15 @@ class QueryBuilder
 
     /**
      * Assert a list is homogeneous — all plain bindable values, or ALL raw
-     * (Expression/ToSqlValue). A mixed list desyncs placeholders from
-     * bindings on the IN/BETWEEN compile shapes: see the where() call sites.
+     * (Expression/ToSqlValue).
      *
-     * @param array<int, mixed> $value The candidate list.
-     * @param string $method The calling method name for the error message.
+     * A mixed list desyncs placeholders from bindings on the IN/BETWEEN
+     * compile shapes.
+     *
+     * @param  array<int, mixed>  $value
+     * @param  string  $method
      * @return void
-     * @throws \InvalidArgumentException When the list mixes kinds.
+     * @throws \InvalidArgumentException
      */
     private function assertHomogeneousList(array $value, string $method): void
     {
@@ -470,20 +422,15 @@ class QueryBuilder
     // ---- Wheres ----
 
     /**
-     * Add a where clause.
+     * Add a where clause to the query.
      *
-     * The column is a plain string or a raw {@see Expression} — the only
-     * verbatim-splice path, greppable by the `new Expression(...)` wrapper.
-     * Aggregate left-hand sides are structurally impossible here: they are
-     * select/having territory (SQL forbids aggregates in WHERE), so the
-     * typed {@see Aggregate} is not part of this signature at all.
+     * @param  string|Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
      *
-     * @param string|Expression $column The column to compare — or a raw
-     *        SQL fragment wrapped in an Expression.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector to the previous clause.
-     * @return static A new builder with the clause appended; the original is unchanged.
+     * @throws \InvalidArgumentException
      */
     public function where(string|Expression $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -560,23 +507,15 @@ class QueryBuilder
     }
 
     /**
-     * Add a raw SQL where clause — the parameterized raw-condition path.
+     * Add a raw where clause to the query.
      *
-     * The SQL is spliced verbatim by design (it is an expression, not a
-     * column reference, so there is nothing to validate); its bindings are
-     * POSITIONAL — the column each belongs to is not knowable, so no
-     * per-column cast applies. The SAFETY mechanism is the binding: values
-     * ride as parameters, never quoted into the statement — only the
-     * scaffolding (e.g. `lower(email) = ?`) is raw. Keep user input out of
-     * the `$sql` string itself; put it in `$bindings`.
+     * Keep user input out of the `$sql` string itself — put it in
+     * `$bindings`.
      *
-     * This method is itself the greppable marker: every verbatim SQL
-     * fragment in an app is found by searching for `whereRaw`.
-     *
-     * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
-     * @param array<int, mixed> $bindings The values to bind into the condition.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A new builder with the clause appended; the original is unchanged.
+     * @param  string  $sql
+     * @param  array<int, mixed>  $bindings
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -587,19 +526,15 @@ class QueryBuilder
     }
 
     /**
-     * Add a column-to-column comparison.
+     * Add a where clause comparing two columns to the query.
      *
-     * The operator is interpolated verbatim between two identifiers in the
-     * compiled SQL, so it is resolved to a {@see ColumnOperator} — either
-     * passed as the enum directly, or validated from a string. The enum is
-     * stored, not a string: nothing raw ever reaches the SQL.
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @param  WhereBoolean  $boolean
+     * @return static
      *
-     * @param string $first The first column.
-     * @param ColumnOperator|string $operator The comparison operator (=, !=, <, <=, >, >=).
-     * @param string $second The second column.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A new builder with the clause appended; the original is unchanged.
-     * @throws \InvalidArgumentException When a string operator is not a valid column comparison.
+     * @throws \InvalidArgumentException
      */
     public function whereColumn(string $first, ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -610,28 +545,18 @@ class QueryBuilder
     }
 
     /**
-     * Add a nested group of where clauses.
+     * Add a nested group of where clauses to the query.
      *
-     * The callback receives a {@see WhereBuilder} — the where-family ONLY:
-     * a parenthesized group is a filter, not a query, so it cannot JOIN,
-     * select, order, or page.
-     *
-     * The callback MUST RETURN the (possibly modified) WhereBuilder — the
-     * returned builder's clauses become the group. A callback that mutates
-     * the argument without returning it adds NOTHING (the discarded result
-     * is a no-op — builders are immutable, so mutation is impossible by
-     * construction):
+     * The callback receives a {@see WhereBuilder} — the where-family only —
+     * and must return it:
      *
      *     ->whereNested(fn (WhereBuilder $q) => $q->where('active', '=', 1))
      *
-     * The group is stored as an immutable SNAPSHOT of the returned
-     * builder's clause list — compiled SQL is fixed at group-close time;
-     * an escaped reference can never alter it.
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
+     * @param  WhereBoolean  $boolean
+     * @return static
      *
-     * @param callable(WhereBuilder): WhereBuilder $callback Receives the
-     *        group's where-family facade and RETURNS the constrained group.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static A new builder with the group appended; the original is unchanged.
+     * @throws \InvalidArgumentException
      */
     final public function whereNested(callable $callback, WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -672,17 +597,9 @@ class QueryBuilder
     }
 
     /**
-     * The builder a nested where group stores its clauses on.
+     * Get the builder a nested where group stores its clauses on.
      *
-     * The ONE construction point `whereNested()` owns the whole group
-     * algorithm through (build → callback → empty guard → store), so a
-     * subclass only swaps WHAT the group is: {@see ModelQueryBuilder}
-     * constructs a MODEL builder, which makes every callback clause funnel
-     * through column validation — no per-subclass duplication of the
-     * merge/guard steps, and the callback and the stored group share the
-     * ONE `WhereBuilder` instance.
-     *
-     * @return self The group's backing builder.
+     * @return self
      */
     protected function newNestedBuilder(): self
     {
@@ -692,10 +609,10 @@ class QueryBuilder
     // ---- Grouping / Having ----
 
     /**
-     * Group rows by one or more columns (for aggregate + select combos).
+     * Add a group by clause to the query.
      *
-     * @param string|array<int, string> $columns The column(s) to group by.
-     * @return static A new builder with the groups appended; the original is unchanged.
+     * @param  string|array<int, string>  $columns
+     * @return static
      */
     public function groupBy(string|array $columns): static
     {
@@ -705,16 +622,12 @@ class QueryBuilder
     }
 
     /**
-     * Filter groups after aggregation (HAVING).
+     * Add a having clause to the query.
      *
-     * The compared left-hand side may be a plain column, an
-     * {@see Expression}, or an {@see Aggregate} — the typed form of the old
-     * `having('count(*)', ...)` string.
-     *
-     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return static A new builder with the having appended; the original is unchanged.
+     * @param  string|Expression|Aggregate  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @return static
      */
     public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
@@ -730,25 +643,13 @@ class QueryBuilder
     // ---- Ordering / Limit / Offset ----
 
     /**
-     * Add an order-by clause.
+     * Add an order by clause to the query.
      *
-     * The direction is validated against {@see SortDirection} — a
-     * non-`ASC`/`DESC` direction is a caller bug or injection attempt and
-     * fails fast, so the direction is always safe to interpolate into the
-     * compiled SQL. Pass a {@see SortDirection} case for static-analysis
-     * safety, or a string for convenience.
+     * @param  string|Expression  $column
+     * @param  SortDirection|string  $direction
+     * @return static
      *
-     * A raw SQL fragment is expressed by passing an {@see Expression} as the
-     * column — the explicit `new Expression(...)` is the only raw-SQL
-     * ordering path, so every verbatim splice is greppable and the caller
-     * owns its safety (never pass user-supplied content).
-     *
-     * @param string|Expression $column The column to order by — or a raw
-     *        SQL fragment wrapped in an Expression (e.g.
-     *        `new Expression('FIELD(status, \'new\', \'done\')')`).
-     * @param SortDirection|string $direction `ASC` or `DESC` (case-insensitive string).
-     * @return static A new builder with the order appended; the original is unchanged.
-     * @throws \InvalidArgumentException When the direction is not `ASC` or `DESC`.
+     * @throws \InvalidArgumentException
      */
     public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
@@ -761,10 +662,10 @@ class QueryBuilder
     }
 
     /**
-     * Set the maximum number of rows to return.
+     * Set the "limit" value of the query.
      *
-     * @param int $limit The row limit.
-     * @return static A new builder with the limit set; the original is unchanged.
+     * @param  int  $limit
+     * @return static
      */
     public function limit(int $limit): static
     {
@@ -774,10 +675,10 @@ class QueryBuilder
     }
 
     /**
-     * Set the number of rows to skip.
+     * Set the "offset" value of the query.
      *
-     * @param int $offset The row offset.
-     * @return static A new builder with the offset set; the original is unchanged.
+     * @param  int  $offset
+     * @return static
      */
     public function offset(int $offset): static
     {
@@ -789,20 +690,11 @@ class QueryBuilder
     // ---- Unions ----
 
     /**
-     * Append a union to the query.
+     * Add a union to the query.
      *
-     * The sub-builder's bindings are SNAPSHOT onto the returned clone
-     * immediately, in union order — a builder is a value, so the
-     * sub-builder is expected to be final when union() is called. No
-     * compile pass ever writes to a builder: compilation stays a pure
-     * snapshot. (The historical late-binding capture — bindings added to
-     * the sub-builder AFTER union() — was a mutation-era behavior; under
-     * value semantics the captured snapshot IS the builder the union
-     * references.)
-     *
-     * @param QueryBuilder $query The query to union with.
-     * @param bool $all Whether to use `UNION ALL`.
-     * @return static A new builder with the union appended; the original is unchanged.
+     * @param  QueryBuilder  $query
+     * @param  bool  $all  Whether to use "UNION ALL".
+     * @return static
      */
     final public function union(QueryBuilder $query, bool $all = false): static
     {
@@ -820,7 +712,7 @@ class QueryBuilder
     /**
      * Lock the selected rows for update.
      *
-     * @return static A new builder with the lock set; the original is unchanged.
+     * @return static
      */
     final public function lockForUpdate(): static
     {
@@ -832,7 +724,7 @@ class QueryBuilder
     /**
      * Lock the selected rows in shared mode.
      *
-     * @return static A new builder with the lock set; the original is unchanged.
+     * @return static
      */
     final public function sharedLock(): static
     {
@@ -846,7 +738,7 @@ class QueryBuilder
     /**
      * Run the query and return the matching rows.
      *
-     * @return Collection<int, \stdClass> The matching rows, each as an object.
+     * @return Collection<int, \stdClass>
      */
     public function get(): Collection
     {
@@ -856,17 +748,10 @@ class QueryBuilder
     /**
      * Run the query and yield each matching row as it arrives.
      *
-     * The streaming counterpart of {@see get()}: the connection hands over
-     * rows one at a time, so the caller never holds the full result set as
-     * PHP objects — use it when the query may match more rows than fit in
-     * memory comfortably. Each backend materializes rows however its
-     * transport allows (see {@see ConnectionInterface::cursor()}); the
-     * builder itself stays backend-agnostic.
-     *
      * Consume the generator fully (or let it be garbage collected) before
      * running another query on the connection.
      *
-     * @return \Generator<int, \stdClass> The matching rows, one at a time.
+     * @return \Generator<int, \stdClass>
      */
     public function cursor(): \Generator
     {
@@ -876,11 +761,7 @@ class QueryBuilder
     /**
      * Run the query and return the first matching row.
      *
-     * SIDE-EFFECT-FREE: the internal `limit(1)` runs on a new builder
-     * (builders are immutable), so this builder's own limit is untouched —
-     * safe to share a builder between a first() read and a later full read.
-     *
-     * @return \stdClass|null The first row, or null when none match.
+     * @return \stdClass|null
      */
     public function first(): ?object
     {
@@ -888,20 +769,13 @@ class QueryBuilder
     }
 
     /**
-     * The scalar method — the value of a single column from the first row.
+     * The value of a single column from the first row.
      *
      * The column is selected under a stable alias so the result can be read
-     * back by name regardless of how the dialect names the raw expression
-     * (SQLite keeps `sum("price")`, Postgres strips to `sum`, MySQL keeps
-     * the backticks). Only the aliased header is guaranteed portable. When
-     * the caller already provides an `as` alias on the column, that alias
-     * is used instead.
+     * back by name regardless of how the dialect names the raw expression.
      *
-     * An {@see Aggregate} argument selects the aggregate under the same
-     * stable alias — the typed scalar-aggregate read.
-     *
-     * @param string|Aggregate $column The column to read — or an aggregate.
-     * @return mixed The column value, or null when no row matches.
+     * @param  string|Aggregate  $column
+     * @return mixed
      */
     public function value(string|Aggregate $column): mixed
     {
@@ -925,13 +799,8 @@ class QueryBuilder
     /**
      * A collection of a single column's values from all rows.
      *
-     * The column is selected under a stable alias so the value can be read
-     * back by name regardless of how the dialect names the raw expression
-     * (see {@see value()}). When the caller already provides an `as` alias
-     * on the column, that alias is used instead.
-     *
-     * @param string $column The column to pluck.
-     * @return Collection<int, mixed> The column values.
+     * @param  string  $column
+     * @return Collection<int, mixed>
      */
     public function pluck(string $column): Collection
     {
@@ -944,15 +813,11 @@ class QueryBuilder
     /**
      * Resolve a column into the SQL to select.
      *
-     * A trailing `as alias` is STRIPPED — the scalar reads fetch the column
-     * positionally ({@see ConnectionInterface::selectColumn()}), so the
-     * result header is never read by name. Stripping also keeps the select
-     * a bare expression, which backends that project by field name (the CSV
-     * connection) can resolve directly. The alias a caller wrote is
-     * documentation, not a read-back key.
+     * A trailing `as alias` is stripped — the scalar reads fetch the column
+     * positionally, so the result header is never read by name.
      *
-     * @param string $column The column expression.
-     * @return string The bare select expression.
+     * @param  string  $column
+     * @return string
      */
     protected function scalarColumn(string $column): string
     {
@@ -964,7 +829,7 @@ class QueryBuilder
     /**
      * Count the matching rows.
      *
-     * @return int The row count.
+     * @return int
      */
     public function count(): int
     {
@@ -975,12 +840,9 @@ class QueryBuilder
      * Whether any matching rows exist.
      *
      * A limit-1 probe rather than a COUNT: the backend stops at the first
-     * matching row instead of counting every one, and the builder's select
-     * is never rewritten to an aggregate. `first()` applies the limit
-     * itself, so this stays backend-agnostic (SQL and the CSV evaluator
-     * both short-circuit on the first match).
+     * matching row instead of counting every one.
      *
-     * @return bool True when at least one row matches.
+     * @return bool
      */
     final public function exists(): bool
     {
@@ -990,8 +852,8 @@ class QueryBuilder
     /**
      * The maximum value of a column.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The maximum value.
+     * @param  string  $column
+     * @return mixed
      */
     public function max(string $column): mixed
     {
@@ -1001,8 +863,8 @@ class QueryBuilder
     /**
      * The minimum value of a column.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The minimum value.
+     * @param  string  $column
+     * @return mixed
      */
     public function min(string $column): mixed
     {
@@ -1012,8 +874,8 @@ class QueryBuilder
     /**
      * The sum of a column's values.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The sum.
+     * @param  string  $column
+     * @return mixed
      */
     public function sum(string $column): mixed
     {
@@ -1023,8 +885,8 @@ class QueryBuilder
     /**
      * The average of a column's values.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The average.
+     * @param  string  $column
+     * @return mixed
      */
     public function avg(string $column): mixed
     {
@@ -1034,19 +896,15 @@ class QueryBuilder
     /**
      * Multiple aggregates in one query.
      *
-     * The aggregate's own ALIAS names its result column — one way to name
-     * a column, no override layer:
+     * The aggregate's own alias names its result column:
      *
      *     $db->table('orders')->aggregates(
      *         Aggregate::count('*', 'total'),
      *         Aggregate::max('price', 'top'),
-     *     ); // ['total' => ..., 'top' => ...]
+     *     );
      *
-     * @param Aggregate ...$aggregates The aggregates to compute.
-     * @return \stdClass The values as properties, keyed by each aggregate's
-     *         result key (the explicit alias when given, else the derived
-     *         call text). Property access on an unknown key throws — no
-     *         silent null for a typo'd alias.
+     * @param  Aggregate  ...$aggregates
+     * @return \stdClass
      */
     public function aggregates(Aggregate ...$aggregates): \stdClass
     {
@@ -1064,9 +922,8 @@ class QueryBuilder
     /**
      * Insert one or more rows.
      *
-     * @param array<string, mixed>|list<array<string, mixed>> $values A single
-     *        row or a list of rows.
-     * @return int The number of rows inserted.
+     * @param  array<string, mixed>|list<array<string, mixed>>  $values
+     * @return int
      */
     public function insert(array $values): int
     {
@@ -1076,8 +933,8 @@ class QueryBuilder
     /**
      * Insert a single row and return the generated id.
      *
-     * @param array<string, mixed> $values The row to insert.
-     * @return string|int|null The generated id, or null when there is none.
+     * @param  array<string, mixed>  $values
+     * @return string|int|null
      */
     public function insertGetId(array $values): string|int|null
     {
@@ -1087,8 +944,8 @@ class QueryBuilder
     /**
      * Update the rows matching the query's conditions.
      *
-     * @param array<string, mixed> $values The columns to change and their new values.
-     * @return int How many rows were updated.
+     * @param  array<string, mixed>  $values
+     * @return int
      */
     public function update(array $values): int
     {
@@ -1098,7 +955,7 @@ class QueryBuilder
     /**
      * Delete the rows matching the query's conditions.
      *
-     * @return int How many rows were deleted.
+     * @return int
      */
     final public function delete(): int
     {
@@ -1108,11 +965,10 @@ class QueryBuilder
     // ---- Bindings ----
 
     /**
-     * Flatten the bindings for the given categories, in canonical order.
+     * Get the flattened bindings for the given categories, in canonical order.
      *
-     * @param list<BindingCategory>|null $categories The categories to flatten;
-     *        null flattens every category in canonical order.
-     * @return list<BindingValue> The flattened bindings.
+     * @param  list<BindingCategory>|null  $categories
+     * @return list<BindingValue>
      */
     final public function getBindings(?array $categories = null): array
     {
@@ -1126,14 +982,11 @@ class QueryBuilder
     }
 
     /**
-     * Declare the PK column so insertGetId() can return it (RETURNING / lastInsertId).
+     * Declare the primary key column so insertGetId() can return it.
      *
-     * @param string $column The primary key column.
-     * @param bool $autoIncrement Whether the key is server-generated. A
-     *        caller-assigned (non-auto-increment) key declares itself here:
-     *        the connection's lastInsertId() fallback is NOT meaningful for
-     *        it, and insertGetId() fails fast when one is attempted.
-     * @return static A new builder with the id column declared; the original is unchanged.
+     * @param  string  $column
+     * @param  bool  $autoIncrement
+     * @return static
      */
     final public function insertIdColumn(string $column, bool $autoIncrement = true): static
     {
@@ -1149,35 +1002,16 @@ class QueryBuilder
      * These getters ARE the public contract for every consumer of a built
      * query: the SQL {@see Grammar} compiles them to text, and custom
      * `ConnectionInterface` implementations (e.g. CSV) execute them directly
-     * in PHP. Every returned shape is fully typed — discriminated unions
-     * pinned by enum literals, never bare strings for anything an author
-     * must branch on — so a custom connection can exhaustively match the
-     * state without reading this class's source. Shapes are defined here and
-     * imported elsewhere via `@phpstan-import-type`; they must not drift
-     * between consumers.
+     * in PHP. Shapes are defined here and imported elsewhere via
+     * `@phpstan-import-type`; they must not drift between consumers.
      */
 
     /**
      * Assert the query uses ONLY the given features, or fail fast.
      *
-     * The pre-flight gate for feature-limited backends and callers — the
-     * named features are the SUPPORTED set: a query that uses ANYTHING
-     * outside it is rejected. One missing case cannot sneak a feature
-     * through the way a forgotten entry in a forbidden-set could:
-     *
-     *     $conn->assertSupports(SqlFeature::Aggregates);
-     *     // plain wheres + aggregates pass; a query with a JOIN throws
-     *
-     * A connection implementation calls this with everything it can
-     * execute ({@see \BlueprintAU\Radiant\Database\Connections\CsvConnection::select()}
-     * does exactly that), so rejection is the identical check a caller's
-     * pre-flight would run.
-     *
-     * @param SqlFeature ...$features The features the query may use.
-     * @return static The builder (chainable).
+     * @param  SqlFeature  ...$features
+     * @return static
      * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
-     *         When the query uses any feature outside the supported set —
-     *         the message lists every violated feature.
      */
     final public function assertSupports(SqlFeature ...$features): static
     {
@@ -1210,7 +1044,7 @@ class QueryBuilder
     /**
      * Whether the select is distinct.
      *
-     * @return bool True when distinct.
+     * @return bool
      */
     final public function isDistinct(): bool
     {
@@ -1230,7 +1064,7 @@ class QueryBuilder
     /**
      * The alias of the from subquery, when `fromSub()` was used.
      *
-     * @return string|null The alias, or null when there is none.
+     * @return string|null
      */
     final public function getFromAlias(): ?string
     {
@@ -1250,10 +1084,8 @@ class QueryBuilder
     /**
      * The where clauses.
      *
-     * A discriminated union keyed by {@see WhereType} — exhaustively match on
-     * `type` to handle every shape. Nested clauses carry a SNAPSHOT of their
-     * group's clause list (fixed at group-close time); recurse via
-     * `compileWhereGroup()` on the snapshot.
+     * A discriminated union keyed by {@see WhereType} — exhaustively match
+     * on `type` to handle every shape.
      *
      * @return list<WhereClause>
      */
@@ -1265,15 +1097,8 @@ class QueryBuilder
     /**
      * Mark the most recent where clause as the soft-delete scope clause.
      *
-     * The marker lets {@see \BlueprintAU\Radiant\ModelQueryBuilder::withTrashed()}
-     * find and remove the clause BY MARKER, not positional index —
-     * index-independent removal is robust under the builder's immutability.
-     * Constructor-time only: the soft-delete scope is applied exactly once,
-     * when the builder is built, so the write targets the instance being
-     * constructed (no clone semantics apply yet).
-     *
      * @return void
-     * @throws \LogicException When the builder has no where clauses.
+     * @throws \LogicException
      */
     protected function markLastWhereSoftDelete(): void
     {
@@ -1308,12 +1133,6 @@ class QueryBuilder
     /**
      * The order-by clauses.
      *
-     * Part of the contract consumed by both {@see \BlueprintAU\Radiant\Database\Grammars\Grammar}
-     * (SQL compilation) and custom `ConnectionInterface` implementations
-     * (non-SQL execution). `direction` is the {@see SortDirection} enum —
-     * never a bare string. An {@see Expression} column is spliced verbatim
-     * with its validated direction appended after it.
-     *
      * @return list<array{column: string|Expression, direction: SortDirection|null}>
      */
     final public function getOrders(): array
@@ -1334,7 +1153,7 @@ class QueryBuilder
     /**
      * The row lock to apply, or null for none.
      *
-     * @return LockType|null The lock, or null when there is none.
+     * @return LockType|null
      */
     final public function getLock(): ?LockType
     {
@@ -1344,7 +1163,7 @@ class QueryBuilder
     /**
      * The maximum number of rows to return.
      *
-     * @return int|null The limit, or null when there is none.
+     * @return int|null
      */
     final public function getLimit(): ?int
     {
@@ -1354,7 +1173,7 @@ class QueryBuilder
     /**
      * The number of rows to skip.
      *
-     * @return int|null The offset, or null when there is none.
+     * @return int|null
      */
     final public function getOffset(): ?int
     {
@@ -1364,7 +1183,7 @@ class QueryBuilder
     /**
      * The PK column to return on insert, if known.
      *
-     * @return string|null The PK column, or null when unknown.
+     * @return string|null
      */
     final public function getInsertIdColumn(): ?string
     {
@@ -1374,8 +1193,7 @@ class QueryBuilder
     /**
      * Whether the declared insert-id column is auto-increment.
      *
-     * @return bool True when the key is server-generated; false when a key
-     *         is declared but caller-supplied; false when none is declared.
+     * @return bool
      */
     final public function isInsertIdAutoIncrement(): bool
     {

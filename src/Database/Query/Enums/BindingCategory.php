@@ -8,9 +8,7 @@ namespace BlueprintAU\Radiant\Database\Query\Enums;
  * The binding categories a query builder can hold.
  *
  * Bindings are stored per category so a statement root only flattens the
- * categories it actually compiled. Using an enum (rather than a bare string)
- * makes an invalid category a compile-time error instead of a silently
- * missing binding.
+ * categories it actually compiled.
  */
 enum BindingCategory: string
 {

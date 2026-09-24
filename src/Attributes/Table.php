@@ -39,9 +39,7 @@ final class Table
     /**
      * Create a table override.
      *
-     * @param string|null $name The table name override. Null (the default)
-     *        keeps the snake-cased plural convention; a non-empty string
-     *        replaces it; an empty string throws at metadata build.
+     * @param  string|null  $name
      */
     public function __construct(
         public string|null $name = null,

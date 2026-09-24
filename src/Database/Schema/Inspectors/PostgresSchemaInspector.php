@@ -14,7 +14,7 @@ final class PostgresSchemaInspector extends SchemaInspector
     /**
      * The dialect's schema grammar (the factory hook).
      *
-     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar The grammar.
+     * @return \BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar
      */
     protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
     {
@@ -25,16 +25,10 @@ final class PostgresSchemaInspector extends SchemaInspector
      * Whether a live column's native type text matches the declared
      * logical type — the Postgres mapping.
      *
-     * The live text is compared against the native text the Postgres
-     * grammar renders for the declared type (the round-trip guarantee).
-     * Postgres' `information_schema` reports `udt_name`-style short names
-     * (`int4`, `timestamptz`, `varchar`), so the comparison normalizes
-     * the well-known short forms to the grammar's rendering.
-     *
-     * @param string $liveType The live column's native type text.
-     * @param \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType The declared logical type.
-     * @param int|null $declaredLength The declared length (strings).
-     * @return bool True when the live type matches the declaration.
+     * @param  string  $liveType
+     * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
+     * @param  int|null  $declaredLength
+     * @return bool
      */
     public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
     {
@@ -54,11 +48,10 @@ final class PostgresSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live tables that declare a foreign key INTO the given table —
-     * one `pg_catalog` query.
+     * The live tables that declare a foreign key into the given table.
      *
-     * @param string $table The referenced table.
-     * @return list<string> The referencing table names.
+     * @param  string  $table
+     * @return list<string>
      */
     public function referencingTables(string $table): array
     {
@@ -82,7 +75,7 @@ final class PostgresSchemaInspector extends SchemaInspector
     /**
      * Every table name in the live schema (the connection's search_path).
      *
-     * @return list<string> The table names.
+     * @return list<string>
      */
     public function tables(): array
     {
@@ -107,9 +100,9 @@ final class PostgresSchemaInspector extends SchemaInspector
     /**
      * One table's live schema.
      *
-     * @param string $name The table name.
-     * @return LiveTable The live snapshot.
-     * @throws \RuntimeException When the table does not exist.
+     * @param  string  $name
+     * @return LiveTable
+     * @throws \RuntimeException
      */
     public function table(string $name): LiveTable
     {
@@ -128,8 +121,8 @@ final class PostgresSchemaInspector extends SchemaInspector
     /**
      * The live columns, from `information_schema.columns`.
      *
-     * @param string $name The table name.
-     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}> The columns.
+     * @param  string  $name
+     * @return list<array{name: string, type: string, nullable: bool, default: mixed, primaryKey: bool}>
      */
     private function columns(string $name): array
     {
@@ -173,15 +166,10 @@ final class PostgresSchemaInspector extends SchemaInspector
     }
 
     /**
-     * The live indexes, from `pg_indexes` (excluding PK-constraint indexes
-     * and unique constraints backing UNIQUE — those ride the constraints).
+     * The live indexes, from `pg_indexes` (excluding PK-constraint indexes).
      *
-     * The partial-index `WHERE` predicate and the `NULLS NOT DISTINCT`
-     * option are parsed out of `pg_get_indexdef`'s definition text — the
-     * same text the grammar renders, so round-tripping is exact.
-     *
-     * @param string $name The table name.
-     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}> The indexes.
+     * @param  string  $name
+     * @return list<array{name: string|null, columns: list<string>, unique: bool, where: string|null, nullsNotDistinct: bool}>
      */
     private function indexes(string $name): array
     {
@@ -228,8 +216,8 @@ final class PostgresSchemaInspector extends SchemaInspector
     /**
      * Extract the column list from a `pg_get_indexdef` definition.
      *
-     * @param string $indexdef The index definition text.
-     * @return list<string> The indexed columns.
+     * @param  string  $indexdef
+     * @return list<string>
      */
     private function parseIndexColumns(string $indexdef): array
     {
@@ -249,10 +237,10 @@ final class PostgresSchemaInspector extends SchemaInspector
 
     /**
      * Extract the partial-index predicate from a `pg_get_indexdef`
-     * definition — the text after the top-level ` WHERE `, or null.
+     * definition.
      *
-     * @param string $indexdef The index definition text.
-     * @return string|null The predicate text, or null for a full index.
+     * @param  string  $indexdef
+     * @return string|null
      */
     private function parseIndexWhere(string $indexdef): ?string
     {
@@ -269,8 +257,8 @@ final class PostgresSchemaInspector extends SchemaInspector
      * The live foreign keys, from `information_schema` constraint views
      * (deferrability from `pg_constraint`).
      *
-     * @param string $name The table name.
-     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}> The constraints.
+     * @param  string  $name
+     * @return list<array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name: string}>
      */
     private function foreignKeys(string $name): array
     {
@@ -332,11 +320,10 @@ final class PostgresSchemaInspector extends SchemaInspector
     }
 
     /**
-     * Normalize Postgres' referential-action text to a canonical value,
-     * null for the no-op default.
+     * Normalize Postgres' referential-action text to a canonical value.
      *
-     * @param mixed $action The raw action text.
-     * @return string|null The canonical action, or null for NO ACTION.
+     * @param  mixed  $action
+     * @return string|null
      */
     private function normalizeAction(mixed $action): ?string
     {

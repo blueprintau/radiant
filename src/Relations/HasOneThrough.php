@@ -42,7 +42,7 @@ final class HasOneThrough extends HasManyThrough
     /**
      * Run the constrained query and keep only the first match.
      *
-     * @return Collection<TRelated> A one-element (or empty) collection.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -55,13 +55,8 @@ final class HasOneThrough extends HasManyThrough
     /**
      * Order the eager-load query stably, mirroring the lazy path.
      *
-     * Same rationale as {@see \BlueprintAU\Radiant\Relations\HasOne::applyEagerOrdering()}:
-     * the lazy path orders by the related PK before `first()`; the eager
-     * path must too, or `match()` keeps whichever duplicate row the
-     * database returned first.
-     *
-     * @param ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return ModelQueryBuilder<TRelated> The (possibly re-ordered) chunk query.
+     * @param  ModelQueryBuilder<TRelated>  $query
+     * @return ModelQueryBuilder<TRelated>
      */
     protected function applyEagerOrdering(ModelQueryBuilder $query): ModelQueryBuilder
     {
@@ -77,14 +72,10 @@ final class HasOneThrough extends HasManyThrough
     /**
      * Distribute eager results — first match per parent key.
      *
-     * The per-row parent keys come from the {@see EagerResult} (per-call
-     * state — the relation object is cached and shared, so nothing mutable
-     * lands on the instance).
-     *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys The per-row parent keys from eagerLoad().
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void
      */
     public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void

@@ -16,10 +16,8 @@ use Override;
 class DefaultValueCodec implements ValueCodecInterface
 {
     /**
-     * @param string $datetimeFormat The format used to encode
-     *        `DateTimeInterface` values (default `Y-m-d H:i:s`).
-     * @param string $timezone The timezone datetimes are normalized to
-     *        before formatting.
+     * @param  string  $datetimeFormat
+     * @param  string  $timezone
      */
     public function __construct(
         private string $datetimeFormat = 'Y-m-d H:i:s',
@@ -29,9 +27,8 @@ class DefaultValueCodec implements ValueCodecInterface
     /**
      * PHP value → driver value (write/bind path).
      *
-     * @param string|int|float|bool|null|\DateTimeInterface $value The value to
-     *        encode for the driver.
-     * @return string|int|float|bool|null The driver-ready value.
+     * @param  string|int|float|bool|null|\DateTimeInterface  $value
+     * @return string|int|float|bool|null
      */
     #[Override]
     public function encode(string|int|float|bool|null|\DateTimeInterface $value): string|int|float|bool|null
@@ -53,8 +50,8 @@ class DefaultValueCodec implements ValueCodecInterface
     /**
      * Driver value → PHP value (read path).
      *
-     * @param string|int|float|bool|null $value The driver value to decode.
-     * @return string|int|float|bool|null The PHP value.
+     * @param  string|int|float|bool|null  $value
+     * @return string|int|float|bool|null
      */
     #[Override]
     public function decode(string|int|float|bool|null $value): string|int|float|bool|null

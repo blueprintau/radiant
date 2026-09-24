@@ -28,23 +28,10 @@ final class Unique
     /**
      * Create a unique-constraint declaration.
      *
-     * @param list<string> $columns Column names, validated against the
-     *        model's `#[Column]` set at build time.
-     * @param string|null $name The constraint/index name; defaults to a
-     *        derivation from the covered columns (`{columns}_unique`,
-     *        rendered `{table}_{name}_unique` by the grammar) when null.
-     *        Set it when the derived name is ambiguous (two uniques whose
-     *        column concatenations could collide) or when the host's naming
-     *        convention demands a specific name.
-     * @param string|null $where The partial-index predicate, spliced
-     *        verbatim after `WHERE` (e.g. `deleted_at IS NULL`) — renders
-     *        a partial UNIQUE index on Postgres and SQLite; MySQL fails
-     *        fast at compile time.
-     * @param bool $nullsNotDistinct Whether the UNIQUE index uses `NULLS
-     *        NOT DISTINCT` semantics (Postgres 15+; other dialects fail
-     *        fast at compile time). Use this for the classic "one active
-     *        row per user" constraint on a nullable column — Postgres's
-     *        default `NULLS DISTINCT` would otherwise allow duplicates.
+     * @param  list<string>  $columns
+     * @param  string|null  $name
+     * @param  string|null  $where
+     * @param  bool  $nullsNotDistinct
      */
     public function __construct(
         public array $columns,

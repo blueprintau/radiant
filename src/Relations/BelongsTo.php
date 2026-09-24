@@ -70,7 +70,7 @@ final class BelongsTo extends Relation
     /**
      * Run the constrained query — a single model or none.
      *
-     * @return Collection<TRelated> A one-element (or empty) collection.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -91,16 +91,10 @@ final class BelongsTo extends Relation
     /**
      * Run the eager query — the FK lives on the PARENT, so the IN clause
      * targets the related table's owner key ({@see BelongsTo::$localKey}).
-     * A composite key widens to an OR of AND-groups (one per parent tuple).
+     * A composite key widens to an OR of AND-groups.
      *
-     * Chunking is inherited from the base: this method is the per-chunk
-     * strategy ({@see Relation::eagerLoadChunk()} overrides), called once
-     * per bounded key list.
-     *
-     * @param list<KeyValue> $parentKeys The parents' FK values.
-     * @return EagerResult<TRelated> The related models — no per-row parent keys;
-     *         {@see match()} re-derives the key from each model's FK
-     *         attribute, which the select carries.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     protected function eagerLoadChunk(array $parentKeys): EagerResult
@@ -139,13 +133,7 @@ final class BelongsTo extends Relation
     /**
      * The parent column(s) the eager loader collects key values from.
      *
-     * The FK lives on the PARENT and points at the related table's owner
-     * key ({@see BelongsTo::$localKey}) — so the loader must collect the
-     * parents' FK values, not their own primary keys. Overriding this is
-     * what makes eager `belongsTo` correct: the base implementation would
-     * collect the parents' local keys and match the wrong rows.
-     *
-     * @return string|list<string> The parent's FK column (or columns).
+     * @return string|list<string>
      */
     public function eagerKeyColumn(): string|array
     {
@@ -155,16 +143,10 @@ final class BelongsTo extends Relation
     /**
      * Distribute eager results onto parents by FK value.
      *
-     * A composite key matches by the full tuple, serialized to a stable
-     * string key.
-     *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        Unused here — the owner key lives on each related model, so the
-     *        key is re-derived from the model itself (accepted for signature
-     *        parity with the through relations, which need it).
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
      */
     public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void

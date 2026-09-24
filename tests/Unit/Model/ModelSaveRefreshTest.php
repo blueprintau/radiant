@@ -175,6 +175,59 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $this->expectExceptionMessage('Unknown column');
         $item->setAttribute('bogus', 'nope');
     }
+
+    /**
+     * THE NULL-KEY WRITE GUARD: update() on a model whose PK was never
+     * hydrated throws LogicException instead of compiling
+     * `WHERE pk IS NULL` and reporting success for a no-op.
+     */
+    public function testUpdateWithoutResolvedKeyThrows(): void
+    {
+        $item = new MstItem();
+        $item->name = 'Never saved';
+
+        // Force the UPDATE branch without a key: exists is flipped behind
+        // the guard's back, mirroring a caller-owned select that skipped
+        // hydration of the key.
+        $ref = new \ReflectionProperty(Model::class, 'exists');
+        $ref->setValue($item, true);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('cannot target its row');
+
+        $item->name = 'Edited';
+        $item->save();
+    }
+
+    /**
+     * Same guard for delete(): a keyless model throws instead of issuing
+     * `WHERE pk IS NULL` (which on SQLite can match OTHER rows).
+     */
+    public function testDeleteWithoutResolvedKeyThrows(): void
+    {
+        $item = new MstItem();
+        $item->name = 'Never saved';
+
+        $ref = new \ReflectionProperty(Model::class, 'exists');
+        $ref->setValue($item, true);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('cannot target its row');
+
+        $item->delete();
+    }
+
+    /**
+     * The guard is write-only: getKeyForRefresh() stays lenient so
+     * Collection::find()/fresh() treat an unresolved key as "no match".
+     */
+    public function testKeyForRefreshStaysLenientOnUnsavedModel(): void
+    {
+        $item = new MstItem();
+        $item->name = 'Never saved';
+
+        self::assertNull($item->getKeyForRefresh());
+    }
 }
 
 /**

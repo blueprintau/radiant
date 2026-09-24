@@ -66,22 +66,14 @@ final class MorphTo extends Relation
      *
      * The base constructor's `$related` slot is filled with the abstract
      * {@see Model::class} marker — the real class resolves per parent from
-     * the type column, so no fixed related class exists at construction.
-     * The base's query build + constraint pass are skipped via
-     * {@see Relation::defersConstraints()} (overridden below) — the base
-     * body RUNS, assigns the promoted properties, and returns early.
+     * the type column. The base's query build + constraint pass are skipped
+     * via {@see Relation::defersConstraints()}.
      *
-     * @param Model $parent The model owning the relation.
-     * @param string $typeColumn The type-discriminator column on THIS
-     *        table (`{name}_type` by convention).
-     * @param string $foreignKey The FK column on THIS table (`{name}_id`
-     *        by convention).
-     * @param string $ownerKey The key column on the TARGET tables (their
-     *        primary key, by convention).
-     * @param list<class-string<TRelated>>|null $types The optional
-     *        morph-alias allowlist — null resolves any model class. The
-     *        template binds to it: with an allowlist the relation's reads
-     *        narrow to exactly those classes.
+     * @param  Model  $parent
+     * @param  string  $typeColumn
+     * @param  string  $foreignKey
+     * @param  string  $ownerKey
+     * @param  list<class-string<TRelated>>|null  $types
      */
     public function __construct(
         Model $parent,
@@ -108,10 +100,9 @@ final class MorphTo extends Relation
 
     /**
      * The base constructor's query build + constraint pass cannot run —
-     * the related class resolves per parent from the type column, so
-     * neither the builder nor the constraint exists at construction.
+     * the related class resolves per parent from the type column.
      *
-     * @return bool Always true.
+     * @return bool
      */
     #[\Override]
     protected function defersConstraints(): bool
@@ -122,13 +113,7 @@ final class MorphTo extends Relation
     /**
      * The related classes a dotted path's DEEPER segments resolve against.
      *
-     * MorphTo's related set is dynamic — resolved per row from the type
-     * column — so the path validator cannot check deeper segments
-     * statically. Returning [] tells the validator to stop here; the
-     * runtime recursion resolves the deeper segments off the actually-
-     * loaded models.
-     *
-     * @return list<class-string<Model>> Always [] — the dynamic marker.
+     * @return list<class-string<Model>>
      */
     #[\Override]
     public function relatedClasses(): array
@@ -139,7 +124,7 @@ final class MorphTo extends Relation
     /**
      * The type-discriminator column on the parent's table.
      *
-     * @return string The column name.
+     * @return string
      */
     final public function getTypeColumn(): string
     {
@@ -148,10 +133,6 @@ final class MorphTo extends Relation
 
     /**
      * Unused — the related class is dynamic; constraints build lazily.
-     *
-     * The base declares this abstract; MorphTo's constructor does NOT call
-     * it (it skips the base body), so this body only satisfies the
-     * contract and fails loudly if a future refactor ever invokes it.
      *
      * @return void
      */
@@ -167,12 +148,9 @@ final class MorphTo extends Relation
     /**
      * Resolve ONE parent's morph alias — the shared validation path.
      *
-     * @param Model $parent The parent to resolve.
-     * @return class-string<Model>|null The alias, or null when the type
-     *         column is null (an unset morph target — legitimately empty).
-     * @throws \InvalidArgumentException On a corrupt alias (non-string,
-     *         unknown class, non-model class) or a disallowed one (not on
-     *         the allowlist).
+     * @param  Model  $parent
+     * @return class-string<Model>|null
+     * @throws \InvalidArgumentException
      */
     private function aliasOf(Model $parent): string|null
     {
@@ -209,8 +187,8 @@ final class MorphTo extends Relation
     /**
      * Build the constrained query for ONE resolved type.
      *
-     * @param class-string<Model> $alias The resolved target class.
-     * @return ModelQueryBuilder<Model> The constrained builder.
+     * @param  class-string<Model>  $alias
+     * @return ModelQueryBuilder<Model>
      */
     private function queryFor(string $alias): ModelQueryBuilder
     {
@@ -228,12 +206,7 @@ final class MorphTo extends Relation
     /**
      * The parent column(s) the eager loader collects key values from.
      *
-     * The (type, key) pair lives on the PARENT — the loader must collect
-     * BOTH columns (the BelongsTo convention for the key, plus the type
-     * column the eager strategy groups by). The pair travels through the
-     * loader as the key tuple, keeping the eager contract key-shaped.
-     *
-     * @return list<string> The parent's [type, FK] columns.
+     * @return list<string>
      */
     #[\Override]
     public function eagerKeyColumn(): array
@@ -244,18 +217,8 @@ final class MorphTo extends Relation
     /**
      * Run the eager queries — ONE chunked `IN` per distinct type.
      *
-     * The parents' (type, key) pairs arrive as the key tuples (the loader
-     * collects {@see eagerKeyColumn()}'s columns per parent and dedups
-     * them). Each distinct type gets its own chunked query through its
-     * own model class, and the results merge into one mixed-class
-     * EagerResult whose per-row (alias, serialized key) pairs match()
-     * dispatches by.
-     *
-     * @param list<KeyValue> $parentKeys The parents' [type, FK] tuples
-     *        (deduplicated by the loader) — each a two-element list whose
-     *        first element is the morph alias.
-     * @return EagerResult<Model> The related models of ALL resolved types,
-     *         with the per-row (alias, key) pairs match() dispatches by.
+     * @param  list<KeyValue>  $parentKeys  The parents' [type, FK] tuples.
+     * @return EagerResult<Model>
      */
     #[\Override]
     public function eagerLoad(array $parentKeys): EagerResult
@@ -312,12 +275,10 @@ final class MorphTo extends Relation
     /**
      * Distribute eager results onto parents by (alias, key) pair.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<Model> $results The related models of mixed classes.
-     * @param string $name The relation name (the cache key).
-     * @param list<array{string, string}>|null $eagerParentKeys The per-row
-     *        (alias, serialized-key) pairs from eagerLoad(), positionally
-     *        paired with the results.
+     * @param  list<Model>  $parents
+     * @param  Collection<Model>  $results
+     * @param  string  $name
+     * @param  list<array{string, string}>|null  $eagerParentKeys
      * @return void
      */
     #[\Override]
@@ -361,8 +322,7 @@ final class MorphTo extends Relation
     /**
      * Run the constrained query against the parent's resolved type.
      *
-     * @return Collection<Model> A one-element (or empty) collection — the
-     *         single related model unwraps at the accessor.
+     * @return Collection<Model>
      */
     #[\Override]
     protected function executeResults(): Collection

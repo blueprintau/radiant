@@ -10,22 +10,20 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 /**
  * The MySQL dialect of the SQL Grammar.
  *
- * Identifiers are quoted with backticks (embedded backticks doubled). MySQL
- * supports `INSERT ... RETURNING` only from 8.0.19+ with a `RETURNING`
- * clause on `DELETE`/`UPDATE` — plain `INSERT ... RETURNING` is not
- * supported, so {@see usesReturning()} stays false and `insertGetId()` falls
- * back to `lastInsertId()` via {@see compileInsertForId()}'s `returnsKey`
- * flag. Row locks render as `for update` and
- * `lock in share mode`; an offset without a limit is padded with the
- * unsigned-bigint maximum so the offset is accepted.
+ * Identifiers are quoted with backticks (embedded backticks doubled). Plain
+ * `INSERT ... RETURNING` is not supported, so {@see usesReturning()} stays
+ * false and `insertGetId()` falls back to `lastInsertId()` via
+ * {@see compileInsertForId()}'s `returnsKey` flag. Row locks render as
+ * `for update` and `lock in share mode`; an offset without a limit is padded
+ * with the unsigned-bigint maximum so the offset is accepted.
  */
 final class MySqlGrammar extends Grammar
 {
     /**
      * Wrap an identifier in MySQL backticks.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     protected function wrap(string $value): string
     {
@@ -33,14 +31,13 @@ final class MySqlGrammar extends Grammar
     }
 
     /**
-     * MySQL has no `INSERT ... DEFAULT VALUES` form — the one-row
-     * `VALUES ()` fallback compiles instead (MySQL accepts it and applies
-     * the column defaults). The compile-function shape of the old
-     * `supportsDefaultValues()` boolean: the dialect RENDERS the form it
-     * supports rather than answering whether it supports the standard one.
+     * Compile the empty-row insert — the one-row `VALUES ()` fallback.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The MySQL empty-insert form.
+     * MySQL has no `INSERT ... DEFAULT VALUES` form; it accepts the one-row
+     * `VALUES ()` and applies the column defaults.
+     *
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     #[\Override]
     protected function compileEmptyInsert(QueryBuilder $builder): string
@@ -51,11 +48,8 @@ final class MySqlGrammar extends Grammar
     /**
      * Compile the offset clause, padding a bare offset with the max limit.
      *
-     * MySQL requires a `LIMIT` before `OFFSET`; a bare offset is padded with
-     * the unsigned-bigint maximum so the query stays valid.
-     *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The offset clause, or an empty string when there is none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileOffset(QueryBuilder $builder): string
     {
@@ -71,8 +65,8 @@ final class MySqlGrammar extends Grammar
     /**
      * Compile the row lock for MySQL.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The lock clause, or an empty string when there is none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileLock(QueryBuilder $builder): string
     {

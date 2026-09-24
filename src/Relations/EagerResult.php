@@ -43,8 +43,8 @@ final class EagerResult
     public readonly ?array $parentKeys;
 
     /**
-     * @param Collection<TModel> $models The models.
-     * @param list<int|string|null|list<int|string|null>>|null $parentKeys The per-row parent keys, or null.
+     * @param  Collection<TModel>  $models
+     * @param  list<int|string|null|list<int|string|null>>|null  $parentKeys  The per-row parent keys, or null.
      */
     public function __construct(Collection $models, ?array $parentKeys = null)
     {
@@ -57,9 +57,8 @@ final class EagerResult
      *
      * @template TRelatedModel of \BlueprintAU\Radiant\Model
      *
-     * @param list<TRelatedModel>|array<int,TRelatedModel> $models The models (list or map — re-indexed by
-     *        the collection constructor).
-     * @return self<TRelatedModel> The result.
+     * @param  list<TRelatedModel>|array<int,TRelatedModel>  $models
+     * @return self<TRelatedModel>
      */
     public static function fromModels(array $models): self
     {
@@ -70,15 +69,10 @@ final class EagerResult
      * A models-only result built from an EXISTING collection — no per-row
      * parent keys.
      *
-     * The no-copy path: {@see fromModels()} forces callers holding a
-     * collection to `->all()` it first, dismantling and re-wrapping the
-     * same items. This accepts the collection as-is (the query's `get()`
-     * result is already a 0-based list, so no re-indexing is needed).
-     *
      * @template TRelatedModel of \BlueprintAU\Radiant\Model
      *
-     * @param Collection<TRelatedModel> $models The models, in query order.
-     * @return self<TRelatedModel> The result.
+     * @param  Collection<TRelatedModel>  $models
+     * @return self<TRelatedModel>
      */
     public static function fromCollection(Collection $models): self
     {
@@ -88,17 +82,10 @@ final class EagerResult
     /**
      * Wrap a model list into a collection, preserving the element template.
      *
-     * PHPStan loses the element type when `Collection::make(...)` is passed
-     * straight into a generic constructor (the argument is inferred against
-     * the constructor's template before `make()`'s own inference settles,
-     * collapsing to the bound). Routing through a helper whose RETURN is
-     * explicitly `Collection<T>` keeps the template intact so the
-     * constructor infers `TModel` correctly.
-     *
      * @template TRelatedModel of \BlueprintAU\Radiant\Model
      *
-     * @param list<TRelatedModel>|array<int,TRelatedModel> $models The models (list or map — re-indexed).
-     * @return Collection<TRelatedModel> The models as a 0-based list collection.
+     * @param  list<TRelatedModel>|array<int,TRelatedModel>  $models
+     * @return Collection<TRelatedModel>
      *
      * @internal Construction detail of the eager-load path; not public API.
      */

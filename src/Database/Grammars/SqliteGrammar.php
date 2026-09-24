@@ -21,8 +21,8 @@ final class SqliteGrammar extends Grammar
     /**
      * Wrap an identifier in SQLite double quotes.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     protected function wrap(string $value): string
     {
@@ -32,7 +32,7 @@ final class SqliteGrammar extends Grammar
     /**
      * Whether the dialect supports `INSERT ... RETURNING`.
      *
-     * @return bool True — SQLite 3.35+ supports RETURNING.
+     * @return bool
      */
     public function usesReturning(): bool
     {

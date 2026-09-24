@@ -43,6 +43,33 @@ final class SoftDeletesTest extends DatabaseTestCase
     }
 
     /**
+     * delete() on an UNSAVED model returns false — there is no row to
+     * soft-delete, and success for a write that never ran would break the
+     * honest-reporting contract. (Pre-fix: the exists-guard fell through
+     * to `return true`.)
+     */
+    public function testDeleteOnUnsavedModelReturnsFalse(): void
+    {
+        $post = new SdPost();
+        $post->title = 'Never saved';
+
+        self::assertFalse($post->delete());
+        self::assertCount(0, SdPost::newQuery()->withTrashed()->get());
+    }
+
+    /**
+     * Same contract for restore(): an unsaved model has no row to
+     * restore — false, not success.
+     */
+    public function testRestoreOnUnsavedModelReturnsFalse(): void
+    {
+        $post = new SdPost();
+        $post->title = 'Never saved';
+
+        self::assertFalse($post->restore());
+    }
+
+    /**
      * delete() flips trashed(), hides the row from the default scope, and
      * keeps it reachable via withTrashed().
      */
@@ -74,6 +101,69 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post->delete();
 
         self::assertTrue($post->delete(), 're-delete targets the row directly and succeeds');
+    }
+
+    /**
+     * THE TRASHED-SAVE GUARD: save() on a soft-deleted model throws — its
+     * UPDATE would carry the auto-applied `deleted_at IS NULL` scope, match
+     * 0 rows, and report success for a write that never landed. (Pre-fix:
+     * the silent no-op.) Synthetic delete column variant.
+     */
+    public function testSaveOnTrashedModelThrows(): void
+    {
+        $post = $this->seedPost();
+        $post->delete();
+
+        $post->title = 'Edited while trashed';
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('soft-deleted');
+        $this->expectExceptionMessage('restore() first');
+
+        $post->save();
+    }
+
+    /**
+     * Same guard for a user-DECLARED (typed-property) delete column —
+     * the snapshot read path is identical.
+     */
+    public function testSaveOnTrashedModelWithDeclaredColumnThrows(): void
+    {
+        $post = new SdRenamedPost();
+        $post->title = 'Custom';
+        $post->save();
+        $post->delete();
+
+        $post->title = 'Edited while trashed';
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('soft-deleted');
+
+        $post->save();
+    }
+
+    /**
+     * THE SNAPSHOT-SPACE CONTRACT (regression lock): delete() stores the
+     * ENCODED timestamp in `original` — not a raw Carbon. Storing the raw
+     * object made getDirty() flag deleted_at dirty forever (Carbon !==
+     * encoded string), so every subsequent save() re-wrote a column that
+     * did not change. The probe exposes the protected dirty read.
+     */
+    public function testDeleteLeavesNoPhantomDirtyStamp(): void
+    {
+        $post = new SdDirtyProbe();
+        $post->title = 'Probe';
+        $post->save();
+
+        self::assertSame([], $post->exposeDirty(), 'a fresh save leaves nothing dirty');
+
+        $post->delete();
+
+        self::assertSame(
+            [],
+            $post->exposeDirty(),
+            'delete() must not leave deleted_at phantom-dirty in the encoded snapshot space'
+        );
     }
 
     /**
@@ -176,6 +266,20 @@ final class SoftDeletesTest extends DatabaseTestCase
     }
 
     /**
+     * THE OVERRIDE CONTRACT (regression lock): a non-null
+     * deletedAtColumn() override MUST match a declared #[Column] — an
+     * override with no matching declaration is a fail-fast metadata error,
+     * not a silently injected phantom column.
+     */
+    public function testOverrideWithoutDeclaredColumnFailsFast(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('overrides deletedAtColumn() to [missing_at]');
+
+        \BlueprintAU\Radiant\Metadata\MetadataFactory::for(SdUndeclaredOverridePost::class);
+    }
+
+    /**
      * Soft deletes are portable: the trait only uses update()/whereKey(),
      * so the lifecycle works on a CSV connection too.
      */
@@ -243,6 +347,43 @@ class SdPost extends Model
 }
 
 /**
+ * Fixture: probe exposing the protected dirty read — the established
+ * pattern for asserting snapshot-space internals (see the DirtyProbe /
+ * DefaultedModelProbe fixtures in the Metadata tests).
+ */
+#[\BlueprintAU\Radiant\Attributes\Table(name: 'sd_posts')]
+class SdDirtyProbe extends Model
+{
+    use SoftDeletes;
+
+    /**
+     * The post's id.
+     *
+     * @var int
+     */
+    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
+
+    /**
+     * The post title.
+     *
+     * @var string
+     */
+    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
+    public string $title;
+
+    /**
+     * The protected dirty read, exposed for the snapshot-space lock.
+     *
+     * @return array<string, mixed>
+     */
+    public function exposeDirty(): array
+    {
+        return $this->getDirty();
+    }
+}
+
+/**
  * Fixture: soft-deletable post with a RENAMED delete column.
  */
 #[\BlueprintAU\Radiant\Attributes\Table(name: 'sd_renamed_posts')]
@@ -283,4 +424,40 @@ class SdRenamedPost extends Model
      */
     #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::DateTime, name: 'renamed_at', nullable: true)]
     public ?\Carbon\Carbon $renamedAt;
+}
+
+/**
+ * Fixture: a SoftDeletes model whose deletedAtColumn() override names a
+ * column with NO matching #[Column] declaration — the fail-fast metadata
+ * error (an override is an explicit claim that the column is declared).
+ */
+class SdUndeclaredOverridePost extends Model
+{
+    use SoftDeletes;
+
+    /**
+     * Names a column that is never declared — the build error.
+     *
+     * @return string The column name.
+     */
+    public static function deletedAtColumn(): ?string
+    {
+        return 'missing_at';
+    }
+
+    /**
+     * The post's id.
+     *
+     * @var int
+     */
+    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
+    public int $id;
+
+    /**
+     * The post title.
+     *
+     * @var string
+     */
+    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
+    public string $title;
 }

@@ -11,25 +11,14 @@ use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
  * Desired state vs. live schema → ordered, classified changes.
  *
  * Pure computation — desired state in, classified {@see SchemaChange}s out.
- * No I/O decisions, no console, no filesystem: the Prisma `migrate diff` /
- * Django autodetector role. The host command becomes trivial wiring:
- * plan → show → apply.
- *
- * Output ordering matters: creates first, then alters, drops last — so a
- * rename (drop + create) never destroys data before the replacement exists.
- *
- * **The safety gate is data, not policy.** Every change is classified
- * `destructive` or not; the host decides what to do (require `--force`,
- * prompt, refuse). Classification rule: anything that can lose data is
- * destructive — dropping a table, dropping a column. Everything else
- * (create, add column) is safe.
+ * Creates come first, then alters, drops last.
  */
 final class SchemaDiffer
 {
     /**
      * Create a differ over a live-schema inspector.
      *
-     * @param SchemaInspector $inspector Reads the live schema.
+     * @param  SchemaInspector  $inspector
      */
     public function __construct(
         private readonly SchemaInspector $inspector,
@@ -39,18 +28,9 @@ final class SchemaDiffer
     /**
      * Diff the desired state against the live schema.
      *
-     * The table each blueprint builds is read from the blueprint itself
-     * ({@see Blueprint::getTable()}) — the blueprint is the source of truth
-     * for its own name.
-     *
-     * @param list<Blueprint> $desired The desired states.
-     * @return list<SchemaChange> Creates first (dependency-ordered:
-     *         referenced tables before their referrers), then renames,
-     *         alters, drops last (reverse-dependency: children before
-     *         parents) — drops last so a rename (drop + create) never
-     *         destroys data before the replacement exists.
-     * @throws \LogicException When the desired set contains a circular
-     *         FK dependency (no valid creation order exists).
+     * @param  list<Blueprint>  $desired
+     * @return list<SchemaChange>
+     * @throws \LogicException
      */
     public function diff(array $desired): array
     {
@@ -173,25 +153,9 @@ final class SchemaDiffer
     /**
      * Order creates so referenced tables come first (topological sort).
      *
-     * Fixes a latent ordering bug: `posts` (FK → users) created before
-     * `users` fails on MySQL/Postgres at DDL time and on SQLite at INSERT
-     * time (the connector forces `foreign_keys = ON` — table creation
-     * succeeds lazily, writes don't). The graph edges come from each
-     * blueprint's FK references (resolved table names); MTI child→parent
-     * FKs are captured naturally since `fromMetadata()` emits them.
-     *
-     * External references (an FK to a table NOT in the desired set) are
-     * ignored for ordering — assumed to already exist live. Self-
-     * references are skipped (same table, no edge).
-     *
-     * Ties keep declaration order (stable sort semantics via the queue).
-     *
-     * @param list<SchemaChange> $creates The create changes.
-     * @return list<SchemaChange> Dependency-ordered creates.
-     * @throws \LogicException When a circular FK dependency exists — no
-     *         valid creation order is possible; the message names the
-     *         cycle path and the two exits (drop one FK, or hand-author
-     *         the two-pass create-then-add-constraint sequence).
+     * @param  list<SchemaChange>  $creates
+     * @return list<SchemaChange>
+     * @throws \LogicException
      */
     private function orderCreatesByDependencies(array $creates): array
     {
@@ -269,15 +233,10 @@ final class SchemaDiffer
     }
 
     /**
-     * Order drops in REVERSE dependency order — children before parents.
+     * Order drops in reverse dependency order — children before parents.
      *
-     * The mirrored bug: dropping a parent table before its child fails
-     * under FK enforcement. The edges come from the LIVE schema (the
-     * dropped tables' FK declarations), not the desired blueprints — the
-     * desired state no longer declares these tables.
-     *
-     * @param list<SchemaChange> $drops The drop changes.
-     * @return list<SchemaChange> Reverse-dependency-ordered drops.
+     * @param  list<SchemaChange>  $drops
+     * @return list<SchemaChange>
      */
     private function orderDropsByDependencies(array $drops): array
     {
@@ -355,26 +314,14 @@ final class SchemaDiffer
     /**
      * Tie table-level create/drop pairs into rename advisories.
      *
-     * Runs AFTER both loops: creates come from the desired loop, drops from
-     * the live loop, and only once both exist can they be paired. A pair is
-     * flagged when the created table's columns overlap the dropped table's
-     * live columns (a renamed table keeps its columns — Django's signal).
-     * Below the threshold the pair stays unflagged: a genuinely new table
-     * plus a genuinely dead one must NOT read as a rename.
+     * A pair is flagged when the created table's columns overlap the
+     * dropped table's live columns. The tie never rewrites operations —
+     * both sides of a flagged pair carry {@see SchemaChange::$renameOf}.
      *
-     * The tie NEVER rewrites operations — no `RENAME TABLE` exists in the
-     * operation vocabulary, and auto-executing one on a guess is the
-     * data-corruption scenario. Both sides of a flagged pair carry
-     * {@see SchemaChange::$renameOf} so the host's gate can ask one
-     * question per PAIR without string-matching descriptions.
-     *
-     * Multiple candidate drops for one create: tie to the highest overlap
-     * only, and leave the others unflagged — never pick silently.
-     *
-     * @param list<SchemaChange> $changes The ordered change list.
-     * @param list<SchemaChange> $creates The create changes.
-     * @param list<SchemaChange> $drops The drop changes.
-     * @return list<SchemaChange> The same order, with advisory data filled.
+     * @param  list<SchemaChange>  $changes
+     * @param  list<SchemaChange>  $creates
+     * @param  list<SchemaChange>  $drops
+     * @return list<SchemaChange>
      */
     private function tieTableRenames(array $changes, array $creates, array $drops): array
     {
@@ -464,21 +411,9 @@ final class SchemaDiffer
     /**
      * Diff one table's desired state against its live columns.
      *
-     * Column-level: added columns → `AddColumn`, removed columns →
-     * `DropColumn` (destructive), folded into one alter per table.
-     * Content drift (a column present on both sides with a changed
-     * type/nullable/default) → `ModifyColumn` — a SEPARATE change, so a
-     * rename+modify sequence stays independently verifiable.
-     *
-     * Declared column renames are honored FIRST: a declared rename
-     * suppresses the add+drop advisory shape for those columns (the
-     * declaration IS the decision — the data-losing alter never
-     * materializes for a declared rename).
-     *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The desired state.
-     * @return list<SchemaChange> The changes (alter + modify), empty when
-     *         in sync.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
+     * @return list<SchemaChange>
      */
     private function diffTable(string $table, Blueprint $blueprint): array
     {
@@ -744,17 +679,9 @@ final class SchemaDiffer
     /**
      * Compare a live column default against the declared one.
      *
-     * The live default is the dialect's stored text (often a string —
-     * `'0'`, `'CURRENT_TIMESTAMP'`, or null for no default); the declared
-     * default is the PHP value. The comparison is deliberately
-     * conservative: a live NULL (no default) matches a declared null, and
-     * scalar values compare loosely (int 0 vs '0' — the codec round-trip
-     * makes them the same cell). An Expression default compares by its
-     * SQL text.
-     *
-     * @param mixed $liveDefault The live default (dialect text or null).
-     * @param mixed $declaredDefault The declared default.
-     * @return bool True when the defaults match.
+     * @param  mixed  $liveDefault
+     * @param  mixed  $declaredDefault
+     * @return bool
      */
     private function defaultsMatch(mixed $liveDefault, mixed $declaredDefault): bool
     {
@@ -771,17 +698,11 @@ final class SchemaDiffer
 
     /**
      * Diff one table's declared foreign keys against the live ones —
-     * SHAPE-FIRST matching.
+     * shape-first matching.
      *
-     * A live FK with an identical shape (columns + references + actions)
-     * is IN SYNC regardless of its constraint name — pre-existing
-     * auto-named constraints must not read as drift and churn drop+re-add.
-     * A name match with a DIFFERENT shape is real drift (drop + add).
-     * Names are the DROP HANDLE, not the identity.
-     *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The desired state.
-     * @return list<SchemaChange> The add/drop changes, empty when in sync.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
+     * @return list<SchemaChange>
      */
     private function diffForeignKeys(string $table, Blueprint $blueprint): array
     {
@@ -866,13 +787,9 @@ final class SchemaDiffer
      * Whether a declared FK shape matches a live FK shape — the
      * shape-first identity test.
      *
-     * Columns, referenced table + columns, and the ON DELETE/ON UPDATE
-     * actions must all match. The constraint NAME is deliberately NOT
-     * compared (names are the drop handle, not the identity).
-     *
-     * @param array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $desiredFk The declared shape.
-     * @param array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name?: string|null} $liveFk The live shape.
-     * @return bool True when the shapes match.
+     * @param  array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}  $desiredFk
+     * @param  array{columns: list<string>, referencesTable: string, referencesColumns: list<string>, onDelete: string|null, onUpdate: string|null, deferrable: bool, name?: string|null}  $liveFk
+     * @return bool
      */
     private function foreignKeyShapesMatch(array $desiredFk, array $liveFk): bool
     {
@@ -902,18 +819,9 @@ final class SchemaDiffer
     /**
      * Diff one table's declared CHECK constraints against the live ones.
      *
-     * Expression-level comparison with CONSERVATIVE normalization
-     * (whitespace collapsed, dialect quoting stripped): a same-name
-     * different-expression mismatch is ADVISORY-ONLY — reported in the
-     * description, never auto-executed (a wrong drop+add on an expression
-     * guess is the data-corruption scenario; false positives stay bounded
-     * because nothing executes). Declared name missing live → `AddCheck`;
-     * live name absent from declared → report-only advisory.
-     *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The desired state.
-     * @return list<SchemaChange> The add changes (plus advisories in
-     *         descriptions), empty when in sync.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
+     * @return list<SchemaChange>
      */
     private function diffChecks(string $table, Blueprint $blueprint): array
     {
@@ -1002,13 +910,12 @@ final class SchemaDiffer
     }
 
     /**
-     * Whether two CHECK expressions match after CONSERVATIVE
+     * Whether two CHECK expressions match after conservative
      * normalization — whitespace collapsed, dialect quoting stripped.
      *
-     * @param string $declared The declared expression.
-     * @param string|null $live The live expression (null when the
-     *        inspector could not parse it).
-     * @return bool True when the normalized expressions match.
+     * @param  string  $declared
+     * @param  string|null  $live
+     * @return bool
      */
     private function checkExpressionsMatch(string $declared, string|null $live): bool
     {
@@ -1023,28 +930,11 @@ final class SchemaDiffer
 
     /**
      * Diff one table's declared indexes against the live ones — option
-     * drift only, because the live inspector cannot see a DESIRED index
-     * that was never created (a declared index absent from the live table
-     * is a broken deployment, not a differ job — the differ never creates
-     * indexes outside the whole-table create path).
+     * drift only.
      *
-     * A named index present on BOTH sides with a changed `where` predicate
-     * or `NULLS NOT DISTINCT` option is reported: rebuilding the index is
-     * non-destructive (no rows touched), but the drift means the live
-     * constraint is WEAKER than declared (e.g. `NULLS DISTINCT` accepting
-     * duplicate NULLs, or no partial filter matching rows it should
-     * exclude) — a silent semantic hole if not surfaced.
-     *
-     * Indexes live in the ALTER vocabulary as a whole-table rebuild: the
-     * change carries a blueprint holding the table's FULL desired index
-     * list; `apply()` drops the drifted live indexes (by live name — the
-     * drift is per-option, names match) and re-runs every `CREATE INDEX`.
-     * Unnamed live indexes (inline UNIQUE constraints, `sqlite_autoindex_*`)
-     * are skipped — they ride the columns' `unique` flag, not this path.
-     *
-     * @param string $table The table name.
-     * @param Blueprint $blueprint The desired state.
-     * @return SchemaChange|null The rebuild change, or null when in sync.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
+     * @return SchemaChange|null
      */
     private function diffIndexes(string $table, Blueprint $blueprint): ?SchemaChange
     {

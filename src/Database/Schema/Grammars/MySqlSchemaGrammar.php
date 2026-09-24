@@ -19,8 +19,8 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * Wrap an identifier in MySQL backticks.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     protected function wrap(string $value): string
     {
@@ -30,9 +30,9 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * Map a logical column type to MySQL's native type.
      *
-     * @param ColumnType $type The logical column type.
-     * @param int|null $length The column length, if any.
-     * @return string The MySQL type.
+     * @param  ColumnType  $type
+     * @param  int|null  $length
+     * @return string
      */
     public function type(ColumnType $type, ?int $length = null): string
     {
@@ -51,7 +51,7 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * The MySQL auto-increment clause.
      *
-     * @return string The clause.
+     * @return string
      */
     protected function autoIncrement(): string
     {
@@ -69,9 +69,9 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * MySQL drops an index relative to its table: `ALTER TABLE … DROP INDEX`.
      *
-     * @param string $name The index name.
-     * @param string $table The table the index is on.
-     * @return string The compiled SQL.
+     * @param  string  $name
+     * @param  string  $table
+     * @return string
      */
     public function compileDropIndex(string $name, string $table): string
     {
@@ -83,8 +83,8 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * Compile an `ALTER TABLE ... DROP COLUMN` statement.
      *
-     * @param Blueprint $blueprint The table and columns to drop.
-     * @return string The compiled SQL.
+     * @param  Blueprint  $blueprint
+     * @return string
      */
     protected function compileDropColumn(Blueprint $blueprint): string
     {
@@ -104,15 +104,8 @@ final class MySqlSchemaGrammar extends SchemaGrammar
      * Compile an `ALTER TABLE ... MODIFY COLUMN` statement — MySQL's
      * in-place content-drift form.
      *
-     * One statement per modified column, each carrying the FULL desired
-     * definition (MySQL's MODIFY replaces the whole column definition, so
-     * the desired shape is authoritative — anything omitted would be
-     * dropped from the column). The modified columns are the blueprint's
-     * declared columns; the change's blueprint carries exactly those.
-     *
-     * @param Blueprint $blueprint The table-bound blueprint carrying the
-     *        desired column shapes.
-     * @return list<string> One `MODIFY` statement per column.
+     * @param  Blueprint  $blueprint
+     * @return list<string>
      */
     public function compileModifyColumn(Blueprint $blueprint): array
     {
@@ -133,11 +126,10 @@ final class MySqlSchemaGrammar extends SchemaGrammar
      * Compile an `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`
      * statement — MySQL's in-place FK-add form.
      *
-     * @param string $table The table to attach the constraint to.
-     * @param array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
-     *        The constraint shape.
-     * @param string $name The constraint name (the drop handle).
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}  $foreignKey
+     * @param  string  $name
+     * @return string
      */
     public function compileAddForeignKey(string $table, array $foreignKey, string $name): string
     {
@@ -149,11 +141,11 @@ final class MySqlSchemaGrammar extends SchemaGrammar
 
     /**
      * Compile an `ALTER TABLE ... DROP FOREIGN KEY` statement — MySQL's
-     * in-place FK-drop form (MySQL's dialect-specific syntax).
+     * in-place FK-drop form.
      *
-     * @param string $table The table the constraint is on.
-     * @param string $name The live constraint name (the drop handle).
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  string  $name
+     * @return string
      */
     public function compileDropForeignKey(string $table, string $name): string
     {
@@ -166,10 +158,10 @@ final class MySqlSchemaGrammar extends SchemaGrammar
      * Compile an `ALTER TABLE ... ADD CONSTRAINT ... CHECK` statement —
      * MySQL's in-place CHECK-add form.
      *
-     * @param string $table The table to attach the constraint to.
-     * @param string $name The constraint name (the drop handle).
-     * @param string $expression The CHECK predicate, spliced verbatim.
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  string  $name
+     * @param  string  $expression
+     * @return string
      */
     public function compileAddCheck(string $table, string $name, string $expression): string
     {
@@ -180,15 +172,12 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * MySQL caps identifiers at 64 characters — a derived index name over
-     * a long table/column set can exceed it. Fail fast at compile time
-     * (Doctrine's pattern: the dialect validates, never silently
-     * truncates — a truncated name is not stable across syncs and would
-     * break the differ).
+     * MySQL caps identifiers at 64 characters — fail fast at compile
+     * time, never silently truncate.
      *
-     * @param string $name The final identifier (index name).
+     * @param  string  $name
      * @return void
-     * @throws \InvalidArgumentException When the identifier exceeds 64 chars.
+     * @throws \InvalidArgumentException
      */
     public function assertValidIdentifier(string $name): void
     {

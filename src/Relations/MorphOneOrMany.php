@@ -36,13 +36,11 @@ abstract class MorphOneOrMany extends Relation
     /**
      * Create a polymorphic relation.
      *
-     * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class.
-     * @param string $foreignKey The FK column on the related table
-     *        (`{name}_id` by convention).
-     * @param string $localKey The parent-side key column.
-     * @param string $typeColumn The type-discriminator column on the
-     *        related table (`{name}_type` by convention).
+     * @param  Model  $parent
+     * @param  class-string<TRelated>  $related
+     * @param  string  $foreignKey
+     * @param  string  $localKey
+     * @param  string  $typeColumn
      */
     public function __construct(
         Model $parent,
@@ -59,7 +57,7 @@ abstract class MorphOneOrMany extends Relation
     /**
      * The type-discriminator column on the related table.
      *
-     * @return string The column name.
+     * @return string
      */
     final public function getTypeColumn(): string
     {
@@ -70,7 +68,7 @@ abstract class MorphOneOrMany extends Relation
      * THIS parent's morph alias — the value the related table's type
      * column must hold to point back here.
      *
-     * @return string The parent's FQCN.
+     * @return string
      */
     final protected function parentMorphAlias(): string
     {
@@ -79,11 +77,6 @@ abstract class MorphOneOrMany extends Relation
 
     /**
      * Apply the relation's constraint: the FK match PLUS the type filter.
-     *
-     * The two clauses land inside ONE whereNested group — the morph
-     * constraint is a single unit (key AND type), so a caller's later
-     * `->orWhere(...)` ORs at the constraint's edges, never against the
-     * key or the type individually.
      *
      * @return void
      */
@@ -113,13 +106,8 @@ abstract class MorphOneOrMany extends Relation
     /**
      * Apply the eager-path ordering AND the type filter to the chunk query.
      *
-     * The eager chunk query is built fresh (the base eagerLoadChunk builds
-     * `$this->related::newQuery()`), so the type filter must ride the
-     * ordering hook — the one place subclasses decorate the chunk query
-     * before the FK `IN` is applied.
-     *
-     * @param \BlueprintAU\Radiant\ModelQueryBuilder<TRelated> $query The chunk's eager query.
-     * @return \BlueprintAU\Radiant\ModelQueryBuilder<TRelated> The filtered chunk query.
+     * @param  \BlueprintAU\Radiant\ModelQueryBuilder<TRelated>  $query
+     * @return \BlueprintAU\Radiant\ModelQueryBuilder<TRelated>
      */
     #[\Override]
     protected function applyEagerOrdering(\BlueprintAU\Radiant\ModelQueryBuilder $query): \BlueprintAU\Radiant\ModelQueryBuilder

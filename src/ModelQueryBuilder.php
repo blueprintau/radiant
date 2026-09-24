@@ -24,24 +24,9 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 /**
  * A query builder bound to a model class — hydrates rows into models.
  *
- * Extends the base {@see QueryBuilder} with model awareness: the model's
- * OWN columns as the default select (`*` maps to every declared column,
- * PK always present so hydration and `whereKey()` work), fail-fast column
- * validation on EVERY column-accepting method, and hydration of every
- * result row into a model instance via {@see Model::fromRow()}.
- *
- * The soft-delete scope (`whereNull` on the delete column) is auto-applied
- * here so every execution path (`get`, `first`, `count`, `exists`, …)
- * respects it. `withTrashed()` removes it; `onlyTrashed()` replaces it
- * with a `whereNotNull`.
- *
- * `TModel` is covariant: a builder bound to a subclass is everywhere a
- * builder bound to its ancestor is accepted — the template only READS the
- * model class (hydration target + validation), never writes it, and the
- * static filter forwarders (`Model::orWhere(...)` etc., trait-supplied)
- * return `ModelQueryBuilder<static>` where the shared trait declares
- * `ModelQueryBuilder<Model>`. Without covariance those default
- * implementations fail `return.type` against every subclass.
+ * The model's own columns are the default select, every column-accepting
+ * method validates against the declared set, and the soft-delete scope is
+ * auto-applied so every execution path respects it.
  *
  * @template-covariant TModel of Model
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
@@ -57,8 +42,8 @@ final class ModelQueryBuilder extends QueryBuilder
     protected array $forcedKeys = [];
 
     /**
-     * Every declared column name — the default select (`*` → these) and
-     * the validation set for every column-accepting method.
+     * Every declared column name — the default select and the validation
+     * set for every column-accepting method.
      *
      * @var list<string>
      */
@@ -81,10 +66,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Chunk size for key-list operations ({@see whereKey()} with a list).
      *
-     * Matches the eager loader's bound ({@see \BlueprintAU\Radiant\Relations\Relation::EAGER_KEY_CHUNK}):
-     * drivers cap placeholder counts (SQLite's 999 variables, MySQL's
-     * max_allowed_packet), so an oversized key list must not build a single
-     * unbounded statement.
+     * Drivers cap placeholder counts (SQLite's 999 variables, MySQL's
+     * max_allowed_packet), so an oversized key list must not build a
+     * single unbounded statement.
      */
     protected const KEY_CHUNK = 500;
 
@@ -99,16 +83,6 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Memoized relation resolutions, keyed by "class::method".
      *
-     * Relation DECLARATIONS are static per class, but resolution used to
-     * re-run the reflection (ReflectionMethod + prototype + invoke) on
-     * every eager load — visible on long-running workers that loop the
-     * same `with('posts')` query. The cache holds resolved relation
-     * objects; they are immutable value objects over (parent, related,
-     * keys), and `loadRelation` re-parents nothing — the relation's own
-     * query is re-derived per call through `eagerLoad()` on a fresh
-     * builder, so sharing the declaration cache is safe. Static, bounded
-     * by class count, holds no per-request data.
-     *
      * @var array<string, Relations\Relation<Model>>
      */
     protected static array $relationCache = [];
@@ -116,15 +90,7 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Invalidate the memoized relation-resolution cache.
      *
-     * The lifecycle hook for processes that regenerate model classes at
-     * runtime (hot reload, codegen): the cache is bounded by class count
-     * for a fixed class set, but unbounded for dynamically generated ones,
-     * and stale entries pin old class definitions in memory. Pairs with
-     * {@see \BlueprintAU\Radiant\Metadata\MetadataFactory::clear()} — call
-     * both when classes are redefined.
-     *
-     * @param string|null $class Clear only this class's relations
-     *        ("class::method" entries); null clears everything.
+     * @param  string|null  $class  Clear only this class's relations; null clears everything.
      * @return void
      */
     public static function clearRelationCache(?string $class = null): void
@@ -158,16 +124,8 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Create a builder bound to a model class on a connection.
      *
-     * The ORM's core is portable, so the builder binds to the generic
-     * connection; SQL-only extras remain gated upstream.
-     *
-     * The model class is a promoted READONLY property: it is written once
-     * here and only read afterwards, so the covariant `TModel` occurs in
-     * a read position (`class-string<TModel>` on a readonly property is
-     * variance-safe — the strict typing the whole builder hangs off).
-     *
-     * @param class-string<TModel> $modelClass The model class.
-     * @param ConnectionInterface $connection The connection to run on.
+     * @param  class-string<TModel>  $modelClass
+     * @param  ConnectionInterface  $connection
      */
     public function __construct(
         public readonly string $modelClass,
@@ -239,10 +197,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * fast at the with() call, not at hydration. Dot-notation nests:
      * `'posts.comments'` loads posts, then each post's comments.
      *
-     * @param list<string> $relations The relation paths.
-     * @return static A new builder with the eager loads registered; the original is unchanged.
-     * @throws \InvalidArgumentException When a path does not resolve to a
-     *         chain of relation methods.
+     * @param  list<string>  $relations
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function with(array $relations): static
     {
@@ -268,10 +225,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * where the parameter is genuinely untyped and PHPStan cannot call the
      * check redundant.
      *
-     * @param mixed $path The path as the caller supplied it.
-     * @return string The validated path.
-     * @throws \InvalidArgumentException When the path is not a non-empty
-     *         string.
+     * @param  mixed  $path
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private function assertRelationPath(mixed $path): string
     {
@@ -288,10 +244,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Assert a dotted relation path resolves to relation methods.
      *
-     * @param string $path The dot-notation path (e.g. `posts.comments`).
+     * @param  string  $path
      * @return void
-     * @throws \InvalidArgumentException When any segment is not a relation
-     *         method.
+     * @throws \InvalidArgumentException
      */
     protected function validateRelationPath(string $path): void
     {
@@ -315,12 +270,11 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Resolve one relation-method name on a model class.
      *
-     * @param class-string<Model> $class The model declaring the method.
-     * @param string $name The relation method name.
-     * @param string $path The full dotted path (for the error message).
-     * @return Relations\Relation<Model> The relation.
-     * @throws \InvalidArgumentException When the method is missing, not
-     *         public, or does not return a Relation.
+     * @param  class-string<Model>  $class
+     * @param  string  $name
+     * @param  string  $path
+     * @return Relations\Relation<Model>
+     * @throws \InvalidArgumentException
      */
     protected static function resolveRelation(string $class, string $name, string $path): Relations\Relation
     {
@@ -366,10 +320,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * Eager-load the registered relations onto a hydrated collection.
      *
      * One extra query per relation path — an `IN` on the FK, no joins, no
-     * row multiplication. Nested paths recurse on the freshly-loaded
-     * related models.
+     * row multiplication.
      *
-     * @param Collection<Model> $models The hydrated parents.
+     * @param  Collection<Model>  $models
      * @return void
      */
     protected function eagerLoadRelations(Collection $models): void
@@ -382,11 +335,8 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Load one dotted relation path onto the models.
      *
-     * Public so {@see Collection::load()} shares the exact loader `with()`
-     * runs — one implementation, two entry points.
-     *
-     * @param Collection<Model> $models The models to populate.
-     * @param string $path The dot-notation relation path.
+     * @param  Collection<Model>  $models
+     * @param  string  $path
      * @return void
      */
     public function loadRelationPath(Collection $models, string $path): void
@@ -429,16 +379,11 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Run the eager query for a relation and stitch the results.
      *
-     * The relation owns its eager strategy: the default widens the FK
-     * match from `=` to `IN`; through relations override with a joined
-     * query. After the query, `match()` distributes results onto parents
-     * and nested paths recurse per level.
-     *
-     * @param list<Model> $parents The parents.
-     * @param Relations\Relation<Model> $relation The relation to load.
-     * @param string $name The relation name (cache key).
-     * @param string|null $nested The remaining dotted path (null = leaf).
-     * @param string $path The full path (for error messages).
+     * @param  list<Model>  $parents
+     * @param  Relations\Relation<Model>  $relation
+     * @param  string  $name
+     * @param  string|null  $nested
+     * @param  string  $path
      * @return void
      */
     protected function loadRelation(array $parents, Relations\Relation $relation, string $name, ?string $nested, string $path): void
@@ -539,8 +484,8 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Build the column → owning-table partition map from the metadata.
      *
-     * @param \BlueprintAU\Radiant\Metadata\ClassMetadata $metadata The model's metadata.
-     * @return array<string, string> column => table
+     * @param  \BlueprintAU\Radiant\Metadata\ClassMetadata  $metadata
+     * @return array<string, string>
      */
     protected function buildPartitions(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): array
     {
@@ -555,13 +500,9 @@ final class ModelQueryBuilder extends QueryBuilder
 
     /**
      * INNER JOIN every ancestor table on the shared PK and select each
-     * level's columns qualified + aliased back to the plain columnName —
-     * one virtual row, hydration unchanged.
+     * level's columns qualified + aliased back to the plain columnName.
      *
-     * The FK + ON DELETE CASCADE the factory emits guarantees every
-     * ancestor row exists, so INNER is always correct.
-     *
-     * @param \BlueprintAU\Radiant\Metadata\ClassMetadata $metadata The model's metadata.
+     * @param  \BlueprintAU\Radiant\Metadata\ClassMetadata  $metadata
      * @return void
      */
     protected function applyMtiJoins(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): void
@@ -616,22 +557,12 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add a column-to-column comparison with model-aware column validation.
      *
-     * The operator is interpolated verbatim between two identifiers in the
-     * compiled SQL, so it is resolved to a {@see ColumnOperator} — either
-     * passed as the enum directly, or validated from a string. The enum is
-     * stored, not a string: nothing raw ever reaches the SQL. Both columns
-     * are validated like any other column-accepting method: a bare name
-     * must be a declared model column; a qualified `table.column` must name
-     * the model's own table or a table this query JOINs.
-     *
-     * @param string $first The first column.
-     * @param ColumnOperator|string $operator The comparison operator (=, !=, <, <=, >, >=).
-     * @param string $second The second column.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When the operator is not a valid
-     *         column comparison, or a column is not declared on the model
-     *         (or a valid qualified reference).
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @param  WhereBoolean  $boolean
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function whereColumn(string $first, ColumnOperator|string $operator = '=', string $second = '', WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -643,17 +574,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add a raw SQL where clause.
      *
-     * NOT overridden on purpose: the SQL is spliced verbatim by design
-     * (it is an expression, not a column reference, so there is nothing
-     * to {@see validateColumn()}), and its bindings are POSITIONAL — the
-     * column each belongs to is not knowable, so no per-column cast
-     * applies. DateTime bindings pass through and the connection's codec
-     * formats them, exactly as on the base builder.
-     *
-     * @param string $sql The raw SQL condition (e.g. `lower(email) = ?`).
-     * @param array<int, mixed> $bindings The values to bind into the condition.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder.
+     * @param  string  $sql
+     * @param  array<int, mixed>  $bindings
+     * @param  WhereBoolean  $boolean
+     * @return static
      */
     public function whereRaw(string $sql, array $bindings = [], WhereBoolean $boolean = WhereBoolean::And): static
     {
@@ -661,22 +585,10 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Add a nested group of where clauses with model-aware column validation.
+     * Create a new builder for a nested where group.
      *
-     * NOT overridden: the base {@see QueryBuilder::whereNested()} owns the
-     * whole group algorithm (build → callback → empty guard → store) and
-     * delegates construction to {@see newNestedBuilder()} — which this
-     * class overrides to construct a MODEL builder, so every
-     * `$nested->where(...)` in the callback funnels through the validating
-     * `where()`, exactly like the outer query. The callback and the stored
-     * group share the ONE `WhereBuilder` instance.
-     *
-     * @return QueryBuilder The group's backing builder (a NEW builder, not
-     *         `$this`; typed as the base because a group is clause storage,
-     *         not a hydration target — the group's TModel is irrelevant to
-     *         consumers, which only call `getWheres()`/`getBindings()`).
-     * @throws \InvalidArgumentException When the callback added no clause,
-     *         or a column in the group is not a declared model column.
+     * @return QueryBuilder
+     * @throws \InvalidArgumentException
      */
     protected function newNestedBuilder(): QueryBuilder
     {
@@ -686,19 +598,12 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Append an ON condition to the last added join, with validation.
      *
-     * Both columns are validated before the condition is appended — the
-     * same fail-fast the `where()` override gives every filter. Through
-     * relations (`HasManyThrough::addConstraints()`) qualify their
-     * conditions to JOINED tables, which the qualified branch of
-     * {@see validateColumn()} accepts.
-     *
-     * @param string $first The first column of the condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the condition.
-     * @return static The builder.
-     * @throws \LogicException When no join has been added yet.
-     * @throws \InvalidArgumentException When the operator is not a valid
-     *         column comparison, or a column is not a valid reference.
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
+     * @throws \LogicException
+     * @throws \InvalidArgumentException
      */
     public function on(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -712,13 +617,12 @@ final class ModelQueryBuilder extends QueryBuilder
      * Append an OR-connected ON condition to the last added join, with
      * validation.
      *
-     * @param string $first The first column of the condition.
-     * @param ColumnOperator|string $operator The comparison operator.
-     * @param string $second The second column of the condition.
-     * @return static The builder.
-     * @throws \LogicException When no join has been added yet.
-     * @throws \InvalidArgumentException When the operator is not a valid
-     *         column comparison, or a column is not a valid reference.
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
+     * @throws \LogicException
+     * @throws \InvalidArgumentException
      */
     public function orOn(string $first, ColumnOperator|string $operator = '=', string $second = ''): static
     {
@@ -734,11 +638,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * Include soft-deleted rows — removes the auto-applied scope (and any
      * `onlyTrashed()` NOT-NULL clause).
      *
-     * The clauses are found by their `softDelete` MARKER, not a positional
-     * index — removal is index-independent and survives any amount of
-     * clause churn between calls.
-     *
-     * @return static A new builder without the soft-delete clauses; the original is unchanged.
+     * @return static
      */
     public function withTrashed(): static
     {
@@ -762,14 +662,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * Only soft-deleted rows — replaces the scope with a marked
      * `whereNotNull` so the toggle round-trips.
      *
-     * The clause carries the same `softDelete` marker; a later
-     * `withTrashed()` removes it. Without the marker, `Model::onlyTrashed()->withTrashed()`
-     * silently kept the NOT-NULL clause and still returned only-trashed
-     * rows. The column is qualified exactly like the constructor's scope —
-     * on MTI models the joined query needs `table.column`, else the SQL
-     * fails with an ambiguous-column error.
-     *
-     * @return static A new builder scoped to only-trashed rows; the original is unchanged.
+     * @return static
      */
     public function onlyTrashed(): static
     {
@@ -802,23 +695,7 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Run the query and hydrate every row into a model.
      *
-     * Carries a scoped `phpstan-ignore` for `method.childReturnType` — the
-     * KNOWN PHPStan limitation this package lives with: PHP has no
-     * self-typed templates on native return types, so `Collection<TModel>`
-     * cannot be declared covariant against the base
-     * `QueryBuilder::get(): Collection<int, stdClass>`. The native return
-     * types (`: Collection`) are identical, so this is a PHPDoc-only
-     * divergence — PHP never validates it and nothing breaks at runtime.
-     * Laravel solves the same shape by leaving `get()` untyped entirely;
-     * the ignore is the smaller, honest escape hatch (see the project
-     * convention on when ignores are acceptable).
-     *
-     * (The variance flag rides the same PHPDoc-only divergence: with
-     * `TModel` covariant, `Collection<TModel>` in an output position is
-     * fine, but PHPStan still counts the return TYPE of an overridden
-     * method as an invariant position — the ignore below covers both.)
-     *
-     * @return Collection<TModel> The hydrated models.
+     * @return Collection<TModel>
      *
      * @phpstan-ignore method.childReturnType, generics.variance
      */
@@ -839,13 +716,9 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Raw rows (stdClass) — bypasses hydration.
+     * Get the raw rows (stdClass), bypassing hydration.
      *
-     * Use this for custom or aggregate columns that don't map onto model
-     * properties (e.g. a `count(*) as total` select), where `fromRow()`
-     * would have nothing to hydrate.
-     *
-     * @return BaseCollection<int, \stdClass> The raw rows.
+     * @return BaseCollection<int, \stdClass>
      */
     public function getRaw(): BaseCollection
     {
@@ -855,16 +728,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Stream the query, hydrating each row into a model as it arrives.
      *
-     * Overrides the base {@see QueryBuilder::cursor()}: the base yields
-     * raw `\stdClass` rows, but a model-bound builder's contract is
-     * hydration — the streaming counterpart of {@see get()} must yield
-     * the same instances. Eager loads CANNOT ride a stream (they need the
-     * full parent collection to batch the `IN` queries); call
-     * {@see with()}-less or accept un-populated relations, or use
-     * `get()` when relations are required. `getRaw()` remains the raw-row
-     * escape hatch.
+     * Eager loads cannot ride a stream — use `get()` when relations are
+     * required.
      *
-     * @return \Generator<int, TModel> The hydrated models, one at a time.
+     * @return \Generator<int, TModel>
      *
      * @phpstan-ignore method.childReturnType
      */
@@ -878,10 +745,7 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Run the query and hydrate the first row.
      *
-     * Fetches the raw row directly (not through `parent::first()`, which
-     * would call this class's hydrated `get()` and re-hydrate a Model).
-     *
-     * @return TModel|null The first model, or null when none match.
+     * @return TModel|null
      */
     public function first(): ?Model
     {
@@ -907,9 +771,8 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Find a model by primary key.
      *
-     * @param KeyValue $id The primary-key value (or a column => value map
-     *        for a composite key).
-     * @return TModel|null The model, or null when not found.
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @return TModel|null
      */
     public function find(mixed $id): ?Model
     {
@@ -917,22 +780,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Run the query and hydrate the first row — or throw when none match.
+     * Get the first hydrated row or throw if no rows match.
      *
-     * The fail-fast counterpart of {@see first()}: identical fetch and
-     * hydration, but an empty result raises
-     * {@see ModelNotFoundException} naming the model class. Use when an
-     * empty result is a caller bug rather than an expected state.
+     * @return TModel
      *
-     * SIDE-EFFECT-FREE: the fetch (including its internal `limit(1)`)
-     * runs on a shallow clone, so the builder's own limit, wheres, and
-     * column state are untouched — unlike `first()`, which mutates the
-     * limit. Safe to share a builder (or a relation's constrained query)
-     * between a fail-fast read and a later full read.
-     *
-     * @return TModel The first model.
-     *
-     * @throws ModelNotFoundException When no row matches the query.
+     * @throws ModelNotFoundException
      */
     public function firstOrFail(): Model
     {
@@ -940,18 +792,12 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Find a model by primary key — or throw when it does not exist.
+     * Find a model by primary key or throw if it does not exist.
      *
-     * The fail-fast counterpart of {@see find()}: same key handling
-     * (scalar or composite map through {@see whereKey()}), but a missing
-     * row raises {@see ModelNotFoundException} carrying BOTH the model
-     * class and the key that was looked up.
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @return TModel
      *
-     * @param KeyValue $id The primary-key value (or a column => value map
-     *        for a composite key).
-     * @return TModel The model.
-     *
-     * @throws ModelNotFoundException When no row matches the key.
+     * @throws ModelNotFoundException
      */
     public function findOrFail(mixed $id): Model
     {
@@ -961,23 +807,12 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Require the query to match EXACTLY ONE row, hydrated.
+     * Get the single matching row or throw if the count differs.
      *
-     * Stricter than {@see firstOrFail()}: zero rows raise
-     * {@see ModelNotFoundException}; MORE than one row raises
-     * {@see MultipleRecordsFoundException} — the two failures are
-     * distinct exception types so callers can catch them separately.
-     * Intended for reads backed by a uniqueness guarantee (a unique
-     * column, a one-to-one relation).
+     * @return TModel
      *
-     * SIDE-EFFECT-FREE like {@see firstOrFail()}: the `limit(2)` fetch
-     * runs on a shallow clone, so the builder's own limit, wheres, and
-     * column state are untouched.
-     *
-     * @return TModel The single matching model.
-     *
-     * @throws ModelNotFoundException When no row matches the query.
-     * @throws MultipleRecordsFoundException When more than one row matches.
+     * @throws ModelNotFoundException
+     * @throws MultipleRecordsFoundException
      */
     public function sole(): Model
     {
@@ -1014,15 +849,10 @@ final class ModelQueryBuilder extends QueryBuilder
      * The shared fail-fast fetch behind {@see firstOrFail()} and
      * {@see findOrFail()}.
      *
-     * The key is threaded through ONLY to build the exception message —
-     * `firstOrFail()` passes null (no key involved), `findOrFail()` passes
-     * the id it looked up. Building the exception once here (rather than
-     * catching and re-wrapping) keeps the throw site single.
+     * @param  mixed  $keyForMessage  The lookup key for the exception, or null.
+     * @return TModel
      *
-     * @param mixed $keyForMessage The lookup key for the exception, or null.
-     * @return TModel The first model.
-     *
-     * @throws ModelNotFoundException When no row matches the query.
+     * @throws ModelNotFoundException
      */
     private function firstOrFailWithKey(mixed $keyForMessage): Model
     {
@@ -1038,25 +868,14 @@ final class ModelQueryBuilder extends QueryBuilder
     // ---- Scalar reads (decoded through the column casts) ----
 
     /**
-     * The scalar method — the value of a single column from the first row,
-     * DECODED through the column's cast.
+     * The value of a single column from the first row, decoded through
+     * the column's cast.
      *
-     * Overrides the base {@see QueryBuilder::value()}: the base returns the
-     * raw driver value (SQLite hands datetimes back as strings), so
-     * `max('created_at')` would return `'2026-09-11 10:00:00'` where the
-     * model's own attribute reads a Carbon. Here, a bare declared column
-     * name runs through its {@see Column::decode()} — the same cast
-     * {@see Model::fromRow()} hydrates through, so builder scalar reads
-     * and attribute reads agree. Raw SQL and user-aliased columns
-     * (`sum(price) as total`) pass through raw — the model layer has no
-     * cast for a computed value.
+     * Raw SQL and user-aliased columns pass through raw — the model layer
+     * has no cast for a computed value.
      *
-     * An {@see Aggregate} argument DECODES through its column's cast when
-     * that column is declared — `value(Aggregate::max('signed_up_at'))`
-     * yields a Carbon, matching `max('signed_up_at')`.
-     *
-     * @param string|Aggregate $column The column to read — or an aggregate.
-     * @return mixed The decoded column value, or null when no row matches.
+     * @param  string|Aggregate  $column
+     * @return mixed
      */
     public function value(string|Aggregate $column): mixed
     {
@@ -1086,16 +905,10 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * A collection of a single column's values, DECODED through the casts.
+     * A collection of a single column's values, decoded through the casts.
      *
-     * See {@see value()} for the decode policy. The returned collection
-     * holds decoded values for declared columns (a `pluck('created_at')`
-     * yields Carbons); anything else plucks the raw values. The return is
-     * the RAW-row collection (values are not Models, so the model-typed
-     * Collection cannot hold them).
-     *
-     * @param string $column The column to pluck.
-     * @return BaseCollection<int, mixed> The decoded column values.
+     * @param  string  $column
+     * @return BaseCollection<int, mixed>
      */
     public function pluck(string $column): BaseCollection
     {
@@ -1113,22 +926,13 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * A clone of this builder scoped to a scalar or aggregate select.
      *
-     * `value()`/`pluck()`/`aggregates()` must run THEIR columns without
-     * touching this builder's state — and on THIS builder, `select()`
-     * cannot be used for that: it (a) re-merges the forced PK, dragging
-     * extra columns into the query, and (b) validates every column against
-     * the model's declared set, rejecting computed expressions like
-     * `lower(email)` or `sum(price)`. The clone carries the constraints
-     * (wheres, joins, soft-delete state) but owns its own column list —
-     * the deliberate bypass primitive for internal scalar reads. The BASE
-     * builder has no such helper (its `select()` is safe to use directly);
-     * this is model-layer-only.
+     * The clone carries the constraints (wheres, joins, soft-delete state)
+     * but owns its own column list — the bypass primitive for internal
+     * scalar reads, where `select()` cannot be used (it re-merges the
+     * forced PK and validates against the declared columns).
      *
-     * VARIADIC: one column per argument — `aggregates()` spreads its
-     * aggregate list directly.
-     *
-     * @param string|Aggregate ...$sql Each column expression or aggregate.
-     * @return static The scoped clone.
+     * @param  string|Aggregate  ...$sql
+     * @return static
      */
     protected function scopedFor(string|Aggregate ...$sql): static
     {
@@ -1141,14 +945,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Decode one scalar read when the column is a declared model column.
      *
-     * Only a BARE declared column name (or `column as alias` over one)
-     * decodes — the mapping is the single source of the cast. Aggregate
-     * expressions, qualified specs, and raw SQL return the value
-     * unchanged: the model layer cannot cast a computed value.
-     *
-     * @param string $column The column expression the caller asked for.
-     * @param mixed $raw The raw driver value.
-     * @return mixed The decoded value (or `$raw` unchanged).
+     * @param  string  $column
+     * @param  mixed  $raw
+     * @return mixed
      */
     private function decodeScalar(string $column, mixed $raw): mixed
     {
@@ -1169,7 +968,7 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Count the matching rows.
      *
-     * @return int The row count.
+     * @return int
      */
     public function count(): int
     {
@@ -1177,11 +976,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * The maximum value of a column — decoded through the cast for
-     * declared columns (e.g. a Carbon for a datetime column).
+     * The maximum value of a column, decoded through the cast for
+     * declared columns.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The maximum value.
+     * @param  string  $column
+     * @return mixed
      */
     public function max(string $column): mixed
     {
@@ -1189,11 +988,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * The minimum value of a column — decoded through the cast for
+     * The minimum value of a column, decoded through the cast for
      * declared columns.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The minimum value.
+     * @param  string  $column
+     * @return mixed
      */
     public function min(string $column): mixed
     {
@@ -1201,11 +1000,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * The sum of a column's values — decoded through the cast for
+     * The sum of a column's values, decoded through the cast for
      * declared columns.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The sum.
+     * @param  string  $column
+     * @return mixed
      */
     public function sum(string $column): mixed
     {
@@ -1213,11 +1012,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * The average of a column's values — decoded through the cast for
+     * The average of a column's values, decoded through the cast for
      * declared columns.
      *
-     * @param string $column The column to aggregate.
-     * @return mixed The average.
+     * @param  string  $column
+     * @return mixed
      */
     public function avg(string $column): mixed
     {
@@ -1225,23 +1024,18 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Multiple aggregates in one query — the raw values decoded through
-     * each aggregate's column cast (see {@see decodeScalar()}); computed
-     * targets (`count(*)`) and Expression arguments pass through raw.
+     * Multiple aggregates in one query, decoded through each aggregate's
+     * column cast.
      *
-     * The aggregate's own ALIAS names its result column — one way to name
-     * a column, no override layer:
+     * The aggregate's own alias names its result column:
      *
      *     User::query()->aggregates(
      *         Aggregate::count('*', 'total'),
      *         Aggregate::max('signed_up_at', 'latest'),
-     *     )->latest; // a Carbon for a datetime column
+     *     )->latest;
      *
-     * @param Aggregate ...$aggregates The aggregates to compute.
-     * @return \stdClass The values as properties, keyed by each
-     *         aggregate's result key (the explicit alias when given, else
-     *         the derived call text). Property access on an unknown key
-     *         throws — no silent null for a typo'd alias.
+     * @param  Aggregate  ...$aggregates
+     * @return \stdClass
      */
     public function aggregates(Aggregate ...$aggregates): \stdClass
     {
@@ -1272,19 +1066,13 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Constrain the query to a primary-key value.
      *
-     * The runtime boundary accepts WIDER shapes than the historical KeyValue
-     * alias, because the PHPDoc type cannot be enforced natively:
+     * Accepts a scalar (the single-PK form), a column => value map (the
+     * composite-key form), or a list of either (the batching form, match
+     * ANY).
      *
-     * - a scalar (int|string|null) — the single-PK form;
-     * - a column => value MAP — the composite-key form;
-     * - a LIST of scalars or key maps — the batching form (match ANY),
-     *   used by {@see \BlueprintAU\Radiant\Collection::fresh()}.
-     *
-     * @param KeyValue|list<KeyValue> $id The key value, a column => value
-     *        map, or a list of either.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When the key shape does not match
-     *         the model's PK, or a column/value fails validation.
+     * @param  KeyValue|list<KeyValue>  $id
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function whereKey(mixed $id): static
     {
@@ -1420,19 +1208,10 @@ final class ModelQueryBuilder extends QueryBuilder
      * Apply ONE key value onto a where-group — the shared body of
      * {@see whereKey()}'s single and list branches.
      *
-     * A scalar key applies the model's single PK column; a column => value
-     * map applies the full composite tuple (each column validated against
-     * the declared PKs and MTI-qualified). Values are validated the same
-     * as the direct branches — the group context changes only where the
-     * clauses land.
-     *
-     * @param WhereBuilder $nested The group to constrain.
-     * @param mixed $key The scalar key value or column => value map.
-     * @return WhereBuilder The constrained group (immutable — returned to
-     *         the callback's caller, which forwards it to whereNested()).
-     * @throws \InvalidArgumentException When the key shape does not match
-     *         the model's PK (a scalar for a composite model, a map for a
-     *         single-PK model), or a column/value fails validation.
+     * @param  WhereBuilder  $nested
+     * @param  mixed  $key  The scalar key value or column => value map.
+     * @return WhereBuilder
+     * @throws \InvalidArgumentException
      */
     private function applyWhereKeyOn(WhereBuilder $nested, mixed $key): WhereBuilder
     {
@@ -1476,15 +1255,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Runtime boundary for one composite-key entry.
      *
-     * The `array<string, int|string|null>` shape is a PHPDoc-only contract
-     * — the check lives on genuinely-mixed parameters so PHPStan cannot
-     * flag it as redundant.
-     *
-     * @param mixed $column The array key as PHP delivered it.
-     * @param mixed $value The array value.
-     * @return array{column: string, value: int|string|null} The validated pair.
-     * @throws \InvalidArgumentException When the column is not a non-empty
-     *         string or the value is not int, string, or null.
+     * @param  mixed  $column
+     * @param  mixed  $value
+     * @return array{column: string, value: int|string|null}
+     * @throws \InvalidArgumentException
      */
     private function assertCompositeKeyValue(mixed $column, mixed $value): array
     {
@@ -1508,16 +1282,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Assert a composite-key column is one of the model's primary keys.
      *
-     * Shape validation alone would let a typo'd column through — a
-     * `where(['region' => ...])` on a `regionId_country` model would
-     * validate fine and silently match nothing. The key map's columns must
-     * be the model's declared PK columns.
-     *
-     * @param string $column The column name as the caller supplied it.
-     * @param list<Column> $primaryKeys The model's PK columns.
+     * @param  string  $column
+     * @param  list<Column>  $primaryKeys
      * @return void
-     * @throws \InvalidArgumentException When the column is not a declared
-     *         primary key.
+     * @throws \InvalidArgumentException
      */
     private function assertCompositeKeyColumn(string $column, array $primaryKeys): void
     {
@@ -1537,10 +1305,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Runtime boundary for a single-key value.
      *
-     * @param mixed $id The key value as the caller supplied it.
-     * @return int|string|null The validated value.
-     * @throws \InvalidArgumentException When the value is not int, string,
-     *         or null.
+     * @param  mixed  $id
+     * @return int|string|null
+     * @throws \InvalidArgumentException
      */
     private function assertSingleKeyValue(mixed $id): int|string|null
     {
@@ -1556,31 +1323,15 @@ final class ModelQueryBuilder extends QueryBuilder
     // ---- Model-aware overrides ----
 
     /**
-     * Select columns, mapping `*` to the model's OWN columns.
+     * Select columns, mapping `*` to the model's own columns.
      *
-     * A bare `['*']` (the default) is replaced by every declared column —
-     * the model's fields, not the raw table shape — with the PK columns
-     * always present so hydration and `whereKey()` work. For aggregate
-     * queries (GROUP BY) the PK must NOT be force-added — selecting a
-     * non-grouped column would break the query.
+     * The PK columns are always present so hydration and `whereKey()`
+     * work. An {@see Expression} bypasses validation — raw SQL by
+     * contract.
      *
-     * An {@see Expression} bypasses validation — raw SQL by contract, the
-     * explicit raw-select path. Hydration note: an aliased raw select
-     * (`new Expression('count(*) as total')`) yields models whose typed
-     * properties are NOT set for the aggregate keys — read those off the
-     * raw row via {@see getRaw()}.
-     *
-     * An {@see Aggregate} validates its column against the declared model
-     * columns — the typed form of the old aggregate strings.
-     *
-     * VARIADIC: one column per argument. Calling with NO arguments resets
-     * to the `['*']` default select — which then maps to the model's own
-     * columns (the same `*` → declared columns path).
-     *
-     * @param string|Expression|Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When an explicit string column is
-     *         not a declared model column.
+     * @param  string|Expression|Aggregate  ...$columns  Each column as its own argument, or none to reset to `*`.
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function select(string|Expression|Aggregate ...$columns): static
     {
@@ -1647,19 +1398,12 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add a where clause with model-aware column validation.
      *
-     * Accepts plain column names, qualified `table.column` references, and
-     * raw {@see Expression} fragments (raw by contract — no validation).
-     * Aggregate left-hand sides are structurally impossible: the typed
-     * {@see Aggregate} is not part of this signature (SQL forbids
-     * aggregates in WHERE — they are having() territory).
-     *
-     * @param string|Expression $column The column to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When a string column is not a
-     *         declared model column (or a valid qualified reference).
+     * @param  string|Expression  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function where(
         string|Expression $column,
@@ -1677,16 +1421,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add an order-by clause with model-aware column validation.
      *
-     * An {@see Expression} bypasses validation — it is raw SQL by contract,
-     * the explicit escape hatch (never pass user-supplied content; see
-     * docs/safety.md's raw-SQL rules).
-     *
-     * @param string|Expression $column The column to order by — or a raw
-     *        SQL fragment wrapped in an Expression.
-     * @param SortDirection|string $direction `ASC` or `DESC`.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When a string column is not a
-     *         declared model column.
+     * @param  string|Expression  $column
+     * @param  SortDirection|string  $direction
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function orderBy(string|Expression $column, SortDirection|string $direction = SortDirection::Asc): static
     {
@@ -1700,10 +1438,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Group by columns with model-aware column validation.
      *
-     * @param string|array<int, string> $columns The column(s) to group by.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When a column is not a declared
-     *         model column.
+     * @param  string|array<int, string>  $columns
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function groupBy(string|array $columns): static
     {
@@ -1717,17 +1454,11 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add a having clause with model-aware validation.
      *
-     * An {@see Aggregate} left-hand side validates its COLUMN against the
-     * declared model columns (the function/alias are validated by the
-     * Aggregate itself); an {@see Expression} passes through raw. A string
-     * column must be a declared model column.
-     *
-     * @param string|Expression|Aggregate $column The column (or aggregate) to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return static The builder.
-     * @throws \InvalidArgumentException When a string column is not a
-     *         declared model column, or an aggregate column is not declared.
+     * @param  string|Expression|Aggregate  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
@@ -1752,15 +1483,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Fail fast on an unknown model column.
      *
-     * Accepts a declared column name (DB column) or a forced PK key.
-     * Aggregate left-hand sides no longer ride this path as strings — pass
-     * a typed {@see Aggregate} to having()/select(), which validates the
-     * aggregate's column through this method directly.
-     *
-     * @param string $column The column name to check.
+     * @param  string  $column
      * @return void
-     * @throws \InvalidArgumentException When the column is not declared on
-     *         the model.
+     * @throws \InvalidArgumentException
      */
     protected function validateColumn(string $column): void
     {
@@ -1821,18 +1546,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Insert rows with model-aware validation and cast encoding.
      *
-     * Every column key must be a declared model column (fail-fast, the
-     * same contract `where()`/`select()` enforce) and every value runs
-     * through its column's {@see Column::encode()} — so a builder-level
-     * `insert(['created_at' => $carbon])` binds the same way a
-     * `$model->save()` does. Null values are preserved (skip encode — it
-     * passes null through anyway, but explicit is cheap and clear).
-     *
-     * @param array<string, mixed>|list<array<string, mixed>> $values A single
-     *        row or a list of rows.
-     * @return int The number of rows inserted.
-     * @throws \InvalidArgumentException When a row key is not a declared
-     *         model column.
+     * @param  array<string, mixed>|list<array<string, mixed>>  $values
+     * @return int
+     * @throws \InvalidArgumentException
      */
     public function insert(array $values): int
     {
@@ -1843,10 +1559,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * Insert a single row and return the generated id, validated and
      * encoded like {@see insert()}.
      *
-     * @param array<string, mixed> $values The row to insert.
-     * @return string|int|null The generated id, or null when there is none.
-     * @throws \InvalidArgumentException When a row key is not a declared
-     *         model column.
+     * @param  array<string, mixed>  $values
+     * @return string|int|null
+     * @throws \InvalidArgumentException
      */
     public function insertGetId(array $values): string|int|null
     {
@@ -1857,15 +1572,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * Update the matching rows with model-aware validation and cast
      * encoding.
      *
-     * The value map keys are validated against the declared columns and
-     * each value encoded through its cast — `update(['views' => 5,
-     * 'published_at' => $carbon])` binds exactly what a `$model->save()`
-     * would write.
-     *
-     * @param array<string, mixed> $values The columns to change and their new values.
-     * @return int How many rows were updated.
-     * @throws \InvalidArgumentException When a key is not a declared
-     *         model column.
+     * @param  array<string, mixed>  $values
+     * @return int
+     * @throws \InvalidArgumentException
      */
     public function update(array $values): int
     {
@@ -1873,18 +1582,11 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Encode a SINGLE row through the column casts.
+     * Encode a single row through the column casts.
      *
-     * Each key is validated and its value encoded through the column's
-     * {@see Column::encode()} — `\DateTimeInterface` and array (JSON)
-     * values bind identically to a model-level `save()`. A non-list input
-     * IS the row; a list input (bulk insert) encodes row-by-row and keeps
-     * the list shape.
-     *
-     * @param array<string, mixed>|list<array<string, mixed>> $values The input row(s).
-     * @return array<string, mixed>|list<array<string, mixed>> The encoded row(s).
-     * @throws \InvalidArgumentException When a row key is not a declared
-     *         model column.
+     * @param  array<string, mixed>|list<array<string, mixed>>  $values
+     * @return array<string, mixed>|list<array<string, mixed>>
+     * @throws \InvalidArgumentException
      */
     private function encodeRows(array $values): array
     {
@@ -1916,14 +1618,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Encode one row map — the shared body of {@see encodeRows()}.
      *
-     * Keys are normalized to their string form (an int-keyed entry can
-     * only be caller error, and fails {@see validateWriteColumn()} with
-     * the named column).
-     *
-     * @param array<int|string, mixed> $row The row: column => value.
-     * @return array<string, mixed> The encoded row: column => bindable value.
-     * @throws \InvalidArgumentException When a key is not a declared
-     *         model column.
+     * @param  array<int|string, mixed>  $row
+     * @return array<string, mixed>
+     * @throws \InvalidArgumentException
      */
     private function encodeRow(array $row): array
     {
@@ -1940,10 +1637,10 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Validate one write-path column key and encode its value.
      *
-     * @param string $column The DB column name.
-     * @param mixed $value The value as the caller supplied it.
-     * @return mixed The bindable (encoded) value.
-     * @throws \InvalidArgumentException When the column is not declared.
+     * @param  string  $column
+     * @param  mixed  $value
+     * @return mixed
+     * @throws \InvalidArgumentException
      */
     private function encodeValue(string $column, mixed $value): mixed
     {
@@ -1957,17 +1654,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Validate one write-path column key.
      *
-     * The write path validates against the declared columns only — a
-     * qualified spec is meaningless for a row map (there is one table per
-     * statement root) and an aggregate-expression pass-through would be
-     * nonsense on an INSERT/UPDATE. MTI children are handled upstream:
-     * `performMtiInsert()`/`performMtiUpdate()` partition writes per
-     * owning table through plain per-table builders, so a model-level
-     * write never reaches here with cross-table columns.
-     *
-     * @param string $column The column key to check.
+     * @param  string  $column
      * @return void
-     * @throws \InvalidArgumentException When the column is not declared.
+     * @throws \InvalidArgumentException
      */
     private function validateWriteColumn(string $column): void
     {

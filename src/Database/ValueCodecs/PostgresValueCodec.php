@@ -18,8 +18,7 @@ namespace BlueprintAU\Radiant\Database\ValueCodecs;
 final class PostgresValueCodec extends DefaultValueCodec
 {
     /**
-     * @param string $timezone The timezone datetimes are normalized to
-     *        before formatting (default `UTC`).
+     * @param  string  $timezone
      */
     public function __construct(string $timezone = 'UTC')
     {

@@ -19,8 +19,8 @@ final class MultipleRecordsFoundException extends \RuntimeException
     public readonly int $count;
 
     /**
-     * @param int $count The number of rows the query matched.
-     * @param class-string<\BlueprintAU\Radiant\Model> $modelClass The class-string of the model that was queried.
+     * @param  int  $count
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $modelClass
      */
     public function __construct(int $count, string $modelClass)
     {

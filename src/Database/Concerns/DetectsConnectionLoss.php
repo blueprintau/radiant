@@ -32,7 +32,7 @@ trait DetectsConnectionLoss
      * Whether this connection has been marked dead by a connection-loss
      * error and should be discarded by a caching layer.
      *
-     * @return bool True when a connection-loss error has marked it stale.
+     * @return bool
      */
     public function isStale(): bool
     {
@@ -63,13 +63,8 @@ trait DetectsConnectionLoss
      * Whether a PDOException looks like a lost connection rather than a
      * statement-level failure.
      *
-     * The SQLSTATE codes are the ones the PDO drivers use for "connection
-     * no longer valid"; driver-specific server-has-gone-away errors surface
-     * as 08xxx codes or generic HY000 with a message match, so both shapes
-     * are checked.
-     *
-     * @param \PDOException $e The exception thrown by the failed query.
-     * @return bool True when the failure indicates the connection is gone.
+     * @param  \PDOException  $e
+     * @return bool
      */
     protected function isConnectionLoss(\PDOException $e): bool
     {

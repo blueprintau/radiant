@@ -17,16 +17,8 @@ use BlueprintAU\Radiant\Metadata\PropertyMapping;
 /**
  * The Active Record base model.
  *
- * Typed properties + `#[Column]` attributes declare the schema; the
- * {@see MetadataFactory} builds the per-class metadata once and caches it.
- * Core CRUD runs on any {@see ConnectionInterface} — the portable subset
- * (`select`/`insert`/`update`/`delete`) — while SQL-only extras stay gated
- * at the connection/builder layer.
- *
- * Hydration reconstitutes instances without the constructor
- * (`newInstanceWithoutConstructor()`), so `Model` subclasses need no
- * constructor ceremony; dirty tracking compares against the `$original`
- * snapshot taken at hydration/save time.
+ * Typed properties + `#[Column]` attributes declare the schema; hydration
+ * reconstitutes instances without running the constructor.
  *
  * @phpstan-type KeyValue int|string|null|array<string, int|string|null>
  */
@@ -38,40 +30,16 @@ abstract class Model
     /**
      * The reserved alias prefix for the ORM's internal select aliases.
      *
-     * Every synthetic select alias the ORM splices into a query starts
-     * with `radiant_` — `radiant_pivot_{column}` (BelongsToMany/MorphToMany
-     * pivot columns), `radiant_pivot_parent_{table}` (the through-pivot
-     * parent key), `radiant_scalar` (aggregate reads), and
-     * `radiant_through_parent_{table}` (through-relation parent keys).
-     * The lift in {@see Model::fromRow()} treats any row field with this
-     * prefix as internal state, so a USER COLUMN named `radiant_foo`
-     * would collide: inside a pivot select it would silently hijack the
-     * pivot value slot (and vice versa). The prefix is therefore
-     * RESERVED — columns and pivot columns must not start with it.
-     *
-     * The constant lives HERE (not on a relation or the query layer)
-     * because the collision surface is model-shaped: the row lift runs
-     * on Model, and every alias-bearing feature — relations today, any
-     * query-layer feature tomorrow — turns user-named columns into
-     * these aliases. {@see Model::assertNotReservedPrefix()} is the
-     * shared fail-fast guard.
+     * Columns and pivot columns must not start with it — a user column
+     * named `radiant_foo` would collide with the internal aliases.
      */
     public const RESERVED_PREFIX = 'radiant_';
 
     /**
-     * The loaded values at hydration time, keyed by column name — the
-     * hydration/save-time snapshot dirty tracking compares against.
+     * The loaded values at hydration time, keyed by column name.
      *
-     * Values live in the ENCODED (bindable) space — the same space
-     * {@see Model::getColumnValues()} produces — so the `!=` comparison in
-     * {@see Model::getDirty()} compares like with like. (The raw DB row is
-     * a DIFFERENT space — `'2026-09-06 12:00:00'` strings vs Carbon
-     * objects — and comparing across it would make every datetime column
-     * permanently dirty.)
-     *
-     * Synthetic columns (the runtime {@see Model::$syntheticValues} store)
-     * land here too, so {@see Model::getKeyForRefresh()} and trait-level
-     * checks read one consistent shape.
+     * Values live in the encoded (bindable) space so dirty tracking
+     * compares like with like.
      *
      * @var array<string, mixed>
      */
@@ -79,21 +47,14 @@ abstract class Model
 
     /**
      * Runtime overrides for synthetic columns — columns the metadata
-     * declares but no PHP property backs (the SoftDeletes column injected
-     * by the {@see MetadataFactory} when the model declares none itself).
-     *
-     * EMPTY after hydration: the loaded value lives in {@see Model::$original}
-     * and {@see Model::attribute()} decodes it on demand. This store only
-     * fills when a trait writes a NEW value post-load (via
-     * {@see Model::setAttribute()}) — the synthetic column has no typed
-     * property to hold it in. Never a dynamic property.
+     * declares but no PHP property backs.
      *
      * @var array<string, mixed>
      */
     protected array $syntheticValues = [];
 
     /**
-     * Whether the model exists in the database (was inserted/hydrated).
+     * Whether the model exists in the database.
      *
      * @var bool
      */
@@ -101,11 +62,6 @@ abstract class Model
 
     /**
      * Loaded relation results, keyed by relation name.
-     *
-     * Written by the eager loader (via {@see Relation::match()}) and read
-     * by {@see Relation::getResults()} through {@see Model::cachedRelation()}
-     * — a relation method's own access returns the cache when the relation
-     * is loaded and unfiltered, and executes fresh otherwise.
      *
      * @var array<string, Model|Collection<Model>|null>
      */
@@ -115,11 +71,6 @@ abstract class Model
      * Pivot values carried onto this model by a BelongsToMany eager load,
      * keyed by pivot column name.
      *
-     * Written by the relation's hydration pass (the `radiant_pivot_`
-     * aliased select columns); read through {@see Model::pivotValue()}.
-     * Per-call state on the instance — a model hydrated WITHOUT a pivot
-     * join simply has none.
-     *
      * @var array<string, mixed>
      */
     protected array $pivotValues = [];
@@ -127,16 +78,10 @@ abstract class Model
     /**
      * Fail fast when a column name starts with the ORM's reserved prefix.
      *
-     * The shared guard for every surface that turns user-named columns
-     * into internal select aliases — today {@see BelongsToMany::withPivot()},
-     * tomorrow any new alias-bearing feature. Reserved names are a data
-     * bug caught at the call site, not silent row-shape corruption.
-     *
-     * @param string $column The user-facing column name to check.
-     * @param string $role What the column is (for the message).
+     * @param  string  $column
+     * @param  string  $role
      * @return void
-     * @throws \InvalidArgumentException When the column starts with
-     *         {@see RESERVED_PREFIX}.
+     * @throws \InvalidArgumentException
      */
     final public static function assertNotReservedPrefix(string $column, string $role): void
     {
@@ -153,20 +98,16 @@ abstract class Model
     // ---- Connection ----
 
     /**
-     * Default connection name for this model.
-     *
-     * Null = the manager's default. A model that always runs on a named
-     * connection (e.g. a tenant model) pins itself with one line:
-     * `protected static ?string $connection = 'tenant';`
+     * The default connection name for this model.
      *
      * @var string|null
      */
     protected static ?string $connection = null;
 
     /**
-     * The connection this model runs on — the public resolution entry point.
+     * The connection this model runs on.
      *
-     * @return ConnectionInterface The resolved connection.
+     * @return ConnectionInterface
      */
     final public static function connection(): ConnectionInterface
     {
@@ -176,12 +117,7 @@ abstract class Model
     /**
      * The single seam for connection resolution.
      *
-     * Default falls through to the Database facade (the ORM's one ambient
-     * dependency) via its public `connection()` entry point; the `static::`
-     * late binding makes the method overridable per model class and in
-     * tests without mutating global facade state.
-     *
-     * @return ConnectionInterface The resolved connection.
+     * @return ConnectionInterface
      */
     protected static function resolveConnection(): ConnectionInterface
     {
@@ -191,13 +127,7 @@ abstract class Model
     /**
      * The table name for this model.
      *
-     * Computed once by {@see MetadataFactory} and cached in
-     * {@see \BlueprintAU\Radiant\Metadata\ClassMetadata} — a static name by
-     * design; dynamic (per-tenant/partitioned) names are deliberately
-     * unsupported at the model layer (see the `#[Table]` attribute notes)
-     * and belong at the connection layer.
-     *
-     * @return string The resolved table name.
+     * @return string
      */
     final public static function table(): string
     {
@@ -219,7 +149,7 @@ abstract class Model
     /**
      * A fresh model query builder for this class.
      *
-     * @return ModelQueryBuilder<static> The query builder.
+     * @return ModelQueryBuilder<static>
      */
     final public static function newQuery(): ModelQueryBuilder
     {
@@ -229,9 +159,8 @@ abstract class Model
     /**
      * Find a model by its primary key.
      *
-     * @param KeyValue $id The primary-key value (or a column => value map
-     *        for a composite key).
-     * @return static|null The model, or null when not found.
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @return static|null
      */
     final public static function find(mixed $id): ?static
     {
@@ -239,16 +168,11 @@ abstract class Model
     }
 
     /**
-     * Find a model by its primary key — or throw when it does not exist.
+     * Find a model by its primary key or throw if it does not exist.
      *
-     * The fail-fast counterpart of {@see find()}: a missing row raises
-     * {@see ModelNotFoundException} carrying the model class and the key.
-     *
-     * @param KeyValue $id The primary-key value (or a column => value map
-     *        for a composite key).
-     * @return static The model.
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches the key.
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @return static
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
     final public static function findOrFail(mixed $id): static
     {
@@ -256,14 +180,10 @@ abstract class Model
     }
 
     /**
-     * Hydrate the first model of the table — or throw when the table is empty.
+     * Get the first model of the table or throw if the table is empty.
      *
-     * The fail-fast counterpart of the builder's `first()`: an empty
-     * result raises {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException}.
-     *
-     * @return static The first model.
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
+     * @return static
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
     final public static function firstOrFail(): static
     {
@@ -271,16 +191,11 @@ abstract class Model
     }
 
     /**
-     * Require the table to hold EXACTLY ONE row, hydrated.
+     * Get the single model of the table or throw if the count differs.
      *
-     * Zero rows raise {@see \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException};
-     * more than one raise
-     * {@see \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException}.
-     *
-     * @return static The single model.
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException When no row matches.
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException When more than one row matches.
+     * @return static
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
      */
     final public static function sole(): static
     {
@@ -288,9 +203,9 @@ abstract class Model
     }
 
     /**
-     * Every model in the table.
+     * Get every model in the table.
      *
-     * @return Collection<static> The hydrated models.
+     * @return Collection<static>
      */
     final public static function all(): Collection
     {
@@ -300,17 +215,13 @@ abstract class Model
     // ---- Static filter-modifier forwarders ----
 
     /**
-     * Start a model query with a where clause — the sink the shared static
-     * filter trait funnels the where-family helpers into. The trait also
-     * requires orderBy/limit/offset/select/groupBy/having (not
-     * where-derivable — they start a fresh query); this class implements
-     * them directly below the sink.
+     * Start a model query with a where clause.
      *
-     * @param string $column The column to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  string  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return ModelQueryBuilder<static>
      */
     final public static function where(
         string $column,
@@ -322,13 +233,11 @@ abstract class Model
     }
 
     /**
-     * Start a model query with a nested where group — the second static
-     * sink; `orWhereNested` delegates here.
+     * Start a model query with a nested where group.
      *
-     * @param callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder $callback Receives the group's
-     *        where-family facade and RETURNS the constrained group.
-     * @param WhereBoolean $boolean The boolean connector.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  callable(\BlueprintAU\Radiant\Database\Query\WhereBuilder): \BlueprintAU\Radiant\Database\Query\WhereBuilder  $callback
+     * @param  WhereBoolean  $boolean
+     * @return ModelQueryBuilder<static>
      */
     final public static function whereNested(
         callable $callback,
@@ -340,9 +249,9 @@ abstract class Model
     /**
      * Start a model query with an order-by clause.
      *
-     * @param string $column The column to order by.
-     * @param SortDirection|string $direction `ASC` or `DESC`.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  string  $column
+     * @param  SortDirection|string  $direction
+     * @return ModelQueryBuilder<static>
      */
     final public static function orderBy(
         string $column,
@@ -354,8 +263,8 @@ abstract class Model
     /**
      * Start a model query with a row limit.
      *
-     * @param int $limit The row limit.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  int  $limit
+     * @return ModelQueryBuilder<static>
      */
     final public static function limit(int $limit): ModelQueryBuilder
     {
@@ -365,8 +274,8 @@ abstract class Model
     /**
      * Start a model query with a row offset.
      *
-     * @param int $offset The number of rows to skip.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  int  $offset
+     * @return ModelQueryBuilder<static>
      */
     final public static function offset(int $offset): ModelQueryBuilder
     {
@@ -376,8 +285,8 @@ abstract class Model
     /**
      * Start a model query with an explicit column selection.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns Each column as its own argument, or none to reset to `*`.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate  ...$columns
+     * @return ModelQueryBuilder<static>
      */
     final public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder
     {
@@ -387,8 +296,8 @@ abstract class Model
     /**
      * Start a model query grouped by one or more columns.
      *
-     * @param string|array<int, string> $columns The column(s) to group by.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  string|array<int, string>  $columns
+     * @return ModelQueryBuilder<static>
      */
     final public static function groupBy(string|array $columns): ModelQueryBuilder
     {
@@ -398,10 +307,10 @@ abstract class Model
     /**
      * Start a model query with a having clause.
      *
-     * @param string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column The column (or aggregate) to compare.
-     * @param WhereOperator|string $operator The comparison operator.
-     * @param mixed $value The value to compare against.
-     * @return ModelQueryBuilder<static> The query builder.
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate  $column
+     * @param  WhereOperator|string  $operator
+     * @param  mixed  $value
+     * @return ModelQueryBuilder<static>
      */
     final public static function having(
         string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate $column,
@@ -414,16 +323,12 @@ abstract class Model
     /**
      * Start a model query with eager-loaded relations.
      *
-     * Validation happens HERE, at the with() call — an unknown relation is
-     * a typo and fails fast at the call site, not at hydration time.
-     *
      * Dot-notation nests: `'posts.comments'` eager-loads posts, then each
      * post's comments.
      *
-     * @param string ...$relations The relation names to eager-load.
-     * @return ModelQueryBuilder<static> The query builder.
-     * @throws \InvalidArgumentException When a name does not resolve to a
-     *         relation method on the model.
+     * @param  string  ...$relations
+     * @return ModelQueryBuilder<static>
+     * @throws \InvalidArgumentException
      */
     final public static function with(string ...$relations): ModelQueryBuilder
     {
@@ -437,19 +342,24 @@ abstract class Model
     /**
      * Save the model — INSERT when new, UPDATE of the dirty columns when not.
      *
-     * The branch is driven by in-memory state (`exists`), not a database
-     * check: a `new` model always INSERTs, so re-saving a caller-assigned
-     * (non-auto-increment) PK from a fresh instance is a duplicate-PK
-     * failure — re-save through a loaded instance instead. Concurrent
-     * saves are last-writer-wins (no optimistic locking); see docs/orm.md
-     * "Saving and primary keys" for the full contract.
-     *
-     * @return bool True on success (failures throw).
+     * @return bool
+     * @throws \LogicException
      */
     final public function save(): bool
     {
         if (!$this->exists) {
             return $this->performInsert();
+        }
+
+        $softDeleteColumn = MetadataFactory::for(static::class)->softDeleteColumn;
+
+        if ($softDeleteColumn !== null && ($this->original[$softDeleteColumn] ?? null) !== null) {
+            throw new \LogicException(
+                'The model [' . static::class . '] is soft-deleted — its UPDATE would carry the '
+                . 'auto-applied `deleted_at IS NULL` scope, match 0 rows, and report success for '
+                . 'a write that never landed. Call restore() first (or forceDelete() to remove '
+                . 'the row permanently).'
+            );
         }
 
         // MTI children update per-partition (single query when the dirty
@@ -464,8 +374,7 @@ abstract class Model
     /**
      * Delete the model (soft-delete when the trait is used).
      *
-     * @return bool True when the delete affected the row; false when the
-     *         row no longer exists (a stale instance). Failures throw.
+     * @return bool
      */
     public function delete(): bool
     {
@@ -475,17 +384,14 @@ abstract class Model
     /**
      * The real DELETE by primary key.
      *
-     * Reflects the affected-row count: a stale instance (the row was
-     * deleted by another connection while this one was alive) matches 0
-     * rows — `$this->exists` is cleared and false is returned instead of
-     * reporting a delete that did not happen. Mirrors the
-     * {@see SoftDeletes} trait's delete()/restore() contract.
-     *
-     * @return bool True when the row was deleted; false when it was
-     *         already gone.
+     * @return bool
      */
     protected function performDelete(): bool
     {
+        // A null key would compile to `WHERE pk IS NULL` — matching nothing,
+        // or the wrong rows on dialects that permit NULL keys.
+        $this->assertKeyResolvedForWrite();
+
         $metadata = MetadataFactory::for(static::class);
 
         // MTI: leaf-first deletes up the chain — each level removes its own
@@ -553,11 +459,7 @@ abstract class Model
     /**
      * INSERT the model.
      *
-     * A single auto-increment PK gets its generated id back via
-     * `insertGetId()`; a composite / UUID / char PK has no generated id, so
-     * the caller must have set all key columns before `save()`.
-     *
-     * @return bool Always true (failures throw).
+     * @return bool
      */
     protected function performInsert(): bool
     {
@@ -589,24 +491,6 @@ abstract class Model
      * Materialize declared column defaults onto uninitialized properties
      * after a successful INSERT.
      *
-     * Uninitialized typed properties were omitted from the INSERT (that is
-     * WHY the DB default fired) — but leaving them uninitialized makes the
-     * in-memory model diverge from the row it just wrote: the property
-     * still throws "must not be accessed before initialization" even
-     * though `exists` is true and the row holds the default. Writing the
-     * declared default through the column's own decode keeps the model the
-     * row's honest picture without a re-fetch.
-     *
-     * Scope: only properties that are (a) uninitialized, (b) carry a
-     * literal (non-Expression) default, and (c) are not the auto-increment
-     * PK (it gets its generated value from `setPrimaryKey()`). An
-     * `Expression` default (e.g. `CURRENT_TIMESTAMP`) is skipped — its
-     * DB-computed value is unknowable client-side, so guessing would be
-     * worse than leaving the property uninitialized. A `null` attribute
-     * default means "no declared default" — nothing to materialize; for a
-     * nullable property, uninitialized already reads as null through
-     * `attribute()`, so there is no gap to fill.
-     *
      * @return void
      */
     private function materializeDefaults(): void
@@ -629,15 +513,12 @@ abstract class Model
     }
 
     /**
-     * INSERT an MTI chain: root partition first (the generated id seeds
-     * every descendant's shared PK), then each level, all in one
-     * transaction.
+     * INSERT an MTI chain: root partition first, then each level, all in
+     * one transaction.
      *
-     * @param \BlueprintAU\Radiant\Metadata\ClassMetadata $metadata The child's metadata.
-     * @return bool Always true (failures throw and roll back).
+     * @param  \BlueprintAU\Radiant\Metadata\ClassMetadata  $metadata
+     * @return bool
      * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
-     *         When the connection is not SQL (transactions + joins are
-     *         required for the split write).
      */
     protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): bool
     {
@@ -661,6 +542,14 @@ abstract class Model
         // defining class (Model). Capture the concrete class here and walk
         // the chain from it.
         $leafClass = static::class;
+
+        // A caller-assigned (non-auto-increment) root key MUST be present:
+        // without it the root INSERT omits the PK and the descendant
+        // partitions have nothing to link against. (An auto-increment root
+        // generates its own — an unset key is expected there.)
+        if (!self::rootAutoIncrement($leafClass)) {
+            $this->assertAssignedMtiKeyPresent($pkName);
+        }
 
         $connection->transaction(function () use ($connection, $metadata, $pkName, $leafClass): void {
             // Walk root-first: each level's own columns go to its own table.
@@ -764,10 +653,10 @@ abstract class Model
     }
 
     /**
-     * Whether the MTI chain's ROOT table has an auto-increment key.
+     * Whether the MTI chain's root table has an auto-increment key.
      *
-     * @param class-string<Model> $leafClass The child class.
-     * @return bool True when the root generates the id.
+     * @param  class-string<Model>  $leafClass
+     * @return bool
      */
     private static function rootAutoIncrement(string $leafClass): bool
     {
@@ -785,11 +674,10 @@ abstract class Model
     }
 
     /**
-     * The PK value from a typed property (encoded) for a NEW model — the
-     * caller-assigned key path (non-auto-increment roots).
+     * The encoded PK value from a typed property for a new model.
      *
-     * @param \BlueprintAU\Radiant\Metadata\PropertyMapping $mapping The PK mapping.
-     * @return string|int|null The encoded key value, or null when unset.
+     * @param  \BlueprintAU\Radiant\Metadata\PropertyMapping  $mapping
+     * @return string|int|null
      */
     private function encodedPkValue(\BlueprintAU\Radiant\Metadata\PropertyMapping $mapping): string|int|null
     {
@@ -805,13 +693,7 @@ abstract class Model
     /**
      * Write the generated id back onto the single auto-increment PK property.
      *
-     * The id arrives as the codec's output (int or bigint-string). Writing
-     * it onto the typed property coerces it: `"42"` → int when the property
-     * is int; a bigint string that exceeds `PHP_INT_MAX` stays string. This
-     * is the type boundary — the codec normalizes dialect bytes, the model
-     * property owns the PHP type.
-     *
-     * @param string|int|null $id The generated id.
+     * @param  string|int|null  $id
      * @return void
      */
     protected function setPrimaryKey(string|int|null $id): void
@@ -833,13 +715,17 @@ abstract class Model
     /**
      * UPDATE the dirty columns by primary key.
      *
-     * @return bool Always true (failures throw).
+     * @return bool
      */
     protected function performUpdate(): bool
     {
         $dirty = $this->getDirty();
 
         if ($dirty !== []) {
+            // A null key would compile to `WHERE pk IS NULL` — the UPDATE
+            // would match nothing yet report success.
+            $this->assertKeyResolvedForWrite();
+
             $this->newQuery()->whereKey($this->getKeyForRefresh())->update($dirty);
         }
 
@@ -850,10 +736,9 @@ abstract class Model
 
     /**
      * UPDATE the dirty columns, split per owning table when the model is
-     * an MTI child. One UPDATE per dirty partition; a transaction wraps
-     * the writes only when they span more than one table.
+     * an MTI child.
      *
-     * @return bool Always true (failures throw).
+     * @return bool
      */
     protected function performMtiUpdate(): bool
     {
@@ -865,6 +750,10 @@ abstract class Model
 
             return true;
         }
+
+        // A null key would compile to `WHERE pk IS NULL` per partition —
+        // the UPDATE would match nothing yet report success.
+        $this->assertKeyResolvedForWrite();
 
         $key = $this->getKeyForRefresh();
         $connection = static::connection();
@@ -922,17 +811,11 @@ abstract class Model
      * The columns changed since the last sync, keyed by column name with
      * their encoded (bindable) values.
      *
-     * The comparison is STRICT against the encoded snapshot (`!==` on the
-     * encoded space, with an array_key_exists guard for newly-written
-     * columns). PHP's loose `!=` treats `0 == '0'`, `'' == null`, `true ==
-     * 1` and `'1e3' == '1000'` as equal — all REAL encoded-space
-     * representations a write can legitimately change (an int `0` written
-     * onto a column loaded as the string `'0'`, a `false` onto a `1`). A
-     * loose compare silently dropped those writes: `$dirty` stayed empty,
-     * `save()` wrote nothing, and the application's update never reached
-     * the database.
+     * The comparison is strict against the encoded snapshot — PHP's loose
+     * `!=` would silently drop legitimate writes like an int `0` onto a
+     * column loaded as the string `'0'`.
      *
-     * @return array<string, mixed> The dirty column values.
+     * @return array<string, mixed>
      */
     protected function getDirty(): array
     {
@@ -960,10 +843,11 @@ abstract class Model
     /**
      * The model's primary-key value for re-targeting the row.
      *
-     * A single PK returns its loaded (original) value; a composite PK
-     * returns an associative array of column => value.
+     * Lenient by design: read paths (Collection::find()/fresh()) treat an
+     * unresolved key as "no match". Write paths guard separately via
+     * {@see assertKeyResolvedForWrite()}.
      *
-     * @return KeyValue The key value, or a column => value map.
+     * @return KeyValue
      */
     final public function getKeyForRefresh(): mixed
     {
@@ -984,18 +868,88 @@ abstract class Model
         return $key;
     }
 
+    /**
+     * Fail fast when a write cannot target its row — a primary-key
+     * component with no value compiles to `WHERE pk IS NULL`, which
+     * matches nothing (or, on dialects that permit NULL keys, the wrong
+     * rows) while the caller is told the write succeeded.
+     *
+     * Read paths stay lenient — {@see getKeyForRefresh()} feeding
+     * Collection::find()/fresh() treats an unresolved key as "no match" —
+     * only the write paths (update, delete) pay for this guard.
+     *
+     * @return void
+     * @throws \LogicException
+     */
+    private function assertKeyResolvedForWrite(): void
+    {
+        $key = $this->getKeyForRefresh();
+
+        $missing = [];
+
+        if (is_array($key)) {
+            foreach ($key as $column => $value) {
+                if ($value === null) {
+                    $missing[] = $column;
+                }
+            }
+        } elseif ($key === null) {
+            $missing[] = static::getPrimaryKeys()[0]->name ?? '(unnamed)';
+        }
+
+        if ($missing === []) {
+            return;
+        }
+
+        throw new \LogicException(
+            'The write on model [' . static::class . '] cannot target its row — primary-key '
+            . 'column(s) [' . implode(', ', $missing) . '] hold no value (the model was never '
+            . 'saved, or its key was never hydrated). The statement would compile to '
+            . '`WHERE pk IS NULL`, matching nothing — or, on dialects that permit NULL keys, '
+            . 'the wrong rows. Save the model to generate its key, or assign a caller-managed '
+            . 'key first.'
+        );
+    }
+
+    /**
+     * Fail fast when an MTI insert's caller-assigned (non-auto-increment)
+     * root key is missing — the root INSERT would omit the PK entirely and
+     * the descendant partitions would have nothing to link against.
+     *
+     * @param  string  $pkName
+     * @return void
+     * @throws \LogicException
+     */
+    private function assertAssignedMtiKeyPresent(string $pkName): void
+    {
+        if (isset($this->original[$pkName])) {
+            return;
+        }
+
+        foreach (static::getProperties() as $mapping) {
+            if ($mapping->columnName === $pkName && $this->encodedPkValue($mapping) !== null) {
+                return;
+            }
+        }
+
+        throw new \LogicException(
+            'The MTI insert on model [' . static::class . '] needs its caller-assigned '
+            . 'primary key [' . $pkName . '] set — the root table does not auto-generate '
+            . 'one, so the root INSERT would omit the key and the descendant partitions '
+            . 'would have nothing to link against.'
+        );
+    }
+
     // ---- Hydration (reconstitution, not creation) ----
 
     /**
      * Reconstitute a model from a raw row.
      *
-     * Hydration does NOT run the constructor — the instance is created
-     * without it and each column property is decoded through its column's
-     * cast. A `\DateTimeInterface`-typed property re-bases the decoded
-     * Carbon to the property's concrete class when the two differ.
+     * Hydration does not run the constructor; each column property is
+     * decoded through its column's cast.
      *
-     * @param \stdClass $row The raw row (stdClass), keyed by column name.
-     * @return static The hydrated model.
+     * @param  \stdClass  $row
+     * @return static
      */
     final public static function fromRow(\stdClass $row): static
     {
@@ -1041,10 +995,8 @@ abstract class Model
     /**
      * A pivot value carried onto this model by a BelongsToMany eager load.
      *
-     * @param string $column The pivot column name (as passed to
-     *        `withPivot()`).
-     * @return mixed The value, or null when the model was not loaded with
-     *         that pivot column.
+     * @param  string  $column
+     * @return mixed
      */
     final public function pivotValue(string $column): mixed
     {
@@ -1054,13 +1006,8 @@ abstract class Model
     /**
      * Write one decoded value onto the instance.
      *
-     * A `\DateTimeInterface`-typed property re-bases a decoded Carbon to
-     * the property's concrete class (`CarbonImmutable`, `DateTime`,
-     * custom subclasses) via `createFromInterface()` — the cast never
-     * needs to know the concrete class.
-     *
-     * @param PropertyMapping $mapping The column mapping.
-     * @param mixed $value The decoded value.
+     * @param  PropertyMapping  $mapping
+     * @param  mixed  $value
      * @return void
      */
     private function hydrateProperty(PropertyMapping $mapping, mixed $value): void
@@ -1092,18 +1039,12 @@ abstract class Model
     }
 
     /**
-     * Read a column's current value by DB column name — works for BOTH
-     * typed-property columns and synthetic columns (which hold no PHP
-     * property, so there is nothing to read except through here).
+     * Read a column's current value by DB column name.
      *
-     * A synthetic column resolves in priority order: a post-load runtime
-     * override ({@see Model::setAttribute()}) first, then the loaded value
-     * decoded out of {@see Model::$original} on demand — the store only
-     * exists because the column has no typed property to read.
+     * Works for both typed-property columns and synthetic columns.
      *
-     * @param string $columnName The DB column name.
-     * @return mixed The decoded (typed-property-shaped) value, or null when
-     *         unset.
+     * @param  string  $columnName
+     * @return mixed
      */
     final public function attribute(string $columnName): mixed
     {
@@ -1130,17 +1071,10 @@ abstract class Model
     /**
      * Write a synthetic column's runtime value.
      *
-     * Synthetic columns have no typed property to hold a value — this store
-     * is their ONLY writable slot. A column backed by a typed property is
-     * written through the property itself (`$model->columnName = ...`):
-     * writing it here would silently diverge from what the property reads,
-     * so it fails fast instead.
-     *
-     * @param string $columnName The DB column name.
-     * @param mixed $value The decoded (typed) value.
+     * @param  string  $columnName
+     * @param  mixed  $value
      * @return void
-     * @throws \InvalidArgumentException When the column is backed by a
-     *         typed property (write the property directly), or is unknown.
+     * @throws \InvalidArgumentException
      */
     final public function setAttribute(string $columnName, mixed $value): void
     {
@@ -1161,7 +1095,7 @@ abstract class Model
     /**
      * The class's merged column mappings, keyed by property name.
      *
-     * @return PropertyMapping[] The merged mappings.
+     * @return PropertyMapping[]
      */
     protected static function getProperties(): array
     {
@@ -1171,7 +1105,7 @@ abstract class Model
     /**
      * The class's primary-key column declarations.
      *
-     * @return list<Column> The primary-key columns.
+     * @return list<Column>
      */
     protected static function getPrimaryKeys(): array
     {
@@ -1182,11 +1116,9 @@ abstract class Model
      * The current column values, keyed by column name with their encoded
      * (bindable) values.
      *
-     * Unset (uninitialized) typed properties are skipped — a partial model
-     * writes only what it holds. Synthetic columns contribute their
-     * runtime value when set.
+     * Unset (uninitialized) typed properties are skipped.
      *
-     * @return array<string, mixed> column => encoded value
+     * @return array<string, mixed>
      */
     protected function getColumnValues(): array
     {
@@ -1224,11 +1156,11 @@ abstract class Model
     }
 
     /**
-     * Encode a single value for a column (used by traits writing raw values).
+     * Encode a single value for a column.
      *
-     * @param string $columnName The DB column name.
-     * @param mixed $value The typed property value.
-     * @return mixed The bindable value.
+     * @param  string  $columnName
+     * @param  mixed  $value
+     * @return mixed
      */
     protected function castForWrite(string $columnName, mixed $value): mixed
     {
@@ -1243,25 +1175,13 @@ abstract class Model
      * A one-to-many relation: this model's key is referenced by the
      * related table's FK.
      *
-     * Declared as a method so it composes: `$user->posts()->where(...)`
-     * keeps the constraint and adds to it. Override the FK with
-     * `$foreignKey` when the column is not the snake_case default.
-     *
-     * Composite keys: when this model has a composite PK, `$localKey`
-     * defaults to the full PK column list — and `$foreignKey` must then be
-     * declared explicitly as a matching column list (a composite FK cannot
-     * be derived by convention).
-     *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|list<string>|null $foreignKey The FK column (or column
-     *        list) on the related table.
-     * @param string|list<string>|null $localKey The key column (or column
-     *        list) on this table.
-     * @return Relations\HasMany<TRelated> The relation (a lazily-executed query).
-     * @throws \InvalidArgumentException When the FK column does not exist
-     *         on the related model.
+     * @param  class-string<TRelated>  $related
+     * @param  string|list<string>|null  $foreignKey
+     * @param  string|list<string>|null  $localKey
+     * @return Relations\HasMany<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function hasMany(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasMany
     {
@@ -1276,18 +1196,16 @@ abstract class Model
     }
 
     /**
-     * Composite keys follow the same rules as {@see Model::hasMany()}.
+     * A one-to-one relation: this model's key is referenced by the
+     * related table's FK.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|list<string>|null $foreignKey The FK column (or column
-     *        list) on the related table.
-     * @param string|list<string>|null $localKey The key column (or column
-     *        list) on this table.
-     * @return Relations\HasOne<TRelated> The relation.
-     * @throws \InvalidArgumentException When the FK column does not exist
-     *         on the related model.
+     * @param  class-string<TRelated>  $related
+     * @param  string|list<string>|null  $foreignKey
+     * @param  string|list<string>|null  $localKey
+     * @return Relations\HasOne<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function hasOne(string $related, string|array|null $foreignKey = null, string|array|null $localKey = null): Relations\HasOne
     {
@@ -1304,20 +1222,13 @@ abstract class Model
     /**
      * The inverse relation: this model's table holds the FK.
      *
-     * Composite keys: when the related model has a composite PK, `$ownerKey`
-     * defaults to its full PK column list — and `$foreignKey` must then be
-     * declared explicitly as a matching column list.
-     *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related (owning) model class.
-     * @param string|list<string>|null $foreignKey The FK column (or column
-     *        list) on THIS table.
-     * @param string|list<string>|null $ownerKey The key column (or column
-     *        list) on the related table.
-     * @return Relations\BelongsTo<TRelated> The relation.
-     * @throws \InvalidArgumentException When the FK column does not exist
-     *         on this model.
+     * @param  class-string<TRelated>  $related
+     * @param  string|list<string>|null  $foreignKey
+     * @param  string|list<string>|null  $ownerKey
+     * @return Relations\BelongsTo<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function belongsTo(string $related, string|array|null $foreignKey = null, string|array|null $ownerKey = null): Relations\BelongsTo
     {
@@ -1332,26 +1243,17 @@ abstract class Model
     }
 
     /**
-     * A two-hop relation through an intermediate model.
-     *
-     * `hasOneThrough(Owner::class, Car::class)` — the intermediate model
-     * is the SECOND argument; the FKs derive from the snake_case convention
-     * and are overridable for non-standard keys. Composite keys are declared
-     * as matching column lists on every side that is composite.
+     * A one-to-one two-hop relation through an intermediate model.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The final related model class.
-     * @param class-string<Model> $through The intermediate model class.
-     * @param string|list<string>|null $firstKey FK column (or list) on the
-     *        intermediate table → this model.
-     * @param string|list<string>|null $secondKey FK column (or list) on the
-     *        related table → intermediate.
-     * @param string|list<string>|null $localKey The key column (or list) on
-     *        this table.
-     * @return Relations\HasOneThrough<TRelated> The relation.
-     * @throws \InvalidArgumentException When any derived column does not
-     *         exist on its model.
+     * @param  class-string<TRelated>  $related
+     * @param  class-string<Model>  $through
+     * @param  string|list<string>|null  $firstKey
+     * @param  string|list<string>|null  $secondKey
+     * @param  string|list<string>|null  $localKey
+     * @return Relations\HasOneThrough<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function hasOneThrough(
         string $related,
@@ -1377,17 +1279,13 @@ abstract class Model
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The final related model class.
-     * @param class-string<Model> $through The intermediate model class.
-     * @param string|list<string>|null $firstKey FK column (or list) on the
-     *        intermediate table → this model.
-     * @param string|list<string>|null $secondKey FK column (or list) on the
-     *        related table → intermediate.
-     * @param string|list<string>|null $localKey The key column (or list) on
-     *        this table.
-     * @return Relations\HasManyThrough<TRelated> The relation.
-     * @throws \InvalidArgumentException When any derived column does not
-     *         exist on its model.
+     * @param  class-string<TRelated>  $related
+     * @param  class-string<Model>  $through
+     * @param  string|list<string>|null  $firstKey
+     * @param  string|list<string>|null  $secondKey
+     * @param  string|list<string>|null  $localKey
+     * @return Relations\HasManyThrough<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function hasManyThrough(
         string $related,
@@ -1409,26 +1307,18 @@ abstract class Model
     }
 
     /**
-     * A one-to-many POLYMORPHIC relation: the related table's FK + type
-     * columns point back at models of ANY class.
-     *
-     * `Post::comments()` → `Comment::newQuery()->where(commentable_id,
-     * $post->id)->where(commentable_type, Post::class)`. The type column
-     * defaults to `{morphName}_type` and the FK to `{morphName}_id` — pass
-     * the morph name (e.g. `'commentable'`) or the explicit columns.
+     * A one-to-many polymorphic relation: the related table's FK + type
+     * columns point back at models of any class.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|null $morphName The morph alias prefix — derives both
-     *        column names when the explicit ones are null.
-     * @param string|null $foreignKey The FK column on the related table.
-     * @param string|null $localKey The key column on this table.
-     * @param string|null $typeColumn The type-discriminator column on the
-     *        related table.
-     * @return Relations\MorphMany<TRelated> The relation.
-     * @throws \InvalidArgumentException When a derived column does not
-     *         exist on its model.
+     * @param  class-string<TRelated>  $related
+     * @param  string|null  $morphName
+     * @param  string|null  $foreignKey
+     * @param  string|null  $localKey
+     * @param  string|null  $typeColumn
+     * @return Relations\MorphMany<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function morphMany(
         string $related,
@@ -1458,21 +1348,18 @@ abstract class Model
     }
 
     /**
-     * A one-to-one POLYMORPHIC relation — {@see Model::morphMany()}'s
-     * first row, stably ordered by the related PK.
+     * A one-to-one polymorphic relation — the first row of a morphMany,
+     * stably ordered by the related PK.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|null $morphName The morph alias prefix — derives both
-     *        column names when the explicit ones are null.
-     * @param string|null $foreignKey The FK column on the related table.
-     * @param string|null $localKey The key column on this table.
-     * @param string|null $typeColumn The type-discriminator column on the
-     *        related table.
-     * @return Relations\MorphOne<TRelated> The relation.
-     * @throws \InvalidArgumentException When a derived column does not
-     *         exist on its model.
+     * @param  class-string<TRelated>  $related
+     * @param  string|null  $morphName
+     * @param  string|null  $foreignKey
+     * @param  string|null  $localKey
+     * @param  string|null  $typeColumn
+     * @return Relations\MorphOne<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function morphOne(
         string $related,
@@ -1502,40 +1389,19 @@ abstract class Model
     }
 
     /**
-     * The inverse POLYMORPHIC relation: this model's (type, key) pair
-     * points at a row of ANY model table, resolved per row from the type
+     * The inverse polymorphic relation: this model's (type, key) pair
+     * points at a row of any model table, resolved per row from the type
      * column.
      *
-     * `Comment::commentable()` reads `commentable_type` + `commentable_id`
-     * and queries whichever model class the type column names. The owner
-     * key defaults to the TARGET's primary key (resolved per query — the
-     * target class is dynamic).
+     * @template TRelated of Model The classes the allowlist admits — inferred from `$types`.
      *
-     * Typing: the `$types` allowlist drives the static type. With
-     * `morphTo('commentable', types: [Post::class, Video::class])` the
-     * relation's reads narrow to `(Post|Video)|null` — the same classes
-     * the runtime allowlist enforces. Without it the result is the honest
-     * `Model|null` (any class can resolve) and callers narrow with a
-     * local `instanceof`.
-     *
-     * @template TRelated of Model The classes the allowlist admits —
-     *         inferred from `$types`; never resolved when `$types` is null.
-     *
-     * @param string|null $morphName The morph alias prefix — derives both
-     *        column names when the explicit ones are null.
-     * @param string|null $typeColumn The type-discriminator column on THIS
-     *        table.
-     * @param string|null $foreignKey The FK column on THIS table.
-     * @param string|null $ownerKey The key column on the target tables.
-     * @param list<class-string<TRelated>>|null $types The optional
-     *        morph-alias allowlist — null resolves any model class; a
-     *        value outside the list fails fast at resolution.
-     * @return ($types is null ? Relations\MorphTo<Model> : Relations\MorphTo<TRelated>) The relation:
-     *         the Model bound when no allowlist is declared (any class can
-     *         resolve — the honest contract), the allowlist-narrowed
-     *         template when one is.
-     * @throws \InvalidArgumentException When a derived column does not
-     *         exist on this model.
+     * @param  string|null  $morphName
+     * @param  string|null  $typeColumn
+     * @param  string|null  $foreignKey
+     * @param  string|null  $ownerKey
+     * @param  list<class-string<TRelated>>|null  $types  The optional morph-alias allowlist; null resolves any model class.
+     * @return ($types is null ? Relations\MorphTo<Model> : Relations\MorphTo<TRelated>)
+     * @throws \InvalidArgumentException
      */
     protected function morphTo(
         ?string $morphName = null,
@@ -1559,15 +1425,12 @@ abstract class Model
      * The morph FK default: `{morphName}_id`, or the caller's explicit
      * type column's `_type` → `_id` mirror.
      *
-     * @param string|null $morphName The morph alias prefix.
-     * @param class-string<Model> $model The model the columns live on (for
-     *        the error message).
-     * @param string|null $foreignKey The caller's explicit FK (null here —
-     *        the param exists for the mirror rule).
-     * @param string|null $typeColumn The caller's explicit type column.
-     * @return string The FK column name.
-     * @throws \InvalidArgumentException When neither a morph name nor an
-     *         explicit type column is available to derive from.
+     * @param  string|null  $morphName
+     * @param  class-string<Model>  $model
+     * @param  string|null  $foreignKey
+     * @param  string|null  $typeColumn
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private static function defaultMorphForeignKey(
         ?string $morphName,
@@ -1593,13 +1456,11 @@ abstract class Model
      * The morph type-column default: `{morphName}_type`, or the caller's
      * explicit FK column's `_id` → `_type` mirror.
      *
-     * @param string|null $morphName The morph alias prefix.
-     * @param class-string<Model> $model The model the columns live on (for
-     *        the error message).
-     * @param string|null $foreignKey The caller's explicit FK column.
-     * @return string The type column name.
-     * @throws \InvalidArgumentException When neither a morph name nor an
-     *         explicit FK column is available to derive from.
+     * @param  string|null  $morphName
+     * @param  class-string<Model>  $model
+     * @param  string|null  $foreignKey
+     * @return string
+     * @throws \InvalidArgumentException
      */
     private static function defaultMorphTypeColumn(
         ?string $morphName,
@@ -1623,23 +1484,16 @@ abstract class Model
     /**
      * A many-to-many relation through a pivot table.
      *
-     * `Post::tags()` links through `posts_tags` (the deterministic
-     * `{parentTable}_{relatedTable}` default — pass `$table` for any other
-     * name). The pivot key columns default to `{parentTable}_id` /
-     * `{relatedTable}_id`; both models must declare a single named primary
-     * key (pivot keys are scalar-only).
-     *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string|null $table The pivot table name.
-     * @param string|null $foreignPivotKey The pivot column → this model.
-     * @param string|null $relatedPivotKey The pivot column → related.
-     * @param string|null $parentKey This model's key column.
-     * @param string|null $relatedKey The related model's key column.
-     * @return Relations\BelongsToMany<TRelated> The relation.
-     * @throws \InvalidArgumentException When a model's primary key is
-     *         composite or unnamed.
+     * @param  class-string<TRelated>  $related
+     * @param  string|null  $table
+     * @param  string|null  $foreignPivotKey
+     * @param  string|null  $relatedPivotKey
+     * @param  string|null  $parentKey
+     * @param  string|null  $relatedKey
+     * @return Relations\BelongsToMany<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function belongsToMany(
         string $related,
@@ -1661,22 +1515,16 @@ abstract class Model
     }
 
     /**
-     * A many-to-many POLYMORPHIC relation: the pivot's parent side is a
-     * (type, key) pair, so models of ANY class share the pool.
-     *
-     * `Post::tags()` and `Video::tags()` both link through `taggables`
-     * (the `{morphName}{relatedTable}` default pivot name); every query
-     * filters the pivot's `{morphName}_type` to THIS class's FQCN.
+     * A many-to-many polymorphic relation: the pivot's parent side is a
+     * (type, key) pair, so models of any class share the pool.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class.
-     * @param string $morphName The morph alias prefix — the pivot's
-     *        `{morphName}_id`/`{morphName}_type` columns.
-     * @param string|null $table The pivot table name.
-     * @return Relations\MorphToMany<TRelated> The relation.
-     * @throws \InvalidArgumentException When a model's primary key is
-     *         composite or unnamed.
+     * @param  class-string<TRelated>  $related
+     * @param  string  $morphName
+     * @param  string|null  $table
+     * @return Relations\MorphToMany<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function morphToMany(
         string $related,
@@ -1688,19 +1536,16 @@ abstract class Model
     }
 
     /**
-     * The INVERSE polymorphic many-to-many relation: this model is the
-     * RELATED side of the pivot (`Tag::posts()` lists every post tagged
-     * with it).
+     * The inverse polymorphic many-to-many relation: this model is the
+     * related side of the pivot.
      *
      * @template TRelated of Model
      *
-     * @param class-string<TRelated> $related The related model class (the
-     *        morph PARENT side — e.g. Post when called on Tag).
-     * @param string $morphName The morph alias prefix.
-     * @param string|null $table The pivot table name.
-     * @return Relations\MorphToMany<TRelated> The relation.
-     * @throws \InvalidArgumentException When a model's primary key is
-     *         composite or unnamed.
+     * @param  class-string<TRelated>  $related
+     * @param  string  $morphName
+     * @param  string|null  $table
+     * @return Relations\MorphToMany<TRelated>
+     * @throws \InvalidArgumentException
      */
     protected function morphedByMany(
         string $related,
@@ -1714,14 +1559,9 @@ abstract class Model
     /**
      * Cache a relation's loaded result on the instance.
      *
-     * Written by the eager loader; a relation method's lazy access never
-     * consults the cache.
-     *
-     * @param string $name The relation name (the relation method's name).
-     * @param Model|Collection<Model>|null $value The loaded result — a
-     *        single related model (HasOne/BelongsTo), a collection
-     *        (HasMany/through), or null (an empty single-valued relation).
-     * @return static The model.
+     * @param  string  $name
+     * @param  Model|Collection<Model>|null  $value
+     * @return static
      */
     final public function setRelation(string $name, Model|Collection|null $value): static
     {
@@ -1733,18 +1573,8 @@ abstract class Model
     /**
      * A loaded relation's cached result — the loader's read path.
      *
-     * Internal: the eager loader reads nested children through it, and
-     * {@see Relation::getResults()} consults it for the cache-backed read.
-     * Public so the Relations namespace can reach it (the relation owns
-     * the cache-hit decision); there is deliberately NO public typed
-     * accessor — callers read relations through the relation METHOD
-     * (`$user->posts()->getResults()`), which is typed by the method's
-     * declared return and shares this cache when the relation is loaded
-     * and unfiltered.
-     *
-     * @param string $name The relation name.
-     * @return Model|Collection<Model>|null The cached result, or null when
-     *         not loaded (or loaded empty).
+     * @param  string  $name
+     * @return Model|Collection<Model>|null
      */
     final public function cachedRelation(string $name): Model|Collection|null
     {
@@ -1758,26 +1588,13 @@ abstract class Model
     }
 
     /**
-     * The relation-method name the CURRENT factory call came from.
+     * The relation-method name the current factory call came from.
      *
-     * The factories (`hasMany` etc.) are called from relation methods
-     * (`posts()`); the relation needs that caller's name as its cache key
-     * so {@see Relation::getResults()} can find the eagerly-loaded result.
-     * A bounded backtrace reads it — no relation method has to pass its
-     * own name, and a typo'd explicit name cannot silently break the
-     * cache. The walk skips every frame INSIDE the ORM's own namespace
-     * (the factories, any internal helper a relation method delegates
-     * through, the loader) and takes the first frame outside it — a
-     * factory called from a helper method still resolves to the relation
-     * method above it. The ORM's own test namespace is EXEMPT from the
-     * skip: this repo's fixtures are the stand-in for user models, so
-     * `RelUser::posts()` must stamp just like a model in a host app
-     * would. A factory reached from anywhere else (the loader's prototype
-     * invocation, user code that is not a relation method) stamps nothing
-     * and the cache path stays off.
+     * A bounded backtrace walk skips every frame inside the ORM's own
+     * namespace and takes the first frame outside it; a factory reached
+     * from anywhere else stamps nothing and the cache path stays off.
      *
-     * @return string|null The calling relation method's name, or null when
-     *         the factory was not called from a relation method.
+     * @return string|null
      */
     private static function relationName(): string|null
     {
@@ -1815,8 +1632,8 @@ abstract class Model
     /**
      * Whether a relation has been (eager-)loaded on this instance.
      *
-     * @param string $name The relation name.
-     * @return bool True when the relation result is cached.
+     * @param  string  $name
+     * @return bool
      */
     final public function relationLoaded(string $name): bool
     {
@@ -1826,9 +1643,9 @@ abstract class Model
     /**
      * The FK default for a relation keyed off `$localKey` (this model's).
      *
-     * @param string|list<string> $localKey The local key the FK mirrors.
-     * @return string The FK default (a scalar column).
-     * @throws \LogicException When the local key is composite.
+     * @param  string|list<string>  $localKey
+     * @return string
+     * @throws \LogicException
      */
     private static function defaultForeignKeyFor(string|array $localKey): string
     {
@@ -1841,10 +1658,10 @@ abstract class Model
      * The FK default for a belongsTo keyed off `$ownerKey` (pointing at
      * `$related`).
      *
-     * @param string|list<string> $ownerKey The owner key the FK mirrors.
-     * @param class-string<Model> $related The model the FK references.
-     * @return string The FK default (a scalar column).
-     * @throws \LogicException When the owner key is composite.
+     * @param  string|list<string>  $ownerKey
+     * @param  class-string<Model>  $related
+     * @return string
+     * @throws \LogicException
      */
     private static function defaultForeignKeyFromKey(string|array $ownerKey, string $related): string
     {
@@ -1856,12 +1673,9 @@ abstract class Model
     /**
      * Fail fast when a composite key cannot derive its FK counterpart.
      *
-     * There is no naming convention for a column tuple — the caller must
-     * declare both sides explicitly.
-     *
-     * @param string|list<string> $key The key whose counterpart is wanted.
+     * @param  string|list<string>  $key
      * @return void
-     * @throws \LogicException When the key is composite.
+     * @throws \LogicException
      */
     private static function assertDerivableKey(string|array $key): void
     {
@@ -1875,10 +1689,10 @@ abstract class Model
     }
 
     /**
-     * The snake_case foreign-key default for THIS model: its short class
+     * The snake_case foreign-key default for this model: its short class
      * name + `_id`.
      *
-     * @return string The FK column name.
+     * @return string
      */
     private static function defaultForeignKey(): string
     {
@@ -1888,11 +1702,11 @@ abstract class Model
     }
 
     /**
-     * The snake_case foreign-key default pointing AT another model: that
-     * model's short class name + `_id` (the belongsTo direction).
+     * The snake_case foreign-key default pointing at another model: that
+     * model's short class name + `_id`.
      *
-     * @param class-string<Model> $related The model the FK references.
-     * @return string The FK column name.
+     * @param  class-string<Model>  $related
+     * @return string
      */
     private static function defaultForeignKeyFrom(string $related): string
     {
@@ -1902,15 +1716,10 @@ abstract class Model
     }
 
     /**
-     * THIS model's primary-key column(s) (the local-key default).
+     * This model's primary-key column(s) (the local-key default).
      *
-     * A single PK returns the column name; a composite PK returns the full
-     * column list — the relation then carries BOTH sides as lists, and the
-     * FK side must be declared explicitly (no naming convention exists for
-     * a tuple).
-     *
-     * @return string|list<string> The PK column name, or the column list.
-     * @throws \LogicException When the model has no primary key at all.
+     * @return string|list<string>
+     * @throws \LogicException
      */
     private static function defaultLocalKey(): string|array
     {
@@ -1920,9 +1729,9 @@ abstract class Model
     /**
      * Another model's primary-key column(s) (the owner-key default).
      *
-     * @param class-string<Model> $related The model whose PK to resolve.
-     * @return string|list<string> The PK column name, or the column list.
-     * @throws \LogicException When the model has no primary key at all.
+     * @param  class-string<Model>  $related
+     * @return string|list<string>
+     * @throws \LogicException
      */
     private static function defaultLocalKeyOf(string $related): string|array
     {
@@ -1932,12 +1741,9 @@ abstract class Model
     /**
      * A model's primary-key column name(s).
      *
-     * @param class-string<Model> $class The model to resolve.
-     * @return string|list<string> The single column name, or the column list.
-     * @throws \LogicException When the model declares no primary key, or a
-     *         PK column resolves without a name (never happens post-build —
-     *         the factory names every column — but the guard keeps the
-     *         contract provable).
+     * @param  class-string<Model>  $class
+     * @return string|list<string>
+     * @throws \LogicException
      */
     private static function primaryKeyNamesOf(string $class): string|array
     {
@@ -1967,11 +1773,11 @@ abstract class Model
     /**
      * Fail fast when a column does not exist on a model.
      *
-     * @param class-string<Model> $model The model the column must exist on.
-     * @param string|list<string> $column The column name (or column list).
-     * @param string $role What the column is (for the message).
+     * @param  class-string<Model>  $model
+     * @param  string|list<string>  $column
+     * @param  string  $role
      * @return void
-     * @throws \InvalidArgumentException When the column is unknown.
+     * @throws \InvalidArgumentException
      */
     private static function assertColumnExists(string $model, string|array $column, string $role): void
     {
@@ -1981,13 +1787,13 @@ abstract class Model
     }
 
     /**
-     * Fail fast when ONE column does not exist on a model.
+     * Fail fast when one column does not exist on a model.
      *
-     * @param class-string<Model> $model The model the column must exist on.
-     * @param string $column The column name.
-     * @param string $role What the column is (for the message).
+     * @param  class-string<Model>  $model
+     * @param  string  $column
+     * @param  string  $role
      * @return void
-     * @throws \InvalidArgumentException When the column is unknown.
+     * @throws \InvalidArgumentException
      */
     private static function assertSingleColumnExists(string $model, string $column, string $role): void
     {

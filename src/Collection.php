@@ -25,14 +25,11 @@ final class Collection extends BaseCollection
     /**
      * Find a model in the collection by its primary key.
      *
-     * A composite key matches by SHAPE — the same column set, compared
-     * pair-wise — so map ordering never matters. A null component matches
-     * only null (loose `==` would let `null` match `0` or `''`); a scalar
-     * component compares cross-type (`42` matches `'42'`) because PK
-     * values round-trip dialect bytes through the codec.
+     * A composite key matches by shape — the same column set, compared
+     * pair-wise — so map ordering never matters.
      *
-     * @param KeyValue $key The primary-key value.
-     * @return Model|null The model, or null when not present.
+     * @param  KeyValue  $key
+     * @return Model|null
      */
     public function find(mixed $key): ?Model
     {
@@ -43,9 +40,9 @@ final class Collection extends BaseCollection
     /**
      * Compare two primary-key values for a {@see Collection::find()} match.
      *
-     * @param mixed $modelKey The value off the model ({@see Model::getKeyForRefresh()}).
-     * @param mixed $key The value the caller is looking for.
-     * @return bool True when the values identify the same row.
+     * @param  mixed  $modelKey
+     * @param  mixed  $key
+     * @return bool
      */
     private static function keyMatches(mixed $modelKey, mixed $key): bool
     {
@@ -82,10 +79,10 @@ final class Collection extends BaseCollection
 
     /**
      * Normalize a scalar PK value for strict comparison — numeric strings
-     * collapse to int (canonical), everything else passes through.
+     * collapse to int, everything else passes through.
      *
-     * @param mixed $value The scalar key value.
-     * @return mixed The normalized value.
+     * @param  mixed  $value
+     * @return mixed
      */
     private static function normalizeKey(mixed $value): mixed
     {
@@ -99,7 +96,7 @@ final class Collection extends BaseCollection
     /**
      * Every model's primary-key value.
      *
-     * @return list<KeyValue> The key values.
+     * @return list<KeyValue>
      */
     public function modelKeys(): array
     {
@@ -116,14 +113,9 @@ final class Collection extends BaseCollection
     /**
      * Eager-load relations on every model in the collection.
      *
-     * Same loader `with()` uses — one `IN` query per relation path, then
-     * the relation's match() distributes results onto every model. Empty
-     * collections are a no-op.
-     *
-     * @param string ...$relations The relation paths (dot-notation nests).
-     * @return static The collection.
-     * @throws \InvalidArgumentException When a path does not resolve to a
-     *         relation method.
+     * @param  string  ...$relations
+     * @return static
+     * @throws \InvalidArgumentException
      */
     public function load(string ...$relations): static
     {
@@ -146,21 +138,12 @@ final class Collection extends BaseCollection
     /**
      * Re-query every model by its key and replace the items.
      *
-     * ONE query, not N: the keys go into a single `whereKey(...)` on the
-     * first model's builder, and the re-hydrated rows are re-attached to
-     * the collection's original positions by serialized key — a row that
-     * was deleted externally leaves its ORIGINAL model in place (removing
-     * it would silently shrink a collection the caller is iterating),
-     * preserving the documented staleness contract while eliminating the
-     * per-model round trip (an N+1 storm beyond a few dozen items).
+     * ONE query, not N: the keys go into a single `whereKey(...)` and the
+     * re-hydrated rows are re-attached to the collection's original
+     * positions by serialized key — a row deleted externally leaves its
+     * original model in place. Registered eager loads are not re-applied.
      *
-     * Registered eager loads are not re-applied — the fresh rows are
-     * plain hydrations; call `load()` again if relations are needed.
-     *
-     * Composite keys re-query via the same builder path (`whereKey`
-     * accepts the full key map) and re-attach by serialized tuple.
-     *
-     * @return static The collection.
+     * @return static
      */
     public function fresh(): static
     {
@@ -203,11 +186,11 @@ final class Collection extends BaseCollection
 
     /**
      * Serialize a key value to a stable string — scalars stringify;
-     * composite maps JSON-encode (order-stable per the shape contract).
+     * composite maps JSON-encode.
      *
-     * @param KeyValue $key The key value.
-     * @return string The serialized key.
-     * @throws \JsonException When a composite key cannot be encoded.
+     * @param  KeyValue  $key
+     * @return string
+     * @throws \JsonException
      */
     private static function serializeKeyValue(mixed $key): string
     {

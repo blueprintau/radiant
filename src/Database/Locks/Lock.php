@@ -34,22 +34,15 @@ interface Lock
      *
      * Implementations must block until the lock is acquired (or fail
      * loudly), hold it for the callback's duration, and always release it —
-     * including on exception. The callback receives no arguments; it
-     * closes over its own state.
-     *
-     * The name is supplied per call, not per adapter: one name is one
-     * mutual-exclusion domain, so distinct jobs use distinct names and a
-     * single adapter instance can guard several. Adapters whose mechanism
-     * cannot be named (e.g. SQLite's database-wide write transaction)
-     * accept and ignore the name — the signature stays uniform.
+     * including on exception. The name is supplied per call, not per
+     * adapter: one name is one mutual-exclusion domain.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The work to run under lock.
-     * @param string $name The lock domain. Use a distinct name per distinct
-     *        critical section; unrelated jobs must not share one.
-     * @return TReturn The callback's return value.
-     * @throws \Throwable Whatever the callback throws, after releasing the lock.
+     * @param  callable(): TReturn  $callback
+     * @param  string  $name  A distinct name per distinct critical section.
+     * @return TReturn
+     * @throws \Throwable
      */
     public function withLock(callable $callback, string $name): mixed;
 }

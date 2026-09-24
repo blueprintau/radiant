@@ -17,25 +17,16 @@ interface ValueCodecInterface
     /**
      * PHP value → driver value (write/bind path; the value is the field cast's output).
      *
-     * Admits exactly the bindable union — scalars plus `\DateTimeInterface`,
-     * which the codec formats to a dialect datetime string at bind time.
-     * `ToSqlValue` objects never reach the codec (the QueryBuilder/Grammar
-     * extracts and inlines them before bindings are bound).
-     *
-     * @param string|int|float|bool|null|\DateTimeInterface $value The value to
-     *        encode for the driver.
-     * @return string|int|float|bool|null The driver-ready value.
+     * @param  string|int|float|bool|null|\DateTimeInterface  $value
+     * @return string|int|float|bool|null
      */
     public function encode(string|int|float|bool|null|\DateTimeInterface $value): string|int|float|bool|null;
 
     /**
      * Driver value → PHP value (read path; the value is the field cast's input).
      *
-     * Scalar↔scalar: PDO never returns objects, so decode stays scalar-only
-     * (e.g. Postgres' microsecond datetime strings).
-     *
-     * @param string|int|float|bool|null $value The driver value to decode.
-     * @return string|int|float|bool|null The PHP value.
+     * @param  string|int|float|bool|null  $value
+     * @return string|int|float|bool|null
      */
     public function decode(string|int|float|bool|null $value): string|int|float|bool|null;
 }

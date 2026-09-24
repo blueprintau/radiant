@@ -20,8 +20,8 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * Wrap an identifier in Postgres double quotes.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     protected function wrap(string $value): string
     {
@@ -31,9 +31,9 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * Map a logical column type to Postgres' native type.
      *
-     * @param ColumnType $type The logical column type.
-     * @param int|null $length The column length, if any.
-     * @return string The Postgres type.
+     * @param  ColumnType  $type
+     * @param  int|null  $length
+     * @return string
      */
     public function type(ColumnType $type, ?int $length = null): string
     {
@@ -52,7 +52,7 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * The Postgres auto-increment clause.
      *
-     * @return string The clause.
+     * @return string
      */
     protected function autoIncrement(): string
     {
@@ -60,12 +60,10 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * Postgres 15+ renders the NULLS clause EXPLICITLY in both directions:
-     * `NULLS DISTINCT` pins the SQL default (multiple NULLs allowed) in
-     * the DDL, `NULLS NOT DISTINCT` upgrades to at-most-one-NULL semantics.
+     * Postgres 15+ renders the NULLS clause explicitly in both directions.
      *
-     * @param bool $nullsNotDistinct The declared option value.
-     * @return string The clause text.
+     * @param  bool  $nullsNotDistinct
+     * @return string
      */
     protected function compileNullsNotDistinctClause(bool $nullsNotDistinct): string
     {
@@ -76,8 +74,8 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * Postgres renders partial (filtered) indexes — `CREATE INDEX ... WHERE
      * predicate`.
      *
-     * @param string $predicate The declared predicate, spliced verbatim.
-     * @return string The clause text.
+     * @param  string  $predicate
+     * @return string
      */
     protected function compilePartialIndexClause(string $predicate): string
     {
@@ -85,12 +83,10 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * Postgres renders `DEFERRABLE [INITIALLY DEFERRED]` on foreign keys —
-     * the option circular-FK seeding within one transaction depends on.
+     * Postgres renders `DEFERRABLE [INITIALLY DEFERRED]` on foreign keys.
      *
-     * @param bool $initiallyDeferred Whether the constraint starts
-     *        INITIALLY DEFERRED.
-     * @return string The clause text.
+     * @param  bool  $initiallyDeferred
+     * @return string
      */
     protected function compileDeferrableClause(bool $initiallyDeferred): string
     {
@@ -100,10 +96,9 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * Postgres drops an index by name alone: `DROP INDEX name`.
      *
-     * @param string $name The index name.
-     * @param string $table The table the index is on (unused — Postgres
-     *        indexes live in their own namespace).
-     * @return string The compiled SQL.
+     * @param  string  $name
+     * @param  string  $table
+     * @return string
      */
     public function compileDropIndex(string $name, string $table): string
     {
@@ -116,8 +111,8 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * Compile an `ALTER TABLE ... DROP COLUMN` statement.
      *
-     * @param Blueprint $blueprint The table and columns to drop.
-     * @return string The compiled SQL.
+     * @param  Blueprint  $blueprint
+     * @return string
      */
     protected function compileDropColumn(Blueprint $blueprint): string
     {
@@ -137,24 +132,8 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * Compile the `ALTER TABLE ... ALTER COLUMN` statements — Postgres'
      * in-place content-drift form.
      *
-     * Postgres splits the facets into SEPARATE clauses, so one modified
-     * column compiles to up to three statements, in a fixed order:
-     * `TYPE` (when the type changed), `SET/DROP NOT NULL` (when
-     * nullability changed), `SET/DROP DEFAULT` (when the default
-     * changed). The caller (the differ) passes the drift facets via the
-     * blueprint: the desired shape is authoritative, and each statement
-     * is emitted only when that facet actually differs from the live
-     * column — the blueprint's column list carries the desired shapes.
-     *
-     * Because the differ may target a subset of facets, the blueprint's
-     * columns carry the desired shape and the statements are derived
-     * from it directly: TYPE always (the type text is the identity of
-     * the change), NOT NULL per the desired `nullable` flag, DEFAULT per
-     * the desired `default` value (null default → `DROP DEFAULT`).
-     *
-     * @param Blueprint $blueprint The table-bound blueprint carrying the
-     *        desired column shapes.
-     * @return list<string> The statements, in execution order.
+     * @param  Blueprint  $blueprint
+     * @return list<string>
      */
     public function compileModifyColumn(Blueprint $blueprint): array
     {
@@ -192,11 +171,10 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * Compile an `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY`
      * statement — Postgres' in-place FK-add form.
      *
-     * @param string $table The table to attach the constraint to.
-     * @param array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool} $foreignKey
-     *        The constraint shape.
-     * @param string $name The constraint name (the drop handle).
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  array{columns: list<string>, references: list<string>, onDelete: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, onUpdate: \BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction|null, deferrable: bool, initiallyDeferred: bool}  $foreignKey
+     * @param  string  $name
+     * @return string
      */
     public function compileAddForeignKey(string $table, array $foreignKey, string $name): string
     {
@@ -208,12 +186,11 @@ final class PostgresSchemaGrammar extends SchemaGrammar
 
     /**
      * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement — Postgres'
-     * in-place constraint-drop form (covers FKs AND CHECKs; Postgres
-     * treats both as named constraints).
+     * in-place constraint-drop form (covers FKs and CHECKs).
      *
-     * @param string $table The table the constraint is on.
-     * @param string $name The live constraint name (the drop handle).
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  string  $name
+     * @return string
      */
     public function compileDropForeignKey(string $table, string $name): string
     {
@@ -226,10 +203,10 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * Compile an `ALTER TABLE ... ADD CONSTRAINT ... CHECK` statement —
      * Postgres' in-place CHECK-add form.
      *
-     * @param string $table The table to attach the constraint to.
-     * @param string $name The constraint name (the drop handle).
-     * @param string $expression The CHECK predicate, spliced verbatim.
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  string  $name
+     * @param  string  $expression
+     * @return string
      */
     public function compileAddCheck(string $table, string $name, string $expression): string
     {
@@ -240,12 +217,11 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement for a CHECK
-     * — Postgres' in-place CHECK-drop form (same syntax as FK drops).
+     * Compile an `ALTER TABLE ... DROP CONSTRAINT` statement for a CHECK.
      *
-     * @param string $table The table the constraint is on.
-     * @param string $name The live constraint name (the drop handle).
-     * @return string The compiled SQL.
+     * @param  string  $table
+     * @param  string  $name
+     * @return string
      */
     public function compileDropCheck(string $table, string $name): string
     {
@@ -255,15 +231,12 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * Postgres caps identifiers at 63 bytes (NAMEDATALEN minus the
-     * terminator) — a derived index name over a long table/column set can
-     * exceed it. Fail fast at compile time (Doctrine's pattern: the
-     * dialect validates, never silently truncates — a truncated name is
-     * not stable across syncs and would break the differ).
+     * Postgres caps identifiers at 63 bytes — fail fast at compile time,
+     * never silently truncate.
      *
-     * @param string $name The final identifier (index name).
+     * @param  string  $name
      * @return void
-     * @throws \InvalidArgumentException When the identifier exceeds 63 bytes.
+     * @throws \InvalidArgumentException
      */
     public function assertValidIdentifier(string $name): void
     {

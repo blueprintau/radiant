@@ -6,11 +6,6 @@ namespace BlueprintAU\Radiant\Database\Query\Enums;
 
 /**
  * The shape of a where clause stored on the builder.
- *
- * Each case names the clause's array shape, so the Grammar can match
- * exhaustively on it and the builder can store exactly the keys each shape
- * needs. A bare string would let an invalid type silently fall through to a
- * default branch; an enum makes an unknown type a compile-time error.
  */
 enum WhereType: string
 {

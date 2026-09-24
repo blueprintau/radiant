@@ -40,12 +40,8 @@ final class Morphs
     /**
      * Create a morph-pair declaration.
      *
-     * @param string $name The morph alias prefix — emits `{name}_type` and
-     *        `{name}_id`. Must be a non-empty valid identifier fragment.
-     * @param bool $nullable Whether both columns allow null. A nullable
-     *        morph pair models an OPTIONAL polymorphic relation (a comment
-     *        with no commentable yet); a non-nullable pair makes the
-     *        relation mandatory at the schema level.
+     * @param  string  $name
+     * @param  bool  $nullable
      */
     public function __construct(
         public string $name,
@@ -56,7 +52,7 @@ final class Morphs
     /**
      * The type-discriminator column name this declaration emits.
      *
-     * @return string `{name}_type`.
+     * @return string
      */
     public function typeColumn(): string
     {
@@ -66,7 +62,7 @@ final class Morphs
     /**
      * The key column name this declaration emits.
      *
-     * @return string `{name}_id`.
+     * @return string
      */
     public function keyColumn(): string
     {

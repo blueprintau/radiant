@@ -6,30 +6,18 @@ namespace BlueprintAU\Radiant\Attributes;
 
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
-use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
  * Declares a model property as a database column.
  *
- * One attribute drives BOTH halves of the column's life: the model's PHP
+ * One attribute drives both halves of the column's life: the model's PHP
  * behaviour (the cast between the typed property value and a bindable value,
  * {@see Column::decode()} / {@see Column::encode()}) and the DB schema
- * (the type, constraints, and FK actions the DDL is compiled from).
- *
- * The cast is **owned by the field type** — the PHP property type (captured
- * by the {@see MetadataFactory} from the `ReflectionProperty` and carried on
- * the {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}) drives
- * `decode()`/`encode()`, with the column type used to disambiguate (`int` on
- * an `int` column is identity; `int` on a `timestamp` column is a Unix
- * timestamp cast). Incompatible combos fail fast at metadata build via
- * {@see Column::assertTypeCompatible()}, never silently mis-cast.
- *
- * The two-layer cast pipeline: `decode()`/`encode()` convert between the
- * **typed property value** and a **bindable value** (scalars +
- * `\DateTimeInterface` + JSON strings) — DB-agnostic field semantics. The
- * connection's `ValueCodecInterface` then converts bindable value ↔ driver
- * bytes — dialect semantics. The cast never sees the dialect; the codec
- * never sees the field type.
+ * (the type, constraints, and FK actions the DDL is compiled from). The
+ * cast is owned by the field type — the PHP property type drives
+ * `decode()`/`encode()`, with the column type used to disambiguate.
+ * Incompatible combos fail fast at metadata build via
+ * {@see Column::assertTypeCompatible()}.
  */
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 final class Column
@@ -37,27 +25,18 @@ final class Column
     /**
      * Create a column declaration.
      *
-     * @param ColumnType $type The logical column type — mapped to the
-     *        dialect's native type by the schema grammar.
-     * @param string|null $name The DB column name; defaults to the property
-     *        name when null.
-     * @param bool $primaryKey Whether this column is (part of) the primary key.
-     * @param bool $autoIncrement Whether the column auto-increments.
-     * @param bool $nullable Whether the column allows null.
-     * @param bool $unique Whether the column has a unique constraint.
-     * @param bool $index Whether the column has a plain index.
-     * @param int|null $length The column length (required for
-     *        {@see ColumnType::String}).
-     * @param mixed $default The column default.
-     * @param string|null $foreign A foreign-key reference: `table.column`,
-     *        a bare `table` (references its `id`), or a model class-string
-     *        (resolved to its table + primary key through the
-     *        {@see \BlueprintAU\Radiant\Attributes\ReferenceResolver} — the
-     *        same convention as {@see ForeignKey}).
-     * @param ForeignKeyAction|string|null $onDelete The FK ON DELETE action —
-     *        validated via {@see ForeignKeyAction::fromChecked()} at the DDL
-     *        boundary, so no raw string reaches compiled DDL.
-     * @param ForeignKeyAction|string|null $onUpdate The FK ON UPDATE action.
+     * @param  ColumnType  $type
+     * @param  string|null  $name
+     * @param  bool  $primaryKey
+     * @param  bool  $autoIncrement
+     * @param  bool  $nullable
+     * @param  bool  $unique
+     * @param  bool  $index
+     * @param  int|null  $length
+     * @param  mixed  $default
+     * @param  string|null  $foreign
+     * @param  ForeignKeyAction|string|null  $onDelete
+     * @param  ForeignKeyAction|string|null  $onUpdate
      */
     final public function __construct(
         public ColumnType $type,
@@ -82,16 +61,11 @@ final class Column
      * Assert the column type can store the field type — and that the
      * column carries everything the field needs.
      *
-     * The compatibility matrix (field type × column type). Anything not
-     * listed is incompatible: an `array` on an `int` column would decode
-     * garbage; an untyped property has no cast contract at all.
-     *
-     * @param string|null $propertyType The PHP property type name (null =
-     *        untyped — always rejected for a column).
-     * @param class-string<\BlueprintAU\Radiant\Model> $class The model class (for the message).
-     * @param string $property The property name (for the message).
+     * @param  string|null  $propertyType
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $class
+     * @param  string  $property
      * @return void
-     * @throws \InvalidArgumentException When the combination cannot round-trip.
+     * @throws \InvalidArgumentException
      */
     public function assertTypeCompatible(?string $propertyType, string $class, string $property): void
     {
@@ -132,30 +106,16 @@ final class Column
      * Assert the PHP property default does not silently shadow the column
      * default.
      *
-     * The write path (see `Model::getColumnValues()`) skips uninitialized
-     * typed properties, so the DB `DEFAULT` applies — that is the intended
-     * use. But a property WITH a PHP default is always initialized after
-     * `new`, so its value is encoded and INSERTed explicitly and the column
-     * default is never reached. When the two differ, the schema and the
-     * model's inserts disagree silently: model writes use the PHP value,
-     * raw SQL and other clients use the declared DB default. That
-     * divergence violates the fail-fast contract, so it is an error at
-     * metadata build.
+     * A property with a PHP default is always initialized after `new`, so
+     * its value is INSERTed explicitly and the column default is never
+     * reached — when the two differ, the schema and the model's inserts
+     * disagree silently. Comparison is strict (`===`); a `null` attribute
+     * default means "no declared default" and never conflicts.
      *
-     * Strict (`===`) comparison — `int 5` vs `'5'`, and `null` vs a
-     * non-null default, are divergences too (an explicit `null` inserts
-     * NULL, overriding the declared default). A default of `null` on the
-     * ATTRIBUTE means "no declared default" and never conflicts; an
-     * Expression default can never strictly equal a PHP scalar, so that
-     * combination throws as well — a PHP-side default always shadows an
-     * expression default on the write path, so one of the two should go.
-     *
-     * @param \ReflectionProperty $property The reflected column property
-     *        (its default value is read when declared).
-     * @param class-string<\BlueprintAU\Radiant\Model> $class The model class (for the message).
+     * @param  \ReflectionProperty  $property
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $class
      * @return void
-     * @throws \InvalidArgumentException When the property declares a
-     *         PHP default that differs from the declared column default.
+     * @throws \InvalidArgumentException
      */
     public function assertDefaultConsistent(\ReflectionProperty $property, string $class): void
     {
@@ -193,12 +153,6 @@ final class Column
     /**
      * The field-type → compatible-column-types matrix.
      *
-     * A single source of truth consumed by {@see Column::assertTypeCompatible()}.
-     * A property typed as ANY `\DateTimeInterface` implementation (a custom
-     * subclass of Carbon, for example) is checked via `is_a()` at build time,
-     * so only the four concrete names appear here — everything else
-     * DateTimeInterface-shaped resolves to the same two column types.
-     *
      * @return array<string, list<ColumnType>>
      */
     private static function typeCompatibility(): array
@@ -224,16 +178,11 @@ final class Column
      * Bindable value → typed property value (read path; DB-agnostic).
      *
      * Driven by the PHP property type; the column type disambiguates and
-     * validates. Null passes through — a null column is always a null
-     * property. Any `\DateTimeInterface`-typed property (Carbon, DateTime,
-     * DateTimeImmutable, or a custom subclass) parses through Carbon —
-     * the model layer re-bases to the property's concrete class when the
-     * two differ.
+     * validates. Null passes through.
      *
-     * @param mixed $value The bindable value from the driver.
-     * @param string|null $propertyType The PHP property type name driving
-     *        the cast (from the owning {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}).
-     * @return mixed The typed property value.
+     * @param  mixed  $value
+     * @param  string|null  $propertyType
+     * @return mixed
      */
     public function decode(mixed $value, ?string $propertyType = null): mixed
     {
@@ -278,15 +227,9 @@ final class Column
     /**
      * Decode a JSON column cell — strict, with the failure named.
      *
-     * `json_decode` without JSON_THROW_ON_ERROR turns a corrupt or
-     * truncated cell into `null` (a bare TypeError at hydration, no
-     * diagnostic) and — worse — turns the LITERAL string `'null'` into a
-     * silent null that nulls a nullable property. Both fail fast here with
-     * the column and raw value named.
-     *
-     * @param mixed $value The raw cell (expected string).
-     * @return mixed The decoded value.
-     * @throws \RuntimeException When the cell is not valid JSON.
+     * @param  mixed  $value
+     * @return mixed
+     * @throws \RuntimeException
      */
     private function decodeJson(mixed $value): mixed
     {
@@ -299,14 +242,11 @@ final class Column
      * Typed property value → bindable value (write path; DB-agnostic).
      *
      * `\DateTimeInterface` passes through untouched — the connection's
-     * codec formats it at bind time (dialect precision + timezone). Arrays
-     * are encoded to JSON strings (they are not directly bindable). Scalars
-     * pass through — the typed property already holds the right scalar.
+     * codec formats it at bind time.
      *
-     * @param mixed $value The typed property value.
-     * @param string|null $propertyType The PHP property type name driving
-     *        the cast (from the owning {@see \BlueprintAU\Radiant\Metadata\PropertyMapping}).
-     * @return mixed The bindable value.
+     * @param  mixed  $value
+     * @param  string|null  $propertyType
+     * @return mixed
      */
     public function encode(mixed $value, ?string $propertyType = null): mixed
     {
@@ -327,20 +267,9 @@ final class Column
     /**
      * Encode a JSON column value — idempotent on already-encoded input.
      *
-     * Double-encoding guard: a value that is already a JSON STRING is
-     * passed through unchanged. Without this, `update(['meta' => $model
-     * ->meta])` on a hydrated model would re-encode the decoded array's
-     * JSON string into a quoted JSON string — a write that silently
-     * corrupted the cell. The identity only holds for strings: `'"x"'`
-     * (a JSON string cell) is a legal pass-through, so the guard is an
-     * accepted, documented trade — one direction a round-trip cannot
-     * distinguish, and the same policy every broad cast layer pays.
-     *
-     * @param mixed $value The typed array value, or an already-encoded
-     *        JSON string when a write passes decoded state back through.
-     * @return string The JSON text to bind.
-     * @throws \JsonException When the value cannot be encoded (fails fast
-     *         with PHP's own diagnostic — no silent `false` to miss).
+     * @param  mixed  $value
+     * @return string
+     * @throws \JsonException
      */
     private function encodeJson(mixed $value): string
     {

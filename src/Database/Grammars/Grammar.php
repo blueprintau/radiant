@@ -22,29 +22,13 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * Compiles query-builder state into SQL for a specific dialect.
  *
  * The base Grammar is dialect-agnostic: it owns the decomposition of a query
- * into its smallest SQL fragments (identifiers, placeholders, clauses) and
- * the composition of those fragments back up into the four statement roots —
- * {@see compileSelect()}, {@see compileInsert()}, {@see compileUpdate()}, and
- * {@see compileDelete()}. Subclasses provide the dialect specifics: identifier
- * quoting via {@see wrap()}, `RETURNING` support via {@see usesReturning()},
- * and the limit/offset/lock rendering that differs per dialect.
- *
- * **Only the four roots are public.** Every leaf and compound method is
- * protected — the Grammar's public surface is exactly the statements a
- * connection can run.
- *
- * **Bindings contract.** The Grammar emits `?` placeholders (and inline
- * literals for `Expression`/`ToSqlValue` values) but never owns the values:
- * the builder stores them per category, and the connection flattens only the
- * categories the compiled root used. Clauses are compiled in the same
- * canonical category order, so the compiled `?` order always matches the
- * flattened binding list.
- *
- * **Fail-fast dialect gating.** A feature the active dialect cannot express
- * throws {@see UnsupportedFeatureException} — never silently ignored. The
- * base Grammar throws for dialect-gated features (e.g. row locks); dialects
- * override only what they support, and dialects that don't support a feature
- * inherit the throw.
+ * into its smallest SQL fragments and the composition of those fragments back
+ * up into the four statement roots — {@see compileSelect()}, {@see compileInsert()},
+ * {@see compileUpdate()}, and {@see compileDelete()}. Subclasses provide the
+ * dialect specifics: identifier quoting via {@see wrap()}, `RETURNING` support
+ * via {@see usesReturning()}, and the limit/offset/lock rendering that differs
+ * per dialect. Only the four roots are public; a feature the active dialect
+ * cannot express throws {@see UnsupportedFeatureException}.
  *
  * @phpstan-import-type WhereClause from \BlueprintAU\Radiant\Database\Query\QueryBuilder
  */
@@ -57,8 +41,8 @@ abstract class Grammar
     /**
      * Wrap an identifier in the dialect's quote character.
      *
-     * @param string $value The identifier to quote.
-     * @return string The quoted identifier.
+     * @param  string  $value
+     * @return string
      */
     abstract protected function wrap(string $value): string;
 
@@ -67,13 +51,11 @@ abstract class Grammar
     /**
      * Wrap a possibly-qualified identifier, quoting each `.`-separated segment.
      *
-     * `schema.table.column` becomes `"schema"."table"."column"` (or the
-     * dialect's equivalent). A `*` segment (bare or qualified, e.g.
-     * `schema.*`) passes through unquoted. An `Expression` is passed through
-     * untouched.
+     * A `*` segment (bare or qualified) passes through unquoted; an
+     * {@see Expression} is passed through untouched.
      *
-     * @param string|Expression $value The identifier to wrap.
-     * @return string The wrapped identifier.
+     * @param  string|Expression  $value
+     * @return string
      */
     protected function wrapSegments(string|Expression $value): string
     {
@@ -89,10 +71,8 @@ abstract class Grammar
     /**
      * Wrap a table reference, respecting an `as` alias.
      *
-     * `users as u` becomes `"users" as "u"`.
-     *
-     * @param string|Expression $table The table reference.
-     * @return string The wrapped table reference.
+     * @param  string|Expression  $table
+     * @return string
      */
     protected function wrapTable(string|Expression $table): string
     {
@@ -108,13 +88,11 @@ abstract class Grammar
     /**
      * Wrap a column reference, respecting an `as` alias.
      *
-     * An {@see Aggregate} renders from its structured parts — function as a
-     * bare identifier, inner column wrapped segment-wise (`*`, `distinct x`,
-     * or a single identifier path), and the result key as the alias. A
-     * plain column is wrapped; an {@see Expression} is passed through.
+     * An {@see Aggregate} renders from its structured parts; an {@see Expression}
+     * is passed through.
      *
-     * @param string|Expression|Aggregate $column The column reference.
-     * @return string The wrapped column reference.
+     * @param  string|Expression|Aggregate  $column
+     * @return string
      */
     protected function wrapColumn(string|Expression|Aggregate $column): string
     {
@@ -142,20 +120,14 @@ abstract class Grammar
     /**
      * Wrap the inner content of an aggregate expression.
      *
-     * `distinct user_id` becomes `distinct "user_id"`; a plain column is
-     * wrapped; an {@see Expression} is spliced VERBATIM — raw SQL by
-     * contract, the caller owns its safety (the same trust model as a raw
-     * select). The accepted string shapes are STRICT — `*`, `distinct x`,
-     * or a single identifier path (optionally `.*`). Anything else
-     * (nested expressions like `coalesce(x, 0)`) FAILS CLOSED with
-     * {@see UnsupportedFeatureException} instead of passing through
-     * un-wrapped: complex arguments belong in an Expression, where the
-     * splice is explicit and greppable.
+     * The accepted string shapes are strict — `*`, `distinct x`, or a single
+     * identifier path (optionally `.*`). Anything else fails closed with
+     * {@see UnsupportedFeatureException}; complex arguments belong in an
+     * Expression.
      *
-     * @param string|Expression $inner The aggregate's inner content.
-     * @return string The wrapped inner content.
-     * @throws UnsupportedFeatureException When a string inner content is not a
-     *         strict single-identifier shape.
+     * @param  string|Expression  $inner
+     * @return string
+     * @throws UnsupportedFeatureException
      */
     protected function wrapAggregateInner(string|Expression $inner): string
     {
@@ -185,8 +157,8 @@ abstract class Grammar
     /**
      * Wrap a list of columns into a comma-separated list.
      *
-     * @param list<string|Expression|Aggregate> $columns The columns to wrap.
-     * @return string The comma-separated wrapped columns.
+     * @param  list<string|Expression|Aggregate>  $columns
+     * @return string
      */
     protected function columnize(array $columns): string
     {
@@ -198,13 +170,11 @@ abstract class Grammar
     /**
      * Render a bindable value as a `?` placeholder, or inline a raw literal.
      *
-     * Scalars, null, and `\DateTimeInterface` become `?` placeholders (the
-     * value stays in the builder's bindings). An `Expression` is spliced in
-     * verbatim; a `ToSqlValue` is extracted to its scalar and quoted as a
-     * literal — neither ever reaches the bind guard.
+     * An `Expression` is spliced in verbatim; a `ToSqlValue` is extracted to
+     * its scalar and quoted as a literal.
      *
-     * @param mixed $value The value to render.
-     * @return string The placeholder or inline literal.
+     * @param  mixed  $value
+     * @return string
      */
     protected function parameter(mixed $value): string
     {
@@ -220,8 +190,8 @@ abstract class Grammar
     /**
      * Render a list of values as comma-separated placeholders/literals.
      *
-     * @param array<int, mixed> $values The values to render.
-     * @return string The comma-separated parameters.
+     * @param  array<int, mixed>  $values
+     * @return string
      */
     protected function parameterize(array $values): string
     {
@@ -233,13 +203,10 @@ abstract class Grammar
     /**
      * Compile a select statement.
      *
-     * Compiling is a PURE snapshot: the builder passed in is never
-     * modified. Sub-builder bindings are captured EAGERLY at
-     * union()/fromSub() call time (value semantics — the sub-builder is
-     * final when captured), so no compile pass ever writes to a builder.
+     * Compiling is a pure snapshot: the builder passed in is never modified.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The compiled SQL.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     final public function compileSelect(QueryBuilder $builder): string
     {
@@ -267,11 +234,10 @@ abstract class Grammar
     /**
      * Compile an insert statement.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @param array<string, mixed>|list<array<string, mixed>> $values A single
-     *        row or a list of rows.
-     * @param string|null $pk The PK column to return, when known.
-     * @return string The compiled SQL.
+     * @param  QueryBuilder  $builder
+     * @param  array<string, mixed>|list<array<string, mixed>>  $values
+     * @param  string|null  $pk
+     * @return string
      */
     final public function compileInsert(QueryBuilder $builder, array $values, ?string $pk = null): string
     {
@@ -304,16 +270,11 @@ abstract class Grammar
      * Compile the empty-row insert — the statement body for a row with no
      * columns.
      *
-     * The SQL-standard form is `INSERT INTO t DEFAULT VALUES` (SQLite,
-     * Postgres); a dialect without it overrides with the form IT accepts
-     * (MySQL's one-row `VALUES ()`). This is the compile-function shape of
-     * the old `supportsDefaultValues()` boolean: the dialect does not
-     * ANSWER whether it supports the form — it RENDERS the form it
-     * supports.
+     * The SQL-standard form is `INSERT INTO t DEFAULT VALUES`; a dialect
+     * without it overrides with the form it accepts.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The insert statement body (no RETURNING — the caller
-     *         appends it).
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileEmptyInsert(QueryBuilder $builder): string
     {
@@ -323,12 +284,7 @@ abstract class Grammar
     /**
      * Whether the dialect compiles `INSERT ... RETURNING`.
      *
-     * PROTECTED on purpose — the connection never probes capabilities; it
-     * calls {@see compileInsertForId()} and gets the compiled statement
-     * with a `returnsKey` flag. This predicate exists only for the compile
-     * path to consult.
-     *
-     * @return bool True when the dialect supports RETURNING.
+     * @return bool
      */
     protected function usesReturning(): bool
     {
@@ -339,9 +295,9 @@ abstract class Grammar
      * Append the `RETURNING` clause to a compiled statement when the
      * dialect supports it and a PK was declared.
      *
-     * @param string $sql The compiled statement body.
-     * @param string|null $pk The PK column to return, when known.
-     * @return string The statement, possibly with RETURNING appended.
+     * @param  string  $sql
+     * @param  string|null  $pk
+     * @return string
      */
     protected function withReturning(string $sql, ?string $pk): string
     {
@@ -353,24 +309,15 @@ abstract class Grammar
     }
 
     /**
-     * Compile an insert whose generated key the caller needs back — the
-     * compile-shaped replacement for the old public `usesReturning()`
-     * probe.
+     * Compile an insert whose generated key the caller needs back.
      *
-     * The connection calls THIS instead of asking the grammar whether
-     * RETURNING exists: the result carries the compiled SQL plus whether
-     * THAT statement yields the key (a `RETURNING` dialect compiles the
-     * clause in; MySQL compiles without it and the connection falls back
-     * to `lastInsertId()`). Support is expressed AS a compile result, not
-     * a capability boolean — and the grammar stays a pure compiler: it
-     * never executes what it compiles.
+     * The result carries the compiled SQL plus whether that statement yields
+     * the key (fetch the row) or not (read `lastInsertId()` after execution).
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @param array<string, mixed> $values The row to insert.
-     * @param string $pk The PK column whose generated value the caller needs.
-     * @return array{sql: string, returnsKey: bool} The compiled statement
-     *         and whether executing it yields the generated key (fetch the
-     *         row) or not (read `lastInsertId()` after execution).
+     * @param  QueryBuilder  $builder
+     * @param  array<string, mixed>  $values
+     * @param  string  $pk
+     * @return array{sql: string, returnsKey: bool}
      */
     final public function compileInsertForId(QueryBuilder $builder, array $values, string $pk): array
     {
@@ -385,9 +332,9 @@ abstract class Grammar
     /**
      * Compile an update statement.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @param array<string, mixed> $values The columns to change and their new values.
-     * @return string The compiled SQL.
+     * @param  QueryBuilder  $builder
+     * @param  array<string, mixed>  $values
+     * @return string
      */
     final public function compileUpdate(QueryBuilder $builder, array $values): string
     {
@@ -408,8 +355,8 @@ abstract class Grammar
     /**
      * Compile a delete statement.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The compiled SQL.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     final public function compileDelete(QueryBuilder $builder): string
     {
@@ -426,8 +373,8 @@ abstract class Grammar
     /**
      * Compile the select column list.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The column list.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileColumns(QueryBuilder $builder): string
     {
@@ -441,15 +388,8 @@ abstract class Grammar
     /**
      * Compile the from clause — a table or a subquery.
      *
-     * The sub-builder's bindings were captured EAGERLY at fromSub() call
-     * time onto the From category (value semantics — the sub-builder is
-     * final when captured), so this pass only compiles SQL. The
-     * sub-builder's `?` placeholders appear in this SQL, and the captured
-     * From bindings ride the outer builder's flattened list in exactly
-     * that order.
-     *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The from clause.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileFrom(QueryBuilder $builder): string
     {
@@ -465,8 +405,8 @@ abstract class Grammar
     /**
      * Compile the join clauses.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The joins, or an empty string when there are none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileJoins(QueryBuilder $builder): string
     {
@@ -487,8 +427,8 @@ abstract class Grammar
     /**
      * Compile a join's on conditions.
      *
-     * @param list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}> $wheres The join's on clauses.
-     * @return string The on conditions, or an empty string when there are none.
+     * @param  list<array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean}>  $wheres
+     * @return string
      */
     protected function compileJoinWheres(array $wheres): string
     {
@@ -503,8 +443,8 @@ abstract class Grammar
     /**
      * Compile the where clauses.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The where clause, or an empty string when there are none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileWheres(QueryBuilder $builder): string
     {
@@ -518,8 +458,8 @@ abstract class Grammar
     /**
      * Compile a list of where clauses into a boolean-connected group.
      *
-     * @param list<WhereClause> $wheres The clauses to compile.
-     * @return string The compiled group.
+     * @param  list<WhereClause>  $wheres
+     * @return string
      */
     protected function compileWhereGroup(array $wheres): string
     {
@@ -534,8 +474,8 @@ abstract class Grammar
     /**
      * Compile a single where clause.
      *
-     * @param WhereClause $where The clause to compile.
-     * @return string The compiled clause.
+     * @param  WhereClause  $where
+     * @return string
      */
     protected function compileWhere(array $where): string
     {
@@ -552,8 +492,8 @@ abstract class Grammar
     /**
      * Compile a basic comparison where clause.
      *
-     * @param array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean} $where The clause to compile.
-     * @return string The compiled clause.
+     * @param  array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean}  $where
+     * @return string
      */
     protected function compileBasicWhere(array $where): string
     {
@@ -575,8 +515,8 @@ abstract class Grammar
     /**
      * Compile a between where clause.
      *
-     * @param array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean} $where The clause to compile.
-     * @return string The compiled clause.
+     * @param  array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean}  $where
+     * @return string
      */
     protected function compileBetweenWhere(array $where): string
     {
@@ -588,8 +528,8 @@ abstract class Grammar
     /**
      * Compile a null where clause.
      *
-     * @param array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean} $where The clause to compile.
-     * @return string The compiled clause.
+     * @param  array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean}  $where
+     * @return string
      */
     protected function compileNullWhere(array $where): string
     {
@@ -601,8 +541,8 @@ abstract class Grammar
     /**
      * Compile the group-by clause.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The group-by clause, or an empty string when there are none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileGroups(QueryBuilder $builder): string
     {
@@ -616,8 +556,8 @@ abstract class Grammar
     /**
      * Compile the having clauses.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The having clause, or an empty string when there are none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileHavings(QueryBuilder $builder): string
     {
@@ -637,8 +577,8 @@ abstract class Grammar
     /**
      * Compile the order-by clauses.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The order-by clause, or an empty string when there are none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileOrders(QueryBuilder $builder): string
     {
@@ -657,8 +597,8 @@ abstract class Grammar
     /**
      * Compile the limit clause.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The limit clause, or an empty string when there is none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileLimit(QueryBuilder $builder): string
     {
@@ -668,8 +608,8 @@ abstract class Grammar
     /**
      * Compile the offset clause.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The offset clause, or an empty string when there is none.
+     * @param  QueryBuilder  $builder
+     * @return string
      */
     protected function compileOffset(QueryBuilder $builder): string
     {
@@ -683,9 +623,9 @@ abstract class Grammar
      * so a dialect that does not override this throws rather than silently
      * dropping the lock.
      *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The lock clause.
-     * @throws UnsupportedFeatureException When the dialect does not support row locks.
+     * @param  QueryBuilder  $builder
+     * @return string
+     * @throws UnsupportedFeatureException
      */
     protected function compileLock(QueryBuilder $builder): string
     {
@@ -698,16 +638,9 @@ abstract class Grammar
     /**
      * Compile the unions, appending them to the compiled select.
      *
-     * The union sub-builders' bindings were captured EAGERLY at union()
-     * call time onto the Union category, in union order (value semantics —
-     * the sub-builder is final when captured), so this pass only compiles
-     * SQL. Each union's `?` placeholders appear in this SQL, and the
-     * captured Union bindings ride the outer builder's flattened list in
-     * exactly that order.
-     *
-     * @param QueryBuilder $builder The query to compile.
-     * @param string $sql The already-compiled select.
-     * @return string The select with any unions appended.
+     * @param  QueryBuilder  $builder
+     * @param  string  $sql
+     * @return string
      */
     protected function compileUnions(QueryBuilder $builder, string $sql): string
     {
@@ -723,11 +656,9 @@ abstract class Grammar
     /**
      * Wrap the from table for a statement root that requires a plain table.
      *
-     * Insert/update/delete target a real table — a subquery from is
-     * unsupported and fails fast.
-     *
-     * @param QueryBuilder $builder The query to compile.
-     * @return string The wrapped table.
+     * @param  QueryBuilder  $builder
+     * @return string
+     * @throws UnsupportedFeatureException
      */
     protected function wrapFromTable(QueryBuilder $builder): string
     {

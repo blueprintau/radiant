@@ -27,16 +27,9 @@ final class ReferenceResolver
     /**
      * Resolve a reference to its table name.
      *
-     * The reference is a {@see ForeignKeyReference}: a model class-string
-     * (`class-string<Model>`) or a plain table name — the union collapses
-     * to `string` for the native signature, the alias documents the intent.
-     *
-     * @param ForeignKeyReference $reference The reference — a table name or
-     *        a model class-string.
-     * @return string The referenced table name.
-     * @throws \InvalidArgumentException When a model class-string does not
-     *         exist, or resolves to no table (a column-less model cannot be
-     *         FK-referenced).
+     * @param  ForeignKeyReference  $reference
+     * @return string
+     * @throws \InvalidArgumentException
      */
     public static function resolve(string $reference): string
     {

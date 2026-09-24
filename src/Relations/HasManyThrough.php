@@ -9,7 +9,6 @@ use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
  * A two-hop relation: the parent links to the related model THROUGH an
@@ -51,15 +50,13 @@ class HasManyThrough extends Relation
     /**
      * Create a through relation.
      *
-     * @param Model $parent The model owning the relation.
-     * @param class-string<TRelated> $related The related model class.
-     * @param class-string<Model> $through The intermediate model class.
-     * @param string|list<string> $firstKey FK on the intermediate table → parent.
-     * @param string|list<string> $secondKey FK on the related table → intermediate.
-     * @param string|list<string> $localKey The parent-side key column (or list).
-     * @throws \InvalidArgumentException When the key shapes do not line up
-     *         (scalar/composite mixes are rejected by the base ctor; the
-     *         two FK sides must also agree with EACH OTHER).
+     * @param  Model  $parent
+     * @param  class-string<TRelated>  $related
+     * @param  class-string<Model>  $through
+     * @param  string|list<string>  $firstKey
+     * @param  string|list<string>  $secondKey
+     * @param  string|list<string>  $localKey
+     * @throws \InvalidArgumentException
      */
     public function __construct(
         Model $parent,
@@ -104,10 +101,6 @@ class HasManyThrough extends Relation
     /**
      * Constrain the query: join the intermediate table, filter by the
      * parent's key.
-     *
-     * A composite key joins AND filters on the full tuple: the join gets
-     * one ON pair per key column, the parent filter one where per column
-     * (null components are IS NULL).
      *
      * @return void
      */
@@ -178,12 +171,11 @@ class HasManyThrough extends Relation
     }
 
     /**
-     * Qualify a column to its table — `table.column` (the Grammar wraps
-     * the segments; no raw splicing here).
+     * Qualify a column to its table — `table.column`.
      *
-     * @param string $table The owning table.
-     * @param string $column The column name.
-     * @return string The qualified spec.
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
      */
     final protected static function qualify(string $table, string $column): string
     {
@@ -194,14 +186,9 @@ class HasManyThrough extends Relation
      * The intermediate table's PK column(s) that the related table's FK
      * points at.
      *
-     * A composite intermediate PK names ALL its columns — the join pairs
-     * the related table's FK columns against them in declared order.
-     *
-     * @param list<string> $secondKeys The related-side FK columns (arity
-     *        check against the intermediate PK).
-     * @return list<string> The PK column names.
-     * @throws \InvalidArgumentException When the intermediate has no
-     *         primary key, an unnamed key, or the FK arity mismatches.
+     * @param  list<string>  $secondKeys
+     * @return list<string>
+     * @throws \InvalidArgumentException
      */
     protected function intermediateKeys(array $secondKeys): array
     {
@@ -230,10 +217,9 @@ class HasManyThrough extends Relation
     }
 
     /**
-     * The related→through FK columns as a plain list — scalar wrapped,
-     * composite passed through.
+     * The related→through FK columns as a plain list.
      *
-     * @return list<string> The column list.
+     * @return list<string>
      */
     private function secondKeyList(): array
     {
@@ -243,8 +229,8 @@ class HasManyThrough extends Relation
     /**
      * The composite form of the related→through FK columns ($secondKey).
      *
-     * @return list<string> The column list.
-     * @throws \LogicException When the key is scalar.
+     * @return list<string>
+     * @throws \LogicException
      */
     final public function getSecondKeys(): array
     {
@@ -258,7 +244,7 @@ class HasManyThrough extends Relation
     /**
      * Run the constrained query.
      *
-     * @return Collection<TRelated> The related models.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -270,23 +256,8 @@ class HasManyThrough extends Relation
      * Run the eager query: join the intermediate table for ALL parents at
      * once, selecting the parent key alongside the related columns.
      *
-     * A composite first key widens the parent filter to an OR of AND-groups
-     * (one nested group per parent tuple — portable, unlike tuple IN).
-     *
-     * The join's select is declared as plain `table.column` specs plus the
-     * standard `as` alias form — the Grammar's {@see Grammar::wrapColumn()}
-     * owns quoting and the `AS` rendering; nothing raw is spliced here.
-     *
-     * The per-row parent keys are returned IN the EagerResult rather than
-     * recorded on the relation: a relation object is cached and shared
-     * (ModelQueryBuilder::$relationCache), so instance state here would let
-     * two interleaved eager loads of the same through-relation — concurrent
-     * under Swoole/Fiber — read each other's keys and distribute children
-     * to the wrong parents.
-     *
-     * @param list<KeyValue> $parentKeys The parents' local-key values —
-     *        scalars, or column => value maps for a composite key.
-     * @return EagerResult<TRelated> The models plus the per-row parent keys.
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     public function eagerLoad(array $parentKeys): EagerResult
@@ -311,13 +282,10 @@ class HasManyThrough extends Relation
     }
 
     /**
-     * Run one eager-load query for a CHUNK of parent keys — the join +
-     * synthetic-parent-key select for one bounded key list.
+     * Run one eager-load query for a CHUNK of parent keys.
      *
-     * @param list<KeyValue> $parentKeys The chunk's key values.
-     * @return EagerResult<TRelated> The models plus the per-row parent keys, positionally
-     *         paired (index i of parentKeys is the key of the parent that
-     *         models[i] belongs to).
+     * @param  list<KeyValue>  $parentKeys
+     * @return EagerResult<TRelated>
      */
     #[\Override]
     protected function eagerLoadChunk(array $parentKeys): EagerResult
@@ -426,16 +394,8 @@ class HasManyThrough extends Relation
     /**
      * The synthetic alias carrying the parent key through the join.
      *
-     * Namespaced PER RELATED CLASS (`radiant_through_parent_{$table}`): a
-     * fixed alias collided with any real column of the same name — the
-     * driver's row bag would hold two values for that key, the real
-     * column would typically win, and children would be distributed to
-     * the wrong parent. The related table's own name is part of the
-     * alias, so a through-relation over two different related tables
-     * never aliases the same synthetic name either.
-     *
-     * @param class-string<Model> $related The related model class.
-     * @return string The synthetic alias.
+     * @param  class-string<Model>  $related
+     * @return string
      */
     private static function throughParentAlias(string $related): string
     {
@@ -444,18 +404,12 @@ class HasManyThrough extends Relation
 
     /**
      * Distribute eager results onto parents, grouped by the parent key
-     * carried on the {@see EagerResult} (recorded per-call — the relation
-     * object is cached and shared, so per-call state never lands here).
+     * carried on the {@see EagerResult}.
      *
-     * A composite first key groups by the full tuple, serialized to a
-     * stable string key.
-     *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        The per-row parent keys from eagerLoad(), positionally paired
-     *        with the results.
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void
      */
     public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void

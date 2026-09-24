@@ -33,25 +33,13 @@ final class ForeignKey
     /**
      * Create a foreign-key declaration.
      *
-     * @param list<string> $columns Local column names, validated at build time.
-     * @param ForeignKeyReference $references The referenced table — a table
-     *        name string, or a model class-string (resolved to its table
-     *        name through the metadata at build time).
-     * @param list<string>|null $referencesColumns The referenced columns —
-     *        null defaults to the referenced MODEL's full primary-key list
-     *        (a table-name reference must declare them explicitly); when
-     *        given, must have matching arity with `$columns` (fail-fast in
-     *        the factory).
-     * @param ForeignKeyAction|string|null $onDelete The ON DELETE action —
-     *        validated via {@see ForeignKeyAction::fromChecked()} at the DDL
-     *        boundary.
-     * @param ForeignKeyAction|string|null $onUpdate The ON UPDATE action.
-     * @param bool $deferrable Whether the constraint is DEFERRABLE
-     *        (Postgres only — MySQL and SQLite fail fast at compile time).
-     *        Required for circular-FK seeding within one transaction.
-     * @param bool $initiallyDeferred Whether the constraint starts
-     *        INITIALLY DEFERRED (implies `$deferrable`; fails fast when
-     *        set without it).
+     * @param  list<string>  $columns
+     * @param  ForeignKeyReference  $references
+     * @param  list<string>|null  $referencesColumns
+     * @param  ForeignKeyAction|string|null  $onDelete
+     * @param  ForeignKeyAction|string|null  $onUpdate
+     * @param  bool  $deferrable
+     * @param  bool  $initiallyDeferred  Implies `$deferrable`.
      */
     public function __construct(
         public array $columns,
@@ -67,14 +55,8 @@ final class ForeignKey
     /**
      * The resolved referenced table name.
      *
-     * A plain table name passes through; a model class-string resolves via
-     * the shared {@see ReferenceResolver} — the same rule the schema
-     * layer's single-column `foreign:` flag uses.
-     *
-     * @return string The referenced table name.
-     * @throws \InvalidArgumentException When a model class-string does not
-     *         exist, or resolves to no table (a column-less model cannot be
-     *         FK-referenced).
+     * @return string
+     * @throws \InvalidArgumentException
      */
     public function resolvedReferences(): string
     {
@@ -84,15 +66,8 @@ final class ForeignKey
     /**
      * The resolved referenced columns.
      *
-     * Explicit `referencesColumns` pass through; a null list resolves from
-     * the referenced MODEL's full primary-key column list (single or
-     * composite) — the caller-declared `$columns` must then have matching
-     * arity (checked by the factory's arity guard). A table-name reference
-     * with no `referencesColumns` falls back to the `id` convention.
-     *
-     * @return list<string> The referenced column names.
-     * @throws \InvalidArgumentException When a model class-string does not
-     *         exist or resolves to no table.
+     * @return list<string>
+     * @throws \InvalidArgumentException
      */
     public function resolvedReferencesColumns(): array
     {

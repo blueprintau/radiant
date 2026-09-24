@@ -29,7 +29,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * The default query grammar for this connection.
      *
-     * @return Grammar The SQLite grammar.
+     * @return Grammar
      */
     protected function getDefaultQueryGrammar(): Grammar
     {
@@ -39,7 +39,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * The default schema grammar for this connection.
      *
-     * @return SchemaGrammar The SQLite schema grammar.
+     * @return SchemaGrammar
      */
     protected function getDefaultSchemaGrammar(): SchemaGrammar
     {
@@ -47,9 +47,9 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
-     * The dialect's live-schema reader ({@see SchemaInspector}).
+     * The dialect's live-schema reader.
      *
-     * @return SqliteSchemaInspector The live-schema inspector.
+     * @return SqliteSchemaInspector
      */
     protected function getDefaultSchemaInspector(): SchemaInspector
     {
@@ -59,14 +59,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * Modify columns on SQLite — routed through the table rebuild.
      *
-     * SQLite has NO in-place `ALTER COLUMN` form; the data-preserving
-     * answer is the rebuild sequence (create temp → copy → drop old →
-     * rename → indexes → integrity gate). The base
-     * {@see SqlConnection::modifyColumn()} would reach the grammar's
-     * fail-fast throw; this override never lets it get there.
-     *
-     * @param Blueprint $blueprint The table-bound blueprint carrying the
-     *        desired (modified) column shapes.
+     * @param  Blueprint  $blueprint
      */
     #[Override]
     public function modifyColumn(Blueprint $blueprint): void
@@ -78,12 +71,8 @@ final class SqliteConnection extends SqlConnection
      * Add a foreign-key constraint on SQLite — routed through the table
      * rebuild.
      *
-     * SQLite has no in-place constraint ALTER; the rebuild's temp CREATE
-     * already renders the full desired FK set, so the rebuild IS the
-     * add.
-     *
-     * @param string $table The table to attach the constraint to.
-     * @param Blueprint $blueprint The blueprint carrying the FK shape.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     #[Override]
     public function addForeignKey(string $table, Blueprint $blueprint): void
@@ -95,13 +84,8 @@ final class SqliteConnection extends SqlConnection
      * Drop a foreign-key constraint on SQLite — routed through the table
      * rebuild.
      *
-     * The rebuild's temp CREATE renders the DESIRED FK set; the differ
-     * builds the change's blueprint with the dropped constraint removed
-     * from the declared set, so the rebuild IS the drop.
-     *
-     * @param string $table The table the constraint is on.
-     * @param Blueprint $blueprint The blueprint carrying the desired
-     *        (post-drop) FK set.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     #[Override]
     public function dropForeignKey(string $table, Blueprint $blueprint): void
@@ -110,11 +94,10 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
-     * Add a CHECK constraint on SQLite — routed through the table
-     * rebuild (same mechanism as FK adds).
+     * Add a CHECK constraint on SQLite — routed through the table rebuild.
      *
-     * @param string $table The table to attach the constraint to.
-     * @param Blueprint $blueprint The blueprint carrying the CHECK shape.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     #[Override]
     public function addCheck(string $table, Blueprint $blueprint): void
@@ -123,12 +106,10 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
-     * Drop a CHECK constraint on SQLite — routed through the table
-     * rebuild (same mechanism as FK drops).
+     * Drop a CHECK constraint on SQLite — routed through the table rebuild.
      *
-     * @param string $table The table the constraint is on.
-     * @param Blueprint $blueprint The blueprint carrying the desired
-     *        (post-drop) CHECK set.
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
      */
     #[Override]
     public function dropCheck(string $table, Blueprint $blueprint): void
@@ -140,32 +121,13 @@ final class SqliteConnection extends SqlConnection
      * Rebuild a table — the data-preserving answer to every change SQLite
      * cannot make in place (content drift, FK/CHECK changes).
      *
-     * ORCHESTRATION, not compilation: the grammar compiles the statement
-     * sequence ({@see SqliteSchemaGrammar::compileRebuildTable()}); THIS
-     * method owns the execution strategy the compiled list cannot express
-     * — the transaction straddle (SQLite's transactional DDL makes the
-     * whole rebuild atomic, unlike Laravel's non-transactional rebuild),
-     * the `foreign_key_check` verification gate before commit, and the
-     * PRAGMA read-and-restore.
-     *
-     * The PRAGMA toggle is CONDITIONAL: it runs only when the table
-     * participates in at least one FK relationship (as parent or child —
-     * checked via the inspector) AND the connection currently has
-     * enforcement ON. A standalone-table rebuild never touches global
-     * connection state. The prior value is restored exactly — never
-     * assumed.
-     *
      * Sequence: PRAGMA off (conditional) → BEGIN → create temp (full
      * desired schema) → copy live rows → drop old → rename temp →
-     * re-create indexes from the ORIGINAL blueprint (after the rename, so
-     * derived names carry the final table name) → `foreign_key_check`
-     * must be empty (else ROLLBACK + throw) → COMMIT → PRAGMA restore.
+     * re-create indexes → `foreign_key_check` must be empty (else
+     * ROLLBACK + throw) → COMMIT → PRAGMA restore.
      *
-     * @param Blueprint $desired The desired-state blueprint (bound to the
-     *        final table name).
-     * @throws \Throwable When any statement fails or the integrity check
-     *         finds violations — the transaction rolls back, the table is
-     *         untouched.
+     * @param  Blueprint  $desired
+     * @throws \Throwable
      */
     private function rebuildTable(Blueprint $desired): void
     {
@@ -297,7 +259,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * Whether this dialect supports savepoints for nested transactions.
      *
-     * @return bool True — SQLite supports `SAVEPOINT` natively.
+     * @return bool
      */
     protected function supportsSavepoints(): bool
     {
@@ -306,9 +268,9 @@ final class SqliteConnection extends SqlConnection
 
     /**
      * SQLite DDL is transactional — schema statements roll back with the
-     * transaction (the rebuild relies on this for its atomicity).
+     * transaction.
      *
-     * @return bool True.
+     * @return bool
      */
     #[Override]
     public function supportsTransactionalDdl(): bool
@@ -319,7 +281,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * Create a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function createSavepoint(string $name): void
     {
@@ -329,7 +291,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * Release a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function releaseSavepoint(string $name): void
     {
@@ -339,7 +301,7 @@ final class SqliteConnection extends SqlConnection
     /**
      * Roll back to a named savepoint.
      *
-     * @param string $name The savepoint name.
+     * @param  string  $name
      */
     protected function rollbackToSavepoint(string $name): void
     {
@@ -348,16 +310,14 @@ final class SqliteConnection extends SqlConnection
 
     /**
      * Run the callback inside a `BEGIN IMMEDIATE` write transaction —
-     * SQLite's native cross-process serialization. The name is accepted
-     * for signature parity and ignored: a database-wide write transaction
-     * has nothing to name.
+     * SQLite's native cross-process serialization.
      *
      * @template TReturn
      *
-     * @param callable(): TReturn $callback The work to run under lock.
-     * @param string $name The lock domain (ignored on SQLite).
-     * @return TReturn The callback's return value.
-     * @throws \Throwable Whatever the callback throws, after rolling back.
+     * @param  callable(): TReturn  $callback
+     * @param  string  $name  The lock domain (ignored on SQLite).
+     * @return TReturn
+     * @throws \Throwable
      */
     #[Override]
     public function withLock(callable $callback, string $name): mixed

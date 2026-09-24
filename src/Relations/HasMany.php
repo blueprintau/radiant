@@ -23,9 +23,6 @@ class HasMany extends Relation
     /**
      * Constrain the related query to the parent's key.
      *
-     * A composite key applies the full tuple: every FK column equals the
-     * parent's corresponding local value (null components are IS NULL).
-     *
      * @return void
      */
     protected function addConstraints(): void
@@ -60,7 +57,7 @@ class HasMany extends Relation
     /**
      * Run the constrained query.
      *
-     * @return Collection<TRelated> Every related model matching the parent's key.
+     * @return Collection<TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -72,16 +69,12 @@ class HasMany extends Relation
      * Distribute eager results onto parents, keyed by the FK value.
      *
      * Parents with no matching children get an empty collection — the
-     * relation is loaded either way. A composite key groups by the full
-     * FK tuple (serialized to a stable string key).
+     * relation is loaded either way.
      *
-     * @param list<Model> $parents The parents to populate.
-     * @param Collection<TRelated> $results The related models.
-     * @param string $name The relation name (the cache key).
-     * @param list<int|string|null|list<int|string|null>>|null $eagerParentKeys
-     *        Unused here — the FK lives on each related model, so the key is
-     *        re-derived from the model itself (accepted for signature parity
-     *        with the through relations, which need it).
+     * @param  list<Model>  $parents
+     * @param  Collection<TRelated>  $results
+     * @param  string  $name
+     * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
      */
     public function match(array $parents, Collection $results, string $name, ?array $eagerParentKeys = null): void

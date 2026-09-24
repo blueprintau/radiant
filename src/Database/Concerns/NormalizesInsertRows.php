@@ -17,13 +17,8 @@ trait NormalizesInsertRows
     /**
      * Normalize a single row or a list of rows into a list of rows.
      *
-     * A single associative row (`['name' => 'Alice']`) becomes a one-element
-     * list; a list of rows (`[['name' => 'Alice'], ['name' => 'Bob']]`) is
-     * returned unchanged.
-     *
-     * @param array<string,mixed>|list<array<string,mixed>> $values A single
-     *        row or a list of rows.
-     * @return list<array<string,mixed>> The rows, always as a list.
+     * @param  array<string,mixed>|list<array<string,mixed>>  $values
+     * @return list<array<string,mixed>>
      */
     protected function normalizeInsertRows(array $values): array
     {

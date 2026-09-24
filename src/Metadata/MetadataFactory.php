@@ -20,26 +20,11 @@ use BlueprintAU\Radiant\Attributes\Unique;
  * inheritance chains).
  *
  * The static cache is justified: class metadata is immutable, so it is
- * built at most once per class per process and never invalidated.
- *
- * Three guarantees the cache and {@see MetadataFactory::build()} together
- * provide:
- *
- * 1. Per-class isolation: a class's metadata is derived only from its own
- *    reflection plus its ANCESTORS', never its descendants. A child
- *    redeclaring a column cannot leak into the parent's metadata —
- *    `ReflectionClass($parent)` structurally cannot see subclasses — and
- *    the child's own declaration wins in its own metadata (single-slot
- *    properties; see build()).
- * 2. Build-once, order-independent: whichever class of a chain is touched
- *    first builds exactly ITSELF and caches it; later calls for any other
- *    class build at most once each and repeat calls are pure cache hits.
- *    No call ever invalidates another.
- * 3. The engine does the chain merge: build() reflects only the leaf —
- *    `getProperties()` returns the fully merged ancestor view. No explicit
- *    chain build exists; the ONLY cross-class work is rule 1's
- *    {@see MetadataFactory::nearestAncestorTable()} lookup, and only for
- *    behavior-only subclasses, lazily, through this cache.
+ * built at most once per class per process and never invalidated. A
+ * class's metadata is derived only from its own reflection plus its
+ * ancestors', never its descendants; whichever class of a chain is touched
+ * first builds exactly itself, and the engine does the chain merge inside
+ * {@see MetadataFactory::build()}.
  */
 final class MetadataFactory
 {
@@ -53,14 +38,8 @@ final class MetadataFactory
     /**
      * The single entry point: a class's (cached) metadata.
      *
-     * There is deliberately no public chain API — table resolution,
-     * query building, DDL emission, and tables() all consume `for()` alone.
-     * Ancestor columns merge inside {@see MetadataFactory::build()}; a
-     * public chain surface can return when a real consumer exists — the
-     * deferred STI/JOINED inheritance strategies.
-     *
-     * @param class-string<Model> $class The model class.
-     * @return ClassMetadata The class's metadata.
+     * @param  class-string<Model>  $class
+     * @return ClassMetadata
      */
     public static function for(string $class): ClassMetadata
     {
@@ -70,17 +49,7 @@ final class MetadataFactory
     /**
      * Invalidate cached metadata.
      *
-     * The lifecycle hook for processes that regenerate classes at runtime —
-     * dev servers with hot reload, codegen tools, test suites that redefine
-     * classes. Without eviction, the cache serves the OLD metadata forever:
-     * renamed columns, added #[Column]s, and changed table names stay
-     * invisible until process restart (and stale instances pin the old
-     * class definitions in memory).
-     *
-     * @param string|null $class The class to evict; null clears the whole
-     *        cache. Clearing one class does not clear its ancestors/descendants
-     *        (their metadata is independently built and cached) — clear(null)
-     *        is the safe choice when a family changes.
+     * @param  string|null  $class  Null clears the whole cache.
      * @return void
      */
     public static function clear(?string $class = null): void
@@ -97,16 +66,8 @@ final class MetadataFactory
      * The canonical table inventory: every table-owning model class mapped
      * to its resolved table name.
      *
-     * The single authoritative source for "where tables are created" — the host
-     * migrator consumes it to build its schema, and an inventory test
-     * asserts the full model→table map so an accidental table creation
-     * shows up in CI immediately. Computed FROM the metadata rather than
-     * duplicated onto the classes. The root convention (rule 5) is the ONLY
-     * silent naming rule; every non-conventional table is traceable to an
-     * explicit `#[Table(name: ...)]` declaration visible right here.
-     *
-     * @param list<class-string<Model>> $models The model classes to inventory.
-     * @return array<class-string<Model>, string> class => resolved table name
+     * @param  list<class-string<Model>>  $models
+     * @return array<class-string<Model>, string>
      */
     public static function tables(array $models): array
     {
@@ -130,21 +91,12 @@ final class MetadataFactory
      *
      * ONE pass over the leaf's `getProperties()` — which returns inherited
      * properties too, each carrying its true declaring class. Leaf-wins is
-     * structural, not incidental: a redeclared property surfaces EXACTLY
-     * ONCE here, as the leaf's property with the leaf's attributes (PHP
-     * properties are single-slot — a child redeclaration REPLACES the
-     * parent's declaration). So no ordering assumptions, no `isset()`
-     * guards, no subclass-of comparisons, no displaced primary keys.
+     * structural: a redeclared property surfaces exactly once here, as the
+     * leaf's property with the leaf's attributes.
      *
-     * @param class-string<Model> $class The model class (see
-     *         for()).
-     * @return ClassMetadata The freshly built metadata.
-     * @throws \InvalidArgumentException On any metadata error: union or
-     *         intersection column types, invalid soft-delete declarations,
-     *         inheritance rule violations (rules 2/3), empty `#[Table]`
-     *         names, unknown constraint columns, FK arity mismatches,
-     *         duplicate constraint declarations, or string columns without
-     *         a length.
+     * @param  class-string<Model>  $class
+     * @return ClassMetadata
+     * @throws \InvalidArgumentException
      */
     private static function build(string $class): ClassMetadata
     {
@@ -209,16 +161,10 @@ final class MetadataFactory
     /**
      * Collect the merged column mappings for a class.
      *
-     * One reflection pass over the leaf's properties (inherited included).
-     * Every mapping records its owning class via `getDeclaringClass()` —
-     * the ownership record table resolution and the deferred JOINED
-     * strategy both derive from.
-     *
-     * @param \ReflectionClass<Model> $reflection The leaf class.
-     * @param class-string<Model> $class The leaf class name.
-     * @return PropertyMapping[] Merged mappings keyed by property name.
-     * @throws \InvalidArgumentException When a column property has a union
-     *         or intersection type, or a string column lacks a length.
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @return PropertyMapping[]
+     * @throws \InvalidArgumentException
      */
     private static function collectProperties(\ReflectionClass $reflection, string $class): array
     {
@@ -309,20 +255,15 @@ final class MetadataFactory
     /**
      * Auto-declare the soft-delete column when the class uses SoftDeletes.
      *
-     * Uses `$class::deletedAtColumn()` — so a renamed column gets the right
-     * metadata; no unused phantom column. A user declaration wins; a
-     * non-datetime declared type is a fail-fast error. The synthetic
-     * mapping is visible by default, so users can read
-     * the deleted time.
+     * A user-declared `#[Column]` of the same name wins; a non-null
+     * `deletedAtColumn()` override must match a declared column, and a
+     * non-datetime declared type is a fail-fast error.
      *
-     * @param \ReflectionClass<Model> $reflection The leaf class.
-     * @param class-string<Model> $class The leaf class name.
-     * @param PropertyMapping[] $properties The merged mappings (mutated in
-     *        place when the synthetic column is injected).
-     * @return string|null The soft-delete column name, or null when the
-     *         class does not use SoftDeletes.
-     * @throws \InvalidArgumentException When the class declares the
-     *         soft-delete column with a non-datetime type.
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
+     * @return string|null
+     * @throws \InvalidArgumentException
      */
     private static function applySoftDeletes(\ReflectionClass $reflection, string $class, array &$properties): ?string
     {
@@ -339,9 +280,14 @@ final class MetadataFactory
             );
         }
 
-        /** @var callable(): string $resolver */
+        /** @var callable(): (string|null) $resolver */
         $resolver = [$class, 'deletedAtColumn'];
-        $columnName = $resolver();
+        // Resolve ONCE — the raw value distinguishes "default" (null) from
+        // "override" (non-null) and the resolved name is derived from it;
+        // calling the resolver again would re-invoke user code and could
+        // disagree with the name used for the lookup.
+        $override = $resolver();
+        $columnName = $override ?? 'deleted_at';
 
         $declared = null;
 
@@ -353,6 +299,17 @@ final class MetadataFactory
         }
 
         if ($declared === null) {
+            if ($override !== null) {
+                // An override is an explicit claim that the column is
+                // declared — a renamed column with no matching #[Column]
+                // would otherwise be silently injected as a phantom.
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] overrides deletedAtColumn() to [{$columnName}] "
+                    . "but declares no #[Column] with that name — declare it "
+                    . "(datetime, nullable) or return null for the default."
+                );
+            }
+
             // No PHP property exists for a synthetic column, so the cast
             // pipeline has no property type to drive from — pin it to the
             // column type so consumers see a consistent datetime column.
@@ -382,28 +339,16 @@ final class MetadataFactory
      * Inject the synthetic morph columns declared by class-level
      * `#[Morphs]` attributes.
      *
-     * Each attribute emits TWO synthetic mappings — `{name}_type` (string)
-     * and `{name}_id` (bigint) — the same synthetic-mapping mechanism the
-     * soft-delete column uses (no PHP property backs them; values live on
-     * the model's runtime attribute store). A user-declared `#[Column]`
-     * with the same name WINS (the attribute never shadows a real
-     * declaration — the same precedence `applySoftDeletes()` applies), but
-     * a declared column whose type cannot hold the morph value fails fast:
-     * a non-string `{name}_type` or non-bigint/int `{name}_id` would
-     * round-trip garbage through the relations.
+     * Each attribute emits two synthetic mappings — `{name}_type` (string)
+     * and `{name}_id` (bigint). A user-declared `#[Column]` with the same
+     * name wins, but a declared column whose type cannot hold the morph
+     * value fails fast.
      *
-     * Duplicate morph names across attributes are a build error — two
-     * `#[Morphs(name: 'commentable')]` on one class would emit the same
-     * column pair twice.
-     *
-     * @param \ReflectionClass<Model> $reflection The leaf class.
-     * @param class-string<Model> $class The leaf class name.
-     * @param PropertyMapping[] $properties The merged mappings (mutated in
-     *        place when synthetic columns are injected).
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
      * @return void
-     * @throws \InvalidArgumentException On a duplicate morph name, an
-     *         empty morph name, or a declared column with an incompatible
-     *         type.
+     * @throws \InvalidArgumentException
      */
     private static function applyMorphs(\ReflectionClass $reflection, string $class, array &$properties): void
     {
@@ -443,21 +388,15 @@ final class MetadataFactory
     /**
      * Inject (or validate) ONE morph column on the class.
      *
-     * @param class-string<Model> $class The leaf class name.
-     * @param PropertyMapping[] $properties The merged mappings (mutated in
-     *        place when the synthetic column is injected).
-     * @param string $columnName The column to inject (`{name}_type` or
-     *        `{name}_id`).
-     * @param ColumnType $type The required column type.
-     * @param int|null $length The required string length (string columns
-     *        only).
-     * @param string $typeLabel The human-readable type for error messages.
-     * @param bool $nullable Whether the synthetic column allows null (the
-     *        `#[Morphs]` attribute's flag — must match what `morphs()`
-     *        emits so both paths compile identical DDL).
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
+     * @param  string  $columnName
+     * @param  ColumnType  $type
+     * @param  int|null  $length
+     * @param  string  $typeLabel
+     * @param  bool  $nullable
      * @return void
-     * @throws \InvalidArgumentException When a declared column of that
-     *         name has an incompatible type or length.
+     * @throws \InvalidArgumentException
      */
     private static function injectMorphColumn(
         string $class,
@@ -522,46 +461,19 @@ final class MetadataFactory
     /**
      * Resolve the table name for a class (rules 1–5).
      *
-     * The rules, validated HERE at metadata build:
+     * Rule 4 — a class with no columns anywhere in its chain, and abstract
+     * classes, own no table. Rule 2 — a concrete subclass of a table-owning
+     * ancestor that adds columns but declares no `#[Table]` is a build
+     * error. Rule 3 — a concrete subclass declaring its own `#[Table]` is a
+     * multi-table-inheritance child. Rule 1 — a behavior-only subclass
+     * inherits its ancestor's table. Rule 5 — otherwise the snake-cased
+     * plural of the short class name.
      *
-     * - Rule 4 — a class with NO columns anywhere in its chain owns NO
-     *   table (nothing to store, nothing to sync — a computed phantom
-     *   table would pollute the tables() inventory and shadow the
-     *   conventional name the first column-bearing descendant should
-     *   compute for itself). Abstract intermediates own no table too —
-     *   they are never instantiated; their columns merge into the first
-     *   concrete descendant's table.
-     * - Rule 2 — a concrete subclass of a TABLE-OWNING ancestor that adds
-     *   columns of its own but declares NO `#[Table]` is a build error:
-     *   the columns have nowhere to go (sharing the ancestor's table with
-     *   new columns is STI, which needs a discriminator). The error names
-     *   the exits: declare `#[Table]` for multi-table inheritance, model
-     *   the link with composition, or make the subclass behavior-only.
-     * - Rule 3 (MTI) — a concrete subclass of a table-owning ancestor that
-     *   declares its own `#[Table]` is a multi-table-inheritance child:
-     *   the child table holds the child's own columns, the ancestor's
-     *   table keeps the inherited ones, and the tables link through the
-     *   shared primary key ({@see MetadataFactory::deriveMtiChildKey()}
-     *   derives the key; the schema layer emits the FK). The returned
-     *   parent model drives the joined read path and the split write path.
-     *   A behavior-only subclass (no own columns) declaring `#[Table]`
-     *   stays a build error — a second table with nothing in it is a
-     *   mis-modeling, not an inheritance strategy.
-     * - Rule 1 — a behavior-only subclass of a table-owning ancestor
-     *   (inherits columns, adds none, declares no `#[Table]`) is provably
-     *   interchangeable with its ancestor and simply inherits its table.
-     * - Rule 5 — otherwise the snake-cased PLURAL of the short class name.
-     *   This root convention is the ONLY silent naming rule.
-     *
-     * @param \ReflectionClass<Model> $reflection The leaf class.
-     * @param class-string<Model> $class The leaf class name.
-     * @param PropertyMapping[] $properties The merged mappings.
-     * @return array{string|null, class-string<Model>|null} The resolved
-     *         table name (null for a column-less class or an abstract
-     *         class, rule 4) paired with the MTI parent model (null for
-     *         every non-MTI class).
-     * @throws \InvalidArgumentException On a rule 2 violation, an MTI
-     *         mis-declaration, or an empty `#[Table]` name.
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
+     * @return array{string|null, class-string<Model>|null}
+     * @throws \InvalidArgumentException
      */
     private static function resolveTableName(
         \ReflectionClass $reflection,
@@ -682,31 +594,14 @@ final class MetadataFactory
     }
 
     /**
-     * Collect and validate the composite constraints from the class hierarchy.
+     * Collect and validate the composite constraints from the class
+     * hierarchy, most-derived first.
      *
-     * The chain, most-derived first — constraints are inherited the same
-     * way columns are (an abstract base's `#[Unique]` constrains the
-     * descendant's table). All validation is fail-fast at build:
-     *
-     * - every referenced column name must exist in `$properties` — a
-     *   renamed property fails loudly here, not as a broken constraint in
-     *   the database;
-     * - `#[ForeignKey]`'s columns/referencesColumns must have matching
-     *   arity (mirroring `Blueprint::foreignKey()`);
-     * - the duplicate-declaration rule: a `#[Column]` single-column flag
-     *   (unique/index/foreign) and a class-level attribute covering the
-     *   SAME single column fail fast — the two mechanisms can never
-     *   silently double-declare.
-     *
-     * @param \ReflectionClass<Model> $reflection The leaf class.
-     * @param class-string<Model> $class The leaf class name.
-     * @param PropertyMapping[] $properties The merged mappings.
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
      * @return array{list<Unique>, list<Index>, list<ForeignKey>, list<Check>}
-     *         The uniques, indexes, foreign keys, and checks, most-derived
-     *         first.
-     * @throws \InvalidArgumentException On unknown columns, arity
-     *         mismatches, duplicate declarations, or empty CHECK
-     *         expressions.
+     * @throws \InvalidArgumentException
      */
     private static function collectConstraints(
         \ReflectionClass $reflection,
@@ -801,11 +696,11 @@ final class MetadataFactory
     /**
      * Assert every constraint column name resolves to a declared column.
      *
-     * @param list<string> $columns The constraint's column names.
-     * @param PropertyMapping[] $properties The merged mappings.
-     * @param class-string<Model> $class The leaf class name (for the message).
-     * @param string $constraintKind The constraint kind (for the message).
-     * @throws \InvalidArgumentException When a column name is unknown.
+     * @param  list<string>  $columns
+     * @param  PropertyMapping[]  $properties
+     * @param  class-string<Model>  $class
+     * @param  string  $constraintKind
+     * @throws \InvalidArgumentException
      */
     private static function validateConstraintColumns(
         array $columns,
@@ -833,24 +728,15 @@ final class MetadataFactory
     /**
      * Assert a single-column attribute does not duplicate a `#[Column]` flag.
      *
-     * A flag (`unique:`/`index:`/`foreign:`) and a class-level attribute
-     * covering the same single column is a duplicate declaration — fail
-     * fast rather than silently double-declaring the constraint.
+     * The check walks the ancestor chain too: a redeclared column hides the
+     * ancestor's mapping in `$properties`, but the ancestor's flag still
+     * declares the constraint at its level.
      *
-     * The check walks the ANCESTOR chain: a child that redeclares a parent's
-     * column replaces the parent's slot in the merged mappings — including
-     * the parent's flag — so a child `#[Unique]` on the same column would
-     * never be cross-checked against the parent's `unique: true` flag if
-     * only the merged map were consulted. Both declarations are real
-     * (the parent's column carries the flag; the child carries the
-     * attribute), and the DDL would emit the constraint twice or in two
-     * shapes.
-     *
-     * @param list<string> $columns The attribute's column names.
-     * @param PropertyMapping[] $properties The merged mappings.
-     * @param class-string<Model> $class The leaf class name (for the message).
-     * @param string $flag The flag name (`unique`, `index`, `foreign`).
-     * @throws \InvalidArgumentException On a duplicate declaration.
+     * @param  list<string>  $columns
+     * @param  PropertyMapping[]  $properties
+     * @param  class-string<Model>  $class
+     * @param  string  $flag
+     * @throws \InvalidArgumentException
      */
     private static function validateNoFlagDuplicates(
         array $columns,
@@ -910,12 +796,8 @@ final class MetadataFactory
     /**
      * Whether a class (or any of its ancestors) uses the SoftDeletes trait.
      *
-     * The trait can live at any level of the hierarchy, so the walk covers
-     * the parent chain and every trait's own `use` list — the recursive
-     * form of `class_uses()`.
-     *
-     * @param class-string<Model> $class The class to check (the walk reaches non-model ancestors).
-     * @return bool True when SoftDeletes is used anywhere up the chain.
+     * @param  class-string<Model>  $class
+     * @return bool
      */
     private static function usesSoftDeletes(string $class): bool
     {
@@ -939,8 +821,8 @@ final class MetadataFactory
     /**
      * Whether a trait (directly or via another trait) uses SoftDeletes.
      *
-     * @param string $trait The trait to check.
-     * @return bool True when SoftDeletes is reachable from the trait.
+     * @param  string  $trait
+     * @return bool
      */
     private static function usesSoftDeletesTrait(string $trait): bool
     {
@@ -960,16 +842,10 @@ final class MetadataFactory
     }
 
     /**
-     * Walk up the parent chain for the nearest resolved table name (rule 1)
-     * — lazily, only when a behavior-only subclass actually needs it.
+     * Walk up the parent chain for the nearest resolved table name (rule 1).
      *
-     * No reflection here: ancestors resolve through `for()`'s cache, so
-     * each ancestor's metadata is built at most once app-wide. Abstract
-     * intermediates resolve to null (rule 4) and are stepped over.
-     *
-     * @param class-string<Model> $class The subclass whose ancestors to walk (ric — get_parent_class results are plain class-strings).
-     * @return string|null The nearest ancestor's table name, or null when
-     *         no ancestor owns a table.
+     * @param  class-string<Model>  $class
+     * @return string|null
      */
     private static function nearestAncestorTable(string $class): ?string
     {
@@ -995,15 +871,10 @@ final class MetadataFactory
 
     /**
      * The default table name for a class: snake-cased plural of its short
-     * name (`User` → `users`, `EmailVerificationToken` →
-     * `email_verification_tokens`).
+     * name (`User` → `users`).
      *
-     * Naive English pluralization only — irregulars (`Person` → `persons`,
-     * not `people`) are not special-cased; declare `#[Table(name: ...)]`
-     * for those.
-     *
-     * @param string $shortName The class's short name.
-     * @return string The default table name.
+     * @param  string  $shortName
+     * @return string
      */
     private static function defaultTableName(string $shortName): string
     {
@@ -1029,29 +900,17 @@ final class MetadataFactory
     /**
      * Derive an MTI child's primary-key mapping from its parent's.
      *
-     * The child declares NO key of its own — the shared PK IS the link
+     * The child declares no key of its own — the shared PK is the link
      * between the two tables. The parent's PK mapping is cloned per-class
-     * (the cached parent metadata is never mutated) with `autoIncrement`
-     * overridden to false: only the ROOT table generates the id; the child
-     * receives it via the write path. The parent's PK property type drives
-     * the child's hydration/encode — same id, same cast.
+     * with `autoIncrement` overridden to false: only the root table
+     * generates the id.
      *
-     * The child's own-columns pass must NOT redeclare the key — a second
-     * `id` on the child would mean two tables claiming the same column.
-     * The factory applies the parent's PK as a synthetic child-side
-     * mapping (owner = the child class, no property slot beyond the
-     * parent's — the property IS inherited by PHP, so the child hydrates
-     * it through the same ReflectionProperty).
-     *
-     * @param \ReflectionClass<Model> $reflection The child class.
-     * @param class-string<Model> $class The child class name.
-     * @param PropertyMapping[] $properties The child's merged mappings.
-     * @param class-string<Model> $parentModel The MTI parent model.
-     * @return PropertyMapping[] The merged mappings with the derived key
-     *         injected (when the child does not shadow it).
-     * @throws \InvalidArgumentException When the parent's key is not a
-     *         single-column key, or the child redeclares an inherited
-     *         column.
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
+     * @param  class-string<Model>  $parentModel
+     * @return PropertyMapping[]
+     * @throws \InvalidArgumentException
      */
     private static function deriveMtiChildKey(
         \ReflectionClass $reflection,
