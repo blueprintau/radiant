@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "22a7ac9e3c5a2f44e7e8903cfd2130f0",
+    "content-hash": "e0ef9528c81313a0b55b4f47b27f6109",
     "packages": [
         {
             "name": "blueprintau/collections",
