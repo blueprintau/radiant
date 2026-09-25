@@ -284,6 +284,9 @@ final class MetadataPipelineTest extends DatabaseTestCase
         // Same-value re-assignment: NOT dirty (the whole point of the
         // encoded-space comparison — no spurious UPDATE).
         $probe->password = 'new';
+        // phpstan 2.2.16's alreadyNarrowedType check wrongly treats a
+        // concrete shape vs array<string, mixed> as always-identical.
+        /** @phpstan-ignore staticMethod.alreadyNarrowedType (the shape-vs-generic-array comparison is the assertion's subject) */
         self::assertSame(['password' => 'new'], $probe->dirtyColumns());
     }
 

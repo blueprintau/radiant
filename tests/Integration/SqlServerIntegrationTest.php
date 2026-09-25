@@ -193,6 +193,10 @@ final class SqlServerIntegrationTest extends TestCase
             // swallowed — the write should have rolled back.
         }
 
+        // The count is the assertion's subject — phpstan 2.2.16's
+        // alreadyNarrowedType check misreads the literal-vs-count comparison
+        // as trivially true.
+        /** @phpstan-ignore staticMethod.alreadyNarrowedType (the row count is the assertion's subject, not a tautology) */
         self::assertSame(2, $this->connection->table('users')->count());
     }
 
