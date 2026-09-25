@@ -245,6 +245,46 @@ final class SoftDeletesTest extends DatabaseTestCase
     }
 
     /**
+     * THE FORCE-SELECT CONTRACT (regression lock): a narrow caller select
+     * still carries the soft-delete column, so a model hydrated from a
+     * trashed row reports trashed() honestly. (Pre-fix: the omitted column
+     * never hydrated, and trashed() read false for a deleted row.)
+     */
+    public function testNarrowSelectStillReportsTrashed(): void
+    {
+        $post = $this->seedPost();
+        $post->delete();
+
+        $loaded = SdPost::newQuery()->withTrashed()->select('title')->first();
+
+        self::assertNotNull($loaded);
+        self::assertTrue($loaded->trashed(), 'trashed() must survive a select that omits the delete column');
+    }
+
+    /**
+     * THE FORCE-SELECT GUARD (regression lock): save()'s soft-deleted
+     * guard still fires for a model loaded through a narrow select — the
+     * UPDATE would carry the auto-scope and match 0 rows while reporting
+     * success. (Pre-fix: the guard read a never-hydrated column and
+     * passed, silently dropping the write.)
+     */
+    public function testNarrowSelectSaveGuardStillThrows(): void
+    {
+        $post = $this->seedPost();
+        $post->delete();
+
+        $loaded = SdPost::newQuery()->withTrashed()->select('title')->first();
+        self::assertNotNull($loaded);
+
+        $loaded->title = 'Edited while trashed';
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('soft-deleted');
+
+        $loaded->save();
+    }
+
+    /**
      * A custom deletedAtColumn() renames the backing column — no phantom
      * deleted_at is created and the lifecycle works against renamed_at.
      */

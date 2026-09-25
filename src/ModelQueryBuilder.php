@@ -34,8 +34,10 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 final class ModelQueryBuilder extends QueryBuilder
 {
     /**
-     * The PK column names — always force-selected so hydration and
-     * `whereKey()` have the identity columns available.
+     * The columns always force-selected so hydration keeps the identity
+     * (PK) and trash-state (soft-delete) columns available — `whereKey()`
+     * needs the former, `trashed()` and save()'s soft-deleted guard the
+     * latter.
      *
      * @var list<string>
      */
@@ -137,6 +139,18 @@ final class ModelQueryBuilder extends QueryBuilder
             fn(Column $column) => $column->name ?? '',
             $metadata->primaryKeys,
         ), fn(string $name) => $name !== ''));
+
+        // The soft-delete column force-selects alongside the PKs: a narrow
+        // caller select that omits it hydrates models whose trash state is
+        // unknown — trashed() reads false and save()'s soft-deleted guard
+        // passes, letting an UPDATE under the auto-scope match 0 rows while
+        // reporting success.
+        if ($metadata->softDeleteColumn !== null
+            && !in_array($metadata->softDeleteColumn, $this->forcedKeys, true)
+        ) {
+            $this->forcedKeys[] = $metadata->softDeleteColumn;
+        }
+
         $this->modelColumns = array_map(
             fn($mapping) => $mapping->columnName,
             array_values($metadata->properties),
@@ -218,14 +232,14 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Runtime boundary for one eager-load path.
+     * Assert one eager-load path is a non-empty string.
      *
      * The `list<string>` element contract is PHPDoc-only — callers without
      * a static analyzer can pass anything — so the shape is checked here,
      * where the parameter is genuinely untyped and PHPStan cannot call the
      * check redundant.
      *
-     * @param  mixed  $path
+     * @param  mixed  $path  Must be a non-empty string naming a relation path.
      * @return string
      * @throws \InvalidArgumentException
      */
@@ -1180,8 +1194,6 @@ final class ModelQueryBuilder extends QueryBuilder
             );
         }
 
-        $single = $this->assertSingleKeyValue($id);
-
         if (count($primaryKeys) !== 1 || $primaryKeys[0]->name === null) {
             throw new \InvalidArgumentException(
                 "Model [{$this->modelClass}] has a composite PK; pass an array of column => value."
@@ -1197,11 +1209,11 @@ final class ModelQueryBuilder extends QueryBuilder
             return $this->where(
                 ($this->partitions[$pkName] ?? $this->table) . '.' . $pkName,
                 WhereOperator::Eq,
-                $single,
+                $id,
             );
         }
 
-        return $this->where($pkName, WhereOperator::Eq, $single);
+        return $this->where($pkName, WhereOperator::Eq, $id);
     }
 
     /**
@@ -1235,7 +1247,17 @@ final class ModelQueryBuilder extends QueryBuilder
             return $nested;
         }
 
-        $single = $this->assertSingleKeyValue($key);
+        // Runtime boundary: `$key` is a list ELEMENT — the KeyValue scalar
+        // contract is PHPDoc-only, so an untyped caller can pass anything.
+        // The native whereKey() union already TypeErrors at the public
+        // boundary; this guard covers the mixed path behind it.
+        if (!is_int($key) && !is_string($key) && $key !== null) {
+            throw new \InvalidArgumentException(
+                'A single primary-key value must be int, string or null; got ' . get_debug_type($key) . '.'
+            );
+        }
+
+        $single = $key;
 
         if (count($primaryKeys) !== 1 || $primaryKeys[0]->name === null) {
             throw new \InvalidArgumentException(
@@ -1253,10 +1275,10 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Runtime boundary for one composite-key entry.
+     * Validate one composite-key entry and its value.
      *
-     * @param  mixed  $column
-     * @param  mixed  $value
+     * @param  mixed  $column  Must be a non-empty string naming a declared PK column.
+     * @param  mixed  $value  Must be int, string or null.
      * @return array{column: string, value: int|string|null}
      * @throws \InvalidArgumentException
      */
@@ -1302,32 +1324,15 @@ final class ModelQueryBuilder extends QueryBuilder
         );
     }
 
-    /**
-     * Runtime boundary for a single-key value.
-     *
-     * @param  mixed  $id
-     * @return int|string|null
-     * @throws \InvalidArgumentException
-     */
-    private function assertSingleKeyValue(mixed $id): int|string|null
-    {
-        if (!is_int($id) && !is_string($id) && $id !== null) {
-            throw new \InvalidArgumentException(
-                'A single primary-key value must be int, string or null; got ' . get_debug_type($id) . '.'
-            );
-        }
-
-        return $id;
-    }
-
     // ---- Model-aware overrides ----
 
     /**
      * Select columns, mapping `*` to the model's own columns.
      *
-     * The PK columns are always present so hydration and `whereKey()`
-     * work. An {@see Expression} bypasses validation — raw SQL by
-     * contract.
+     * The PK columns and the soft-delete column (when the model uses
+     * {@see SoftDeletes}) are always present so hydration, `whereKey()`
+     * and the trash-state reads work. An {@see Expression} bypasses
+     * validation — raw SQL by contract.
      *
      * @param  string|Expression|Aggregate  ...$columns  Each column as its own argument, or none to reset to `*`.
      * @return static
