@@ -19,6 +19,8 @@ namespace BlueprintAU\Radiant\Database\Exceptions;
  * Composite keys render as the JSON encoding of the caller's column map
  * (order-preserving). Values pass through `json_encode` verbatim — keys
  * come from `whereKey()` validation, never from user SQL.
+ *
+ * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
  */
 final class ModelNotFoundException extends \RuntimeException
 {
@@ -33,15 +35,15 @@ final class ModelNotFoundException extends \RuntimeException
      * The key used for the lookup: null when no key was involved, a scalar
      * or a composite column map otherwise.
      *
-     * @var mixed
+     * @var KeyValue
      */
-    public readonly mixed $key;
+    public readonly int|string|null|array $key;
 
     /**
      * @param  class-string<\BlueprintAU\Radiant\Model>  $modelClass
-     * @param  mixed  $key  Null when no key was involved; a scalar or a column => value map otherwise.
+     * @param  KeyValue  $key  Null when no key was involved; a scalar or a column => value map otherwise.
      */
-    public function __construct(string $modelClass, mixed $key = null)
+    public function __construct(string $modelClass, int|string|null|array $key = null)
     {
         $this->model = $modelClass;
         $this->key = $key;
@@ -58,10 +60,10 @@ final class ModelNotFoundException extends \RuntimeException
     /**
      * Renders the lookup key for the exception message.
      *
-     * @param  mixed  $key
+     * @param  KeyValue  $key
      * @return string
      */
-    private static function renderKey(mixed $key): string
+    private static function renderKey(int|string|null|array $key): string
     {
         if (\is_array($key)) {
             return (string) json_encode($key);

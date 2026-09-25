@@ -774,7 +774,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
      * @return TModel|null
      */
-    public function find(mixed $id): ?Model
+    public function find(int|string|null|array $id): ?Model
     {
         return $this->whereKey($id)->first();
     }
@@ -799,7 +799,7 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * @throws ModelNotFoundException
      */
-    public function findOrFail(mixed $id): Model
+    public function findOrFail(int|string|null|array $id): Model
     {
         // whereKey() also runs on the clone — the added wheres never land
         // on the shared builder.
@@ -849,12 +849,12 @@ final class ModelQueryBuilder extends QueryBuilder
      * The shared fail-fast fetch behind {@see firstOrFail()} and
      * {@see findOrFail()}.
      *
-     * @param  mixed  $keyForMessage  The lookup key for the exception, or null.
+     * @param  KeyValue|null  $keyForMessage  The lookup key for the exception, or null.
      * @return TModel
      *
      * @throws ModelNotFoundException
      */
-    private function firstOrFailWithKey(mixed $keyForMessage): Model
+    private function firstOrFailWithKey(int|string|null|array $keyForMessage): Model
     {
         $model = $this->first();
 
@@ -1074,7 +1074,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @return static
      * @throws \InvalidArgumentException
      */
-    public function whereKey(mixed $id): static
+    public function whereKey(int|string|null|array $id): static
     {
         $primaryKeys = MetadataFactory::for($this->modelClass)->primaryKeys;
 

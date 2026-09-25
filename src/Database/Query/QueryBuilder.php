@@ -89,7 +89,7 @@ class QueryBuilder
      * an {@see Aggregate} (filtering on a computed value —
      * `HAVING count(*) > ?`).
      *
-     * @var list<array{type: WhereType::Basic, column: string|Expression|Aggregate, operator: WhereOperator, value: mixed}>
+     * @var list<array{type: WhereType::Basic, column: string|Expression|Aggregate, operator: WhereOperator, value: BindingValue}>
      */
     protected array $havings = [];
 
@@ -424,6 +424,10 @@ class QueryBuilder
     /**
      * Add a where clause to the query.
      *
+     * The value is polymorphic by design: a bindable scalar, a list (for
+     * IN/NOT IN/BETWEEN), or a composite column => value key map. The
+     * operator branches below validate each shape at declaration.
+     *
      * @param  string|Expression  $column
      * @param  WhereOperator|string  $operator
      * @param  mixed  $value
@@ -459,13 +463,22 @@ class QueryBuilder
             $clone = clone $this;
             $clone->wheres[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
             array_push($clone->bindings[BindingCategory::Where->value], ...array_filter(
-                array_values($value),
+                $value,
                 fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
             ));
             return $clone;
         }
 
         if ($operator === WhereOperator::Between || $operator === WhereOperator::NotBetween) {
+            // A scalar (or a list of the wrong arity) cannot compile to a
+            // BETWEEN — fail fast at declaration with the shape named.
+            if (!is_array($value) || count($value) !== 2) {
+                throw new \InvalidArgumentException(
+                    'whereBetween()/whereNotBetween() require a two-value [min, max] array; got '
+                        . get_debug_type($value) . '.'
+                );
+            }
+
             // Same homogeneity contract as the IN lists above — a mixed
             // scalar/Expression pair (e.g. [new Expression('NOW()'), $end])
             // desyncs placeholders from bindings identically.
@@ -473,7 +486,7 @@ class QueryBuilder
             $clone = clone $this;
             $clone->wheres[] = ['type' => WhereType::Between, 'column' => $column, 'operator' => $operator, 'value' => $value, 'boolean' => $boolean];
             array_push($clone->bindings[BindingCategory::Where->value], ...array_filter(
-                array_values($value),
+                $value,
                 fn ($item) => !$item instanceof Expression && !$item instanceof ToSqlValue,
             ));
             return $clone;
@@ -495,6 +508,19 @@ class QueryBuilder
             throw new \InvalidArgumentException(
                 "where('{$label}', '{$operator->value}', null) can never match — SQL comparisons against NULL"
                 . ' are UNKNOWN. Use whereNull(\'' . $label . '\') or whereNotNull(\'' . $label . '\') instead.'
+            );
+        }
+
+        // A list with a comparison operator is a declaration error — lists
+        // belong to whereIn()/whereNotIn() or whereBetween()/whereNotBetween(),
+        // which own the arity and homogeneity validation. Reaching here with
+        // a list would bind the array wholesale (the bind guard rejects it
+        // with a driver-level error instead of a declaration-level one).
+        if (is_array($value)) {
+            $label = is_string($column) ? $column : $column->value;
+            throw new \InvalidArgumentException(
+                "where('{$label}', '{$operator->value}', list) — list values belong to "
+                . 'whereIn()/whereNotIn() or whereBetween()/whereNotBetween().'
             );
         }
 

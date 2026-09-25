@@ -679,12 +679,15 @@ n     *
     /**
      * Serialize a key value to a stable string for array indexing.
      *
-     * @param  mixed  $key
+     * Scalars and column => value maps are the {@see KeyValue} shapes;
+     * through relations serialize POSITIONAL key tuples as well.
+     *
+     * @param  KeyValue|list<int|string|null>  $key
      * @return string
      *
      * @throws \JsonException
      */
-    final protected static function serializeKey(mixed $key): string
+    final protected static function serializeKey(int|string|null|array $key): string
     {
         if (!is_array($key)) {
             return (string) $key;

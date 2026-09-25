@@ -162,7 +162,7 @@ abstract class Model
      * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
      * @return static|null
      */
-    final public static function find(mixed $id): ?static
+    final public static function find(int|string|null|array $id): ?static
     {
         return static::newQuery()->find($id);
     }
@@ -174,7 +174,7 @@ abstract class Model
      * @return static
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
-    final public static function findOrFail(mixed $id): static
+    final public static function findOrFail(int|string|null|array $id): static
     {
         return static::newQuery()->findOrFail($id);
     }
@@ -849,7 +849,7 @@ abstract class Model
      *
      * @return KeyValue
      */
-    final public function getKeyForRefresh(): mixed
+    final public function getKeyForRefresh(): int|string|null|array
     {
         $pks = static::getPrimaryKeys();
 

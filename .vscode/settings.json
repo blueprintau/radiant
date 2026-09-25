@@ -19,6 +19,22 @@
             "P1009",
             "P1013",
             "P1133"
+        ],
+        "phpstan/Rules/DisallowNarrowUnionArgumentsRule.php": [
+            "P1009",
+            "P1013",
+            "P1133"
+        ],
+        "tests/Unit/PHPStan/Fixtures/NarrowUnionCallSite.php": [
+            "P1009",
+            "P1013",
+            "P1133",
+            "P1006"
+        ],
+        "tests/Unit/PHPStan/DisallowNarrowUnionArgumentsRuleTest.php": [
+            "P1009",
+            "P1013",
+            "P1133"
         ]
     }
 }

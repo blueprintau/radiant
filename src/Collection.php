@@ -31,7 +31,7 @@ final class Collection extends BaseCollection
      * @param  KeyValue  $key
      * @return Model|null
      */
-    public function find(mixed $key): ?Model
+    public function find(int|string|null|array $key): ?Model
     {
         /** @var Model|null */
         return $this->first(fn (Model $model) => self::keyMatches($model->getKeyForRefresh(), $key));
@@ -40,11 +40,11 @@ final class Collection extends BaseCollection
     /**
      * Compare two primary-key values for a {@see Collection::find()} match.
      *
-     * @param  mixed  $modelKey
-     * @param  mixed  $key
+     * @param  KeyValue  $modelKey
+     * @param  KeyValue  $key
      * @return bool
      */
-    private static function keyMatches(mixed $modelKey, mixed $key): bool
+    private static function keyMatches(int|string|null|array $modelKey, int|string|null|array $key): bool
     {
         if (is_array($modelKey)) {
             if (!is_array($key) || count($modelKey) !== count($key)) {
@@ -81,10 +81,10 @@ final class Collection extends BaseCollection
      * Normalize a scalar PK value for strict comparison — numeric strings
      * collapse to int, everything else passes through.
      *
-     * @param  mixed  $value
-     * @return mixed
+     * @param  int|string|null  $value
+     * @return int|string|null
      */
-    private static function normalizeKey(mixed $value): mixed
+    private static function normalizeKey(int|string|null $value): int|string|null
     {
         if (is_string($value) && preg_match('/^-?\d+$/', $value) === 1) {
             return (int) $value;
@@ -192,7 +192,7 @@ final class Collection extends BaseCollection
      * @return string
      * @throws \JsonException
      */
-    private static function serializeKeyValue(mixed $key): string
+    private static function serializeKeyValue(int|string|null|array $key): string
     {
         return is_array($key) ? json_encode($key, JSON_THROW_ON_ERROR) : (string) $key;
     }

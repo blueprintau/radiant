@@ -4,6 +4,13 @@ parameters:
         - src
         - tests
         - phpstan
+    # Rule-test fixtures contain deliberately invalid call sites — the
+    # RuleTestCase asserts the errors they produce, so the main run must
+    # not scan them.
+    excludePaths:
+        analyseAndScan:
+            - tests/Unit/PHPStan/Fixtures/NarrowUnionFixture.php
+            - tests/Unit/PHPStan/Fixtures/NarrowUnionCallSite.php
 
 services:
     -
@@ -12,6 +19,10 @@ services:
             - phpstan.rules.rule
     -
         class: BlueprintAU\Radiant\PHPStan\Rules\DisallowUnusedImportsRule
+        tags:
+            - phpstan.rules.rule
+    -
+        class: BlueprintAU\Radiant\PHPStan\Rules\DisallowNarrowUnionArgumentsRule
         tags:
             - phpstan.rules.rule
     -

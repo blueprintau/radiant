@@ -529,9 +529,13 @@ final class RelationsE2ETest extends DatabaseTestCase
     }
 
     /**
-     * whereKey() rejects key shapes outside the KeyValue contract — the
-     * PHPDoc type cannot be enforced natively, so the boundary validates.
-     * The keys arrive through mixed-typed helpers, simulating a caller
+     * whereKey() rejects key shapes outside the KeyValue contract. The
+     * scalar/array part of the contract is the NATIVE parameter type —
+     * a bool key fails with a TypeError at the boundary before any
+     * validation runs. The array-shape part (string column names, scalar
+     * map values) cannot be expressed natively, so the boundary
+     * validators still reject those with InvalidArgumentException. The
+     * keys arrive through mixed-typed helpers, simulating a caller
      * without a static analyzer.
      */
     public function testWhereKeyRejectsInvalidShapes(): void
@@ -540,9 +544,10 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         try {
             $this->whereKeyUntyped(true);
-            self::fail('Expected an InvalidArgumentException for a bool key.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('must be int, string or null; got bool', $e->getMessage());
+            self::fail('Expected a TypeError for a bool key.');
+        } catch (\TypeError $e) {
+            self::assertStringContainsString('whereKey(): Argument #1 ($id)', $e->getMessage());
+            self::assertStringContainsString('array|string|int|null', $e->getMessage());
         }
 
         try {
