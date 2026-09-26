@@ -33,6 +33,7 @@ final class Column
      * @param  bool  $unique
      * @param  bool  $index
      * @param  int|null  $length
+     * @param  int|null  $precision  Fractional-seconds digits (1–6) for datetime columns; null stores whole seconds.
      * @param  mixed  $default
      * @param  string|null  $foreign
      * @param  ForeignKeyAction|string|null  $onDelete
@@ -48,6 +49,7 @@ final class Column
         public bool $index = false,
         public mixed $default = null,
         public ?int $length = null,
+        public ?int $precision = null,
         public ?string $foreign = null,
         public ForeignKeyAction|string|null $onDelete = null,
         public ForeignKeyAction|string|null $onUpdate = null,
@@ -87,6 +89,8 @@ final class Column
                 );
             }
 
+            $this->assertPrecisionCompatible($propertyType, $class, $property);
+
             return;
         }
 
@@ -100,6 +104,43 @@ final class Column
             $propertyType,
             $compatible === [] ? 'none' : implode(', ', array_map(fn (ColumnType $t) => $t->value, $compatible)),
         ));
+    }
+
+    /**
+     * Assert a declared fractional-seconds precision is usable.
+     *
+     * Unix timestamps are whole seconds, so precision is meaningless on an
+     * int-typed Timestamp column; no portable dialect stores more than 6
+     * fractional digits.
+     *
+     * @param  string|null  $propertyType
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $class
+     * @param  string  $property
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private function assertPrecisionCompatible(?string $propertyType, string $class, string $property): void
+    {
+        if ($this->precision === null) {
+            return;
+        }
+
+        if ($this->precision < 1 || $this->precision > 6) {
+            throw new \InvalidArgumentException(
+                "Model [{$class}] property [{$property}] declares datetime precision "
+                . "[{$this->precision}], which is out of range; use null for whole seconds "
+                . 'or an integer between 1 and 6 for fractional seconds.'
+            );
+        }
+
+        if ($this->type === ColumnType::Timestamp && $propertyType === 'int') {
+            throw new \InvalidArgumentException(
+                "Model [{$class}] property [{$property}] declares precision on an int "
+                . 'Unix-timestamp column; Unix timestamps are whole seconds, so fractional '
+                . 'precision is meaningless there. Use a datetime column with a '
+                . 'DateTimeInterface-typed property to store fractional seconds.'
+            );
+        }
     }
 
     /**
@@ -241,8 +282,10 @@ final class Column
     /**
      * Typed property value → bindable value (write path; DB-agnostic).
      *
-     * `\DateTimeInterface` passes through untouched — the connection's
-     * codec formats it at bind time.
+     * A column with declared precision formats its own datetime string
+     * (UTC, exactly `$precision` fractional digits) — the codec has no
+     * per-column knowledge, so a `datetime(3)` column would otherwise
+     * receive a second-precision string and lose its milliseconds.
      *
      * @param  mixed  $value
      * @param  string|null  $propertyType
@@ -255,6 +298,10 @@ final class Column
         }
 
         if ($value instanceof \DateTimeInterface) {
+            if ($this->precision !== null) {
+                return $this->encodePrecisionDatetime($value);
+            }
+
             return $value;
         }
 
@@ -262,6 +309,24 @@ final class Column
             'array' => $this->encodeJson($value),
             default => $value,
         };
+    }
+
+    /**
+     * Format a datetime to the column's declared precision — UTC, exactly
+     * `$precision` fractional digits.
+     *
+     * @param  \DateTimeInterface  $value
+     * @return string
+     */
+    private function encodePrecisionDatetime(\DateTimeInterface $value): string
+    {
+        $utc = \DateTimeImmutable::createFromInterface($value)
+            ->setTimezone(new \DateTimeZone('UTC'));
+
+        // One format pass — 'Y-m-d H:i:s.u' is fixed-width (26 chars: 19
+        // date chars + the dot + 6 fraction digits), so truncating to
+        // 20 + precision keeps the fraction exact and never cuts the date.
+        return substr($utc->format('Y-m-d H:i:s.u'), 0, 20 + ($this->precision ?? 6));
     }
 
     /**

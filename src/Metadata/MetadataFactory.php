@@ -6,11 +6,13 @@ namespace BlueprintAU\Radiant\Metadata;
 
 use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\Morphs;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\SoftDeletes;
+use BlueprintAU\Radiant\Timestamps;
 use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Attributes\Unique;
@@ -104,6 +106,7 @@ final class MetadataFactory
 
         $properties = self::collectProperties($reflection, $class);
         $softDeleteColumn = self::applySoftDeletes($reflection, $class, $properties);
+        self::applyTimestamps($reflection, $class, $properties);
         self::applyMorphs($reflection, $class, $properties);
         [$tableName, $parentModel] = self::resolveTableName($reflection, $class, $properties);
 
@@ -232,6 +235,7 @@ final class MetadataFactory
                 index: $column->index,
                 default: $column->default,
                 length: $column->length,
+                precision: $column->precision,
                 foreign: $column->foreign,
                 onDelete: $column->onDelete,
                 onUpdate: $column->onUpdate,
@@ -267,7 +271,7 @@ final class MetadataFactory
      */
     private static function applySoftDeletes(\ReflectionClass $reflection, string $class, array &$properties): ?string
     {
-        if (!self::usesSoftDeletes($class)) {
+        if (!self::usesTrait($class, SoftDeletes::class)) {
             return null;
         }
 
@@ -313,14 +317,18 @@ final class MetadataFactory
             // No PHP property exists for a synthetic column, so the cast
             // pipeline has no property type to drive from — pin it to the
             // column type so consumers see a consistent datetime column.
+            // The shape comes from the softDeletes() helper itself, so the
+            // trait and the DDL helper cannot drift.
             $properties[$columnName] = new PropertyMapping(
                 propertyName: $columnName,
                 columnName: $columnName,
-                column: new Column(
-                    type: ColumnType::DateTime,
-                    name: $columnName,
-                    nullable: true,
-                ),
+                column: self::columnsFromHelperShape(
+                    fn (Blueprint $blueprint) => $blueprint->softDeletes(),
+                )['deleted_at']
+                    ?? throw new \LogicException(
+                        'The softDeletes() helper emitted no [deleted_at] column; the '
+                        . 'trait auto-declaration contract is broken.'
+                    ),
                 property: null,
                 owner: $class,
                 propertyType: ColumnType::DateTime->value,
@@ -333,6 +341,126 @@ final class MetadataFactory
         }
 
         return $columnName;
+    }
+
+    /**
+     * Auto-declare the stamp columns when the class uses Timestamps.
+     *
+     * Mirrors {@see applySoftDeletes()}: a user-declared `#[Column]` of the
+     * same name wins; a non-null `createdAtColumn()`/`updatedAtColumn()`
+     * override must match a declared column; a non-datetime declared type
+     * is a fail-fast error. Undeclared columns are injected as synthetic
+     * NOT NULL datetime mappings shaped by the `timestamps()` helper.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private static function applyTimestamps(\ReflectionClass $reflection, string $class, array &$properties): void
+    {
+        if (!self::usesTrait($class, Timestamps::class)) {
+            return;
+        }
+
+        foreach (['createdAtColumn', 'updatedAtColumn'] as $method) {
+            if (!\method_exists($class, $method)) {
+                throw new \LogicException("Model [{$class}] uses Timestamps but defines no {$method}().");
+            }
+        }
+
+        /** @var callable(): (string|null) $createdResolver */
+        $createdResolver = [$class, 'createdAtColumn'];
+        /** @var callable(): (string|null) $updatedResolver */
+        $updatedResolver = [$class, 'updatedAtColumn'];
+
+        $overrides = [
+            'createdAtColumn' => ['created_at', $createdResolver()],
+            'updatedAtColumn' => ['updated_at', $updatedResolver()],
+        ];
+
+        $stamps = self::columnsFromHelperShape(
+            fn (Blueprint $blueprint) => $blueprint->timestamps(),
+        );
+
+        foreach ($overrides as $method => [$defaultName, $override]) {
+            $columnName = $override ?? $defaultName;
+
+            $declared = null;
+
+            foreach ($properties as $mapping) {
+                if ($mapping->columnName === $columnName) {
+                    $declared = $mapping;
+                    break;
+                }
+            }
+
+            if ($declared === null) {
+                if ($override !== null) {
+                    throw new \InvalidArgumentException(
+                        "Model [{$class}] overrides {$method}() to [{$columnName}] "
+                        . "but declares no #[Column] with that name — declare it "
+                        . '(datetime, nullable) or return null for the default.'
+                    );
+                }
+
+                $properties[$columnName] = new PropertyMapping(
+                    propertyName: $columnName,
+                    columnName: $columnName,
+                    column: $stamps[$defaultName]
+                        ?? throw new \LogicException(
+                            "The timestamps() helper emitted no [{$defaultName}] column; the "
+                            . 'trait auto-declaration contract is broken.'
+                        ),
+                    property: null,
+                    owner: $class,
+                    propertyType: ColumnType::DateTime->value,
+                );
+            } elseif ($declared->column->type !== ColumnType::DateTime) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares stamp column [{$columnName}] "
+                    . "as [{$declared->column->type->value}], but Timestamps requires datetime."
+                );
+            }
+        }
+    }
+
+    /**
+     * The columns a Blueprint helper emits, keyed by column name.
+     *
+     * The helper is invoked on a scratch blueprint and each emitted column
+     * shape becomes a synthetic `Column` — the traits' auto-declared
+     * columns and the DDL helpers share one source of truth, so they
+     * cannot drift. Every shape field is carried over, so a helper that
+     * grows a default, length, or flag keeps it on the synthetic column.
+     *
+     * @param  callable(Blueprint): Blueprint  $helper  Invoked with a scratch blueprint; must append the helper columns.
+     * @return array<string, Column>
+     */
+    private static function columnsFromHelperShape(callable $helper): array
+    {
+        $columns = [];
+
+        foreach ($helper(new Blueprint('radiant_helper'))->getColumns() as $shape) {
+            $columns[$shape['name']] = new Column(
+                type: $shape['type'],
+                name: $shape['name'],
+                primaryKey: $shape['primaryKey'],
+                autoIncrement: $shape['autoIncrement'],
+                nullable: $shape['nullable'],
+                unique: $shape['unique'],
+                index: $shape['index'],
+                default: $shape['default'],
+                length: $shape['length'],
+                precision: $shape['precision'],
+                foreign: $shape['foreign'],
+                onDelete: $shape['onDelete'],
+                onUpdate: $shape['onUpdate'],
+            );
+        }
+
+        return $columns;
     }
 
     /**
@@ -794,12 +922,14 @@ final class MetadataFactory
     }
 
     /**
-     * Whether a class (or any of its ancestors) uses the SoftDeletes trait.
+     * Whether a class (or any ancestor) uses a trait — directly or nested
+     * inside another trait.
      *
      * @param  class-string<Model>  $class
+     * @param  string  $trait
      * @return bool
      */
-    private static function usesSoftDeletes(string $class): bool
+    private static function usesTrait(string $class, string $trait): bool
     {
         for ($current = $class; $current !== false; $current = get_parent_class($current)) {
             $traits = class_uses($current);
@@ -808,8 +938,8 @@ final class MetadataFactory
                 continue;
             }
 
-            foreach ($traits as $trait) {
-                if ($trait === SoftDeletes::class || self::usesSoftDeletesTrait($trait)) {
+            foreach ($traits as $used) {
+                if ($used === $trait || self::traitUses($used, $trait)) {
                     return true;
                 }
             }
@@ -819,12 +949,13 @@ final class MetadataFactory
     }
 
     /**
-     * Whether a trait (directly or via another trait) uses SoftDeletes.
+     * Whether a trait (directly or via another trait) uses the given trait.
      *
      * @param  string  $trait
+     * @param  string  $target
      * @return bool
      */
-    private static function usesSoftDeletesTrait(string $trait): bool
+    private static function traitUses(string $trait, string $target): bool
     {
         $traits = class_uses($trait);
 
@@ -833,7 +964,7 @@ final class MetadataFactory
         }
 
         foreach ($traits as $nested) {
-            if ($nested === SoftDeletes::class || self::usesSoftDeletesTrait($nested)) {
+            if ($nested === $target || self::traitUses($nested, $target)) {
                 return true;
             }
         }

@@ -12,8 +12,9 @@ Everything here is SQL-only — narrow to a `SqlConnection` first.
 
 `Blueprint` describes a table's desired state. `Blueprint::fromMetadata()`
 folds every `#[Column]` and class-level constraint attribute of a model
-into a blueprint (a `SoftDeletes` model's delete column is included), so
-your models are the single source of truth:
+into a blueprint (a `SoftDeletes` model's delete column and a
+`Timestamps` model's stamp columns are included), so your models are the
+single source of truth:
 
 ```php
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -32,6 +33,39 @@ $blueprint = (new Blueprint('users'))
 Indexes: `Blueprint::index($name, $columns, $unique)` compiles to
 `CREATE INDEX` per dialect, and single-column indexes come from a
 column's `index:` flag.
+
+### Datetime precision
+
+Datetime columns accept a fractional-seconds precision (1–6 digits).
+Without one, the column stores whole seconds and any sub-second part of
+a written value is truncated:
+
+```php
+$blueprint = (new Blueprint('api_calls'))
+    ->id()
+    ->timestamp('started_at', 3)   // datetime(3) on MySQL — milliseconds
+    ->timestamps(3)                // NOT NULL created_at + updated_at, precision 3
+    ->timestamps(null, nullable: true)   // nullable stamps, whole seconds
+    ->softDeletes(3);              // nullable deleted_at, precision 3
+```
+
+The helpers: `timestamp($name, $precision)` / `datetime($name,
+$precision)` (aliases), `timestamps($precision, $nullable)` (the
+`created_at`/`updated_at` pair — NOT NULL by default, pass
+`nullable: true` for nullable stamps), and `softDeletes($precision)`
+(a nullable `deleted_at` — a row exists before it is deleted, so it is
+always nullable). The same `precision:` is accepted by the `#[Column]`
+attribute; precision on an int Unix-timestamp column is a fail-fast
+error (Unix timestamps are whole seconds).
+
+Per dialect the precision renders as `datetime(3)` (MySQL),
+`timestamp(3)` (Postgres — a display hint; microseconds are always
+stored natively), and `datetime(3)` (SQLite — rendered for DDL parity;
+type affinity ignores it). Values on a precision column are written in
+UTC with exactly the declared number of fractional digits, so a
+`datetime(3)` column round-trips milliseconds losslessly. Schema sync
+detects a precision change (`datetime` → `datetime(3)`) as a column
+modify.
 
 ### Index options
 

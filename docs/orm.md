@@ -10,7 +10,9 @@ multi-table inheritance. Relations are covered in
 - [Columns and types](#columns-and-types)
 - [Constraints](#constraints)
 - [Saving and primary keys](#saving-and-primary-keys)
+- [Timestamps](#timestamps)
 - [Soft deletes](#soft-deletes)
+- [Lifecycle callbacks](#lifecycle-callbacks)
 - [Multi-table inheritance](#multi-table-inheritance)
 - [Metadata lifecycle](#metadata-lifecycle)
 
@@ -205,6 +207,91 @@ through the column's own cast), so the in-memory model matches the row
 without a re-fetch. Expression defaults (e.g. `CURRENT_TIMESTAMP`) are
 skipped — their DB-computed value is unknowable client-side, and the
 property stays honestly uninitialized.
+
+## Timestamps
+
+Opt in by applying the `Timestamps` trait — `save()` then stamps
+`created_at` on INSERT (only when you have not set it yourself) and
+`updated_at` on every INSERT and UPDATE:
+
+```php
+use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Timestamps;
+
+class ApiCall extends Model
+{
+    use Timestamps;
+}
+```
+
+Undeclared stamp columns are **auto-declared** at metadata build — NOT
+NULL `datetime`, shaped by the `timestamps()` blueprint helper, so schema
+sync creates them. Declare your own `#[Column]` of the same name to
+control the shape (precision, nullability); a user declaration wins.
+When a resolved stamp column is absent the trait is a silent no-op for
+that column, so the trait can sit on a shared base model safely. A
+caller-set value always wins: the stamper never overwrites an explicitly
+assigned timestamp.
+
+**Renaming the stamp columns.** Override `createdAtColumn()` /
+`updatedAtColumn()` to return the column's name — the returned name must
+match a declared `#[Column]` on the model:
+
+```php
+class Audit extends Model
+{
+    use Timestamps;
+
+    public static function createdAtColumn(): ?string
+    {
+        return 'began_at';
+    }
+
+    public static function updatedAtColumn(): ?string
+    {
+        return 'modified_at';
+    }
+}
+```
+
+Override `freshTimestamp()` to change the clock source (a test double,
+for example) — both stamps carry the same instant per save.
+
+## Lifecycle callbacks
+
+Register multiple listeners per model instance around the write
+lifecycle. Attempt listeners (`saving`, `deleting`, `restoring`) may
+return `false` to veto the action — nothing is written and the method
+reports `false`; success listeners (`saved`, `deleted`, `restored`) run
+only after the row state actually changed:
+
+```php
+$post->saving(function (Post $post): void {
+    $post->slug = Str::slug($post->title);   // mutation lands in the write
+});
+
+$post->deleting(function (Post $post): bool {
+    return $post->comments()->isEmpty();     // false vetoes the delete
+});
+
+$post->saved(function (Post $post): void {
+    Cache::forget("post:{$post->id}");
+});
+
+$post->deleted(function (Post $post): void {
+    Audit::log("post {$post->id} deleted");  // soft and hard deletes
+});
+
+$post->restored(function (Post $post): void {
+    Audit::log("post {$post->id} restored");
+});
+```
+
+Listeners run in registration order; a veto stops at the first `false`.
+A failed write (stale instance, unsaved model) fires nothing — a `true`
+return and a fired event always agree. The framework's own behaviors
+(stamping, soft deletes) run through internal hooks, not this registry,
+so user listeners can never break them — they only observe.
 
 ## Soft deletes
 

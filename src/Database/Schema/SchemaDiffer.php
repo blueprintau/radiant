@@ -485,6 +485,7 @@ final class SchemaDiffer
                     unique: $column['unique'],
                     index: $column['index'],
                     length: $column['length'],
+                    precision: $column['precision'],
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],
@@ -502,6 +503,7 @@ final class SchemaDiffer
                 $liveColumn['type'],
                 $column['type'],
                 $column['length'],
+                $column['precision'],
             );
             $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
@@ -516,6 +518,7 @@ final class SchemaDiffer
                     unique: $column['unique'],
                     index: $column['index'],
                     length: $column['length'],
+                    precision: $column['precision'],
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],
@@ -552,6 +555,7 @@ final class SchemaDiffer
                 $liveColumn['type'],
                 $column['type'],
                 $column['length'],
+                $column['precision'],
             );
             $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
@@ -566,6 +570,7 @@ final class SchemaDiffer
                     unique: $column['unique'],
                     index: $column['index'],
                     length: $column['length'],
+                    precision: $column['precision'],
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],

@@ -34,9 +34,10 @@ abstract class SchemaGrammar
      *
      * @param  ColumnType  $type
      * @param  int|null  $length
+     * @param  int|null  $precision  Fractional-seconds digits (1–6) for datetime types.
      * @return string
      */
-    abstract public function type(ColumnType $type, ?int $length = null): string;
+    abstract public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string;
 
     /**
      * Compile a `CREATE TABLE` statement.
@@ -444,7 +445,7 @@ abstract class SchemaGrammar
     protected function compileColumnDefinition(array $column, bool $composite = false): string
     {
         $name = $this->wrap($column['name']);
-        $type = $this->type($column['type'], $column['length']);
+        $type = $this->type($column['type'], $column['length'], $column['precision']);
 
         // A composite PK has no generated id in the ORM's contract (the
         // caller assigns every key part — insertGetId is a single-column
@@ -528,5 +529,17 @@ abstract class SchemaGrammar
             throw new \InvalidArgumentException('A string column requires a length.');
         }
         return $length;
+    }
+
+    /**
+     * The parenthesized size suffix for a sized type — `(n)` when a size
+     * is declared, an empty string otherwise.
+     *
+     * @param  int|null  $size
+     * @return string
+     */
+    protected function typeSuffix(?int $size): string
+    {
+        return $size === null ? '' : '(' . $size . ')';
     }
 }

@@ -27,6 +27,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  *     unique: bool,
  *     index: bool,
  *     length: int|null,
+ *     precision: int|null,
  *     default: mixed,
  *     foreign: string|null,
  *     onDelete: ForeignKeyAction|null,
@@ -331,6 +332,7 @@ final class Blueprint
      * @param  bool  $unique
      * @param  bool  $index
      * @param  int|null  $length
+     * @param  int|null  $precision
      * @param  mixed  $default
      * @param  string|null  $foreign
      * @param  ForeignKeyAction|string|null  $onDelete
@@ -346,6 +348,7 @@ final class Blueprint
         bool $unique = false,
         bool $index = false,
         ?int $length = null,
+        ?int $precision = null,
         mixed $default = null,
         ?string $foreign = null,
         ForeignKeyAction|string|null $onDelete = null,
@@ -367,6 +370,7 @@ final class Blueprint
             'unique' => $unique,
             'index' => $index,
             'length' => $length,
+            'precision' => $precision,
             'default' => $default,
             'foreign' => $foreign,
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
@@ -418,11 +422,81 @@ final class Blueprint
      * Add a nullable datetime column.
      *
      * @param  string  $name
+     * @param  int|null  $precision  Fractional-seconds digits (1–6); null stores whole seconds.
      * @return static
+     *
+     * @throws \InvalidArgumentException
      */
-    public function timestamp(string $name): static
+    public function timestamp(string $name, ?int $precision = null): static
     {
-        return $this->column(ColumnType::DateTime, $name, nullable: true);
+        self::assertPrecision($precision);
+
+        return $this->column(ColumnType::DateTime, $name, nullable: true, precision: $precision);
+    }
+
+    /**
+     * Add a nullable datetime column (an explicit alias of `timestamp()`).
+     *
+     * @param  string  $name
+     * @param  int|null  $precision  Fractional-seconds digits (1–6); null stores whole seconds.
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function datetime(string $name, ?int $precision = null): static
+    {
+        return $this->timestamp($name, $precision);
+    }
+
+    /**
+     * Add `created_at` / `updated_at` datetime columns.
+     *
+     * @param  int|null  $precision  Fractional-seconds digits (1–6); null stores whole seconds.
+     * @param  bool  $nullable  Whether the columns allow null.
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function timestamps(?int $precision = null, bool $nullable = false): static
+    {
+        return $this
+            ->column(ColumnType::DateTime, 'created_at', nullable: $nullable, precision: $precision)
+            ->column(ColumnType::DateTime, 'updated_at', nullable: $nullable, precision: $precision);
+    }
+
+    /**
+     * Add a nullable `deleted_at` datetime column for soft deletes.
+     *
+     * @param  int|null  $precision  Fractional-seconds digits (1–6); null stores whole seconds.
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function softDeletes(?int $precision = null): static
+    {
+        return $this->timestamp('deleted_at', $precision);
+    }
+
+    /**
+     * Assert a fractional-seconds precision is in the portable range.
+     *
+     * MySQL and Postgres both accept 0–6 fractional digits; the schema
+     * layer treats `null` as "whole seconds" and rejects anything above 6
+     * (no portable dialect stores more) or below 1 (use `null`).
+     *
+     * @param  int|null  $precision
+     * @return void
+     *
+     * @throws \InvalidArgumentException
+     */
+    private static function assertPrecision(?int $precision): void
+    {
+        if ($precision !== null && ($precision < 1 || $precision > 6)) {
+            throw new \InvalidArgumentException(
+                "Datetime precision [{$precision}] is out of range; use null for whole "
+                . 'seconds or an integer between 1 and 6 for fractional seconds.'
+            );
+        }
     }
 
     /**
@@ -762,6 +836,7 @@ final class Blueprint
                 unique: $column->unique,
                 index: $column->index,
                 length: $column->length,
+                precision: $column->precision,
                 default: $column->default,
                 foreign: $column->foreign,
                 onDelete: $column->onDelete,

@@ -28,9 +28,10 @@ final class PostgresSchemaInspector extends SchemaInspector
      * @param  string  $liveType
      * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
      * @param  int|null  $declaredLength
+     * @param  int|null  $declaredPrecision
      * @return bool
      */
-    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
+    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength, int|null $declaredPrecision = null): bool
     {
         // information_schema's udt_name short forms → the grammar's text.
         $normalized = match (strtolower($liveType)) {
@@ -44,7 +45,7 @@ final class PostgresSchemaInspector extends SchemaInspector
             default => strtolower($liveType),
         };
 
-        return $normalized === strtolower($this->schemaGrammar->type($declaredType, $declaredLength));
+        return $normalized === strtolower($this->schemaGrammar->type($declaredType, $declaredLength, $declaredPrecision));
     }
 
     /**

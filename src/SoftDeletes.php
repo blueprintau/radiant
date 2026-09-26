@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant;
 
-use Carbon\Carbon;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
@@ -51,13 +50,11 @@ trait SoftDeletes
     /**
      * Soft-delete the model — set the delete timestamp.
      *
-     * A stale model returns false (the in-memory state is not mutated to
-     * look deleted); re-deleting an already-soft-deleted row returns true;
-     * an unsaved model returns false.
+     * Overrides the base Model's null-returning hook.
      *
      * @return bool
      */
-    public function delete(): bool
+    protected function performSoftDelete(): bool
     {
         if (!$this->exists) {
             // An unsaved (or already-deleted) model has no row to
@@ -102,13 +99,20 @@ trait SoftDeletes
      */
     public function forceDelete(): bool
     {
-        return $this->performDelete();
+        $deleted = $this->performDelete();
+
+        if ($deleted) {
+            $this->fireLifecycle('deleted');
+        }
+
+        return $deleted;
     }
 
     /**
      * Restore a soft-deleted model — clear the delete timestamp.
      *
-     * Like {@see delete()}, this reflects the affected-row count: a stale
+     * A `restoring` listener returning false vetoes the restore. Like
+     * {@see delete()}, this reflects the affected-row count: a stale
      * instance returns false; an unsaved model returns false.
      *
      * @return bool
@@ -117,6 +121,10 @@ trait SoftDeletes
     {
         if (!$this->exists) {
             // An unsaved (or already-deleted) model has no row to restore.
+            return false;
+        }
+
+        if (!$this->fireLifecycle('restoring')) {
             return false;
         }
 
@@ -133,6 +141,8 @@ trait SoftDeletes
         $this->writeDeletedAtColumn(null);
         $this->original[self::softDeleteColumn()] = null;
 
+        $this->fireLifecycle('restored');
+
         return true;
     }
 
@@ -144,16 +154,6 @@ trait SoftDeletes
     public function trashed(): bool
     {
         return ($this->original[self::softDeleteColumn()] ?? $this->attribute(self::softDeleteColumn())) !== null;
-    }
-
-    /**
-     * A fresh timestamp for the delete column.
-     *
-     * @return Carbon
-     */
-    protected function freshTimestamp(): Carbon
-    {
-        return Carbon::now();
     }
 
     /**

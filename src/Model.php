@@ -68,6 +68,15 @@ abstract class Model
     protected array $relations = [];
 
     /**
+     * Lifecycle callbacks registered on this instance, keyed by event
+     * name (`saving`, `saved`, `deleting`, `deleted`, `restoring`,
+     * `restored`). Attempt listeners may return false to veto the action.
+     *
+     * @var array<string, list<callable>>
+     */
+    private array $lifecycleCallbacks = [];
+
+    /**
      * Pivot values carried onto this model by a BelongsToMany eager load,
      * keyed by pivot column name.
      *
@@ -340,13 +349,139 @@ abstract class Model
     // ---- Persistence ----
 
     /**
+     * A fresh timestamp for the stamp and delete columns.
+     *
+     * @return \Carbon\Carbon
+     */
+    protected function freshTimestamp(): \Carbon\Carbon
+    {
+        return \Carbon\Carbon::now();
+    }
+
+    /**
+     * Timestamp-stamping hook, called before the INSERT/UPDATE payload is
+     * built.
+     *
+     * The base implementation is a no-op; the {@see \BlueprintAU\Radiant\Timestamps}
+     * trait overrides it to stamp `created_at`/`updated_at` when the
+     * model's table declares those columns.
+     *
+     * @param  bool  $insert  Whether the write is an INSERT (both columns) or an UPDATE (`updated_at` only).
+     * @return void
+     */
+    protected function stampTimestamps(bool $insert): void {}
+
+    // ---- Lifecycle callbacks ----
+
+    /**
+     * Register a callback to run after a successful INSERT or UPDATE.
+     *
+     * @param  callable(static $model): void  $callback
+     * @return void
+     */
+    final public function saved(callable $callback): void
+    {
+        $this->lifecycleCallbacks['saved'][] = $callback;
+    }
+
+    /**
+     * Register a callback to run after a successful delete — soft or hard.
+     *
+     * @param  callable(static $model): void  $callback
+     * @return void
+     */
+    final public function deleted(callable $callback): void
+    {
+        $this->lifecycleCallbacks['deleted'][] = $callback;
+    }
+
+    /**
+     * Register a callback to run before the INSERT/UPDATE payload is
+     * built — listeners may mutate the model (the mutation lands in the
+     * write) or return false to cancel the save.
+     *
+     * @param  callable(static $model): (bool|void)  $callback
+     * @return void
+     */
+    final public function saving(callable $callback): void
+    {
+        $this->lifecycleCallbacks['saving'][] = $callback;
+    }
+
+    /**
+     * Register a callback to run before a delete is attempted — soft or
+     * hard. Returning false vetoes the delete.
+     *
+     * @param  callable(static $model): (bool|void)  $callback
+     * @return void
+     */
+    final public function deleting(callable $callback): void
+    {
+        $this->lifecycleCallbacks['deleting'][] = $callback;
+    }
+
+    /**
+     * Register a callback to run before restore() clears the soft-delete
+     * stamp. Returning false vetoes the restore.
+     *
+     * @param  callable(static $model): (bool|void)  $callback
+     * @return void
+     */
+    final public function restoring(callable $callback): void
+    {
+        $this->lifecycleCallbacks['restoring'][] = $callback;
+    }
+
+    /**
+     * Register a callback to run after restore() clears the soft-delete
+     * stamp.
+     *
+     * @param  callable(static $model): void  $callback
+     * @return void
+     */
+    final public function restored(callable $callback): void
+    {
+        $this->lifecycleCallbacks['restored'][] = $callback;
+    }
+
+    /**
+     * Fire one lifecycle event's callbacks in registration order.
+     *
+     * Attempt events (`saving`, `deleting`, `restoring`) stop at the first
+     * listener returning `false` — the action is vetoed. Success events
+     * (`saved`, `deleted`, `restored`) run every listener.
+     *
+     * @param  string  $event
+     * @return bool False when an attempt listener vetoed the action.
+     */
+    final protected function fireLifecycle(string $event): bool
+    {
+        foreach ($this->lifecycleCallbacks[$event] ?? [] as $callback) {
+            $result = $callback($this);
+
+            if ($result === false) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Save the model — INSERT when new, UPDATE of the dirty columns when not.
+     *
+     * A `saving` listener returning false vetoes the save — nothing is
+     * written and `false` is reported.
      *
      * @return bool
      * @throws \LogicException
      */
     final public function save(): bool
     {
+        if (!$this->fireLifecycle('saving')) {
+            return false;
+        }
+
         if (!$this->exists) {
             return $this->performInsert();
         }
@@ -365,7 +500,13 @@ abstract class Model
         // MTI children update per-partition (single query when the dirty
         // columns land on one table, a transaction across tables otherwise).
         if (MetadataFactory::for(static::class)->isMtiChild()) {
-            return $this->performMtiUpdate();
+            $updated = $this->performMtiUpdate();
+
+            if ($updated) {
+                $this->fireLifecycle('saved');
+            }
+
+            return $updated;
         }
 
         return $this->performUpdate();
@@ -374,11 +515,49 @@ abstract class Model
     /**
      * Delete the model (soft-delete when the trait is used).
      *
+     * A `deleting` listener returning false vetoes the delete — the model
+     * is untouched and `false` is reported.
+     *
      * @return bool
      */
-    public function delete(): bool
+    final public function delete(): bool
     {
-        return $this->performDelete();
+        if (!$this->fireLifecycle('deleting')) {
+            return false;
+        }
+
+        $softDeleted = $this->performSoftDelete();
+
+        if ($softDeleted !== null) {
+            if ($softDeleted) {
+                $this->fireLifecycle('deleted');
+            }
+
+            return $softDeleted;
+        }
+
+        $hardDeleted = $this->performDelete();
+
+        if ($hardDeleted) {
+            $this->fireLifecycle('deleted');
+        }
+
+        return $hardDeleted;
+    }
+
+    /**
+     * Soft-delete hook, called by `delete()` before the real DELETE.
+     *
+     * The base implementation returns null — the delete proceeds. The
+     * {@see \BlueprintAU\Radiant\SoftDeletes} trait overrides it to run the
+     * soft-delete UPDATE instead; a bool return short-circuits the hard
+     * delete.
+     *
+     * @return bool|null Null when the model does not handle soft deletes.
+     */
+    protected function performSoftDelete(): ?bool
+    {
+        return null;
     }
 
     /**
@@ -468,8 +647,20 @@ abstract class Model
         // MTI: split the insert per table — root first (generating the id),
         // then each descendant, in ONE transaction on a SQL connection.
         if ($metadata->isMtiChild()) {
-            return $this->performMtiInsert($metadata);
+            $inserted = $this->performMtiInsert($metadata);
+
+            if ($inserted) {
+                $this->fireLifecycle('saved');
+            }
+
+            return $inserted;
         }
+
+        // Timestamps trait hook — a no-op on models without the trait.
+        // Stamped values land on the properties BEFORE getColumnValues()
+        // builds the payload, so the insert carries them and syncOriginal()
+        // snapshots them.
+        $this->stampTimestamps(insert: true);
 
         $values = $this->getColumnValues();
         $pks = static::getPrimaryKeys();
@@ -483,6 +674,7 @@ abstract class Model
         $this->exists = true;
         $this->materializeDefaults();
         $this->syncOriginal();
+        $this->fireLifecycle('saved');
 
         return true;
     }
@@ -719,6 +911,12 @@ abstract class Model
      */
     protected function performUpdate(): bool
     {
+        // Timestamps trait hook — a no-op on models without the trait.
+        // Stamping BEFORE getDirty() means the bumped `updated_at` shows up
+        // in the dirty set (and a no-op update with no other changes still
+        // writes the new stamp).
+        $this->stampTimestamps(insert: false);
+
         $dirty = $this->getDirty();
 
         if ($dirty !== []) {
@@ -730,6 +928,7 @@ abstract class Model
         }
 
         $this->syncOriginal();
+        $this->fireLifecycle('saved');
 
         return true;
     }

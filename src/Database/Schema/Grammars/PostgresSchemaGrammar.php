@@ -31,20 +31,24 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     /**
      * Map a logical column type to Postgres' native type.
      *
+     * Timestamp types render declared precision (`timestamp(3)`) — a display
+     * rounding hint; Postgres always stores microseconds natively.
+     *
      * @param  ColumnType  $type
      * @param  int|null  $length
+     * @param  int|null  $precision
      * @return string
      */
-    public function type(ColumnType $type, ?int $length = null): string
+    public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string
     {
         return match ($type) {
-            ColumnType::String => 'varchar(' . $this->requireLength($length) . ')',
+            ColumnType::String => 'varchar' . $this->typeSuffix($this->requireLength($length)),
             ColumnType::BigInt => 'bigint',
             ColumnType::Int => 'integer',
             ColumnType::Float => 'double precision',
             ColumnType::Boolean => 'boolean',
-            ColumnType::DateTime => 'timestamp',
-            ColumnType::Timestamp => 'timestamp',
+            ColumnType::DateTime => 'timestamp' . $this->typeSuffix($precision),
+            ColumnType::Timestamp => 'timestamp' . $this->typeSuffix($precision),
             ColumnType::Json => 'jsonb',
         };
     }

@@ -31,11 +31,12 @@ final class SqliteSchemaInspector extends SchemaInspector
      * @param  string  $liveType
      * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
      * @param  int|null  $declaredLength
+     * @param  int|null  $declaredPrecision
      * @return bool
      */
-    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength): bool
+    public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength, int|null $declaredPrecision = null): bool
     {
-        return strtolower($liveType) === strtolower($this->schemaGrammar->type($declaredType, $declaredLength));
+        return strtolower($liveType) === strtolower($this->schemaGrammar->type($declaredType, $declaredLength, $declaredPrecision));
     }
 
     /**

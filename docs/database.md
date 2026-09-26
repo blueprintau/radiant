@@ -283,6 +283,12 @@ The default codec passes scalars through and normalizes
 `DateTimeInterface` values to `Y-m-d H:i:s` in UTC; Postgres overrides it
 for microsecond precision (`Y-m-d H:i:s.u`).
 
+A column with a declared fractional-seconds precision is the exception:
+the cast pipeline formats the value itself (UTC, exactly the declared
+number of fractional digits) and the codec passes the string through —
+the codec has no per-column knowledge, so a `datetime(3)` column would
+otherwise receive a second-precision string and lose its milliseconds.
+
 This is the driver boundary, not the field boundary: the property-level
 cast pipeline (a `?Carbon` property, an `int` Unix-timestamp cast) is the
 ORM's, described in

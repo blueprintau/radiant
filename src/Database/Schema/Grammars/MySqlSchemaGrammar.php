@@ -30,20 +30,24 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     /**
      * Map a logical column type to MySQL's native type.
      *
+     * Datetime types render fractional seconds when a precision is declared
+     * (`datetime(3)`); MySQL 5.6.4+ stores the declared digits natively.
+     *
      * @param  ColumnType  $type
      * @param  int|null  $length
+     * @param  int|null  $precision
      * @return string
      */
-    public function type(ColumnType $type, ?int $length = null): string
+    public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string
     {
         return match ($type) {
-            ColumnType::String => 'varchar(' . $this->requireLength($length) . ')',
+            ColumnType::String => 'varchar' . $this->typeSuffix($this->requireLength($length)),
             ColumnType::BigInt => 'bigint',
             ColumnType::Int => 'int',
             ColumnType::Float => 'double',
             ColumnType::Boolean => 'tinyint(1)',
-            ColumnType::DateTime => 'datetime',
-            ColumnType::Timestamp => 'timestamp',
+            ColumnType::DateTime => 'datetime' . $this->typeSuffix($precision),
+            ColumnType::Timestamp => 'timestamp' . $this->typeSuffix($precision),
             ColumnType::Json => 'json',
         };
     }
