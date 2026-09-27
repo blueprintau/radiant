@@ -1152,6 +1152,97 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
+     * Run one aggregate per group of the matching rows — a grouped
+     * aggregate in a single query.
+     *
+     * The result is keyed by the group column's value, so the aggregate's
+     * own alias is ignored here (it matters only for the multi-aggregate
+     * row shape of aggregates()). Declared columns decode through the
+     * column's cast; `count` is always an int.
+     *
+     * @param  Aggregate  $aggregate  The aggregate to compute per group.
+     * @param  string  $groupBy  The column whose values key the result.
+     * @return BaseCollection<string, mixed>
+     */
+    public function aggregateBy(Aggregate $aggregate, string $groupBy): BaseCollection
+    {
+        $rows = $this->scopedFor($groupBy, new Aggregate($aggregate->function, $aggregate->column, self::AGGREGATE_ALIAS))
+            ->groupBy($groupBy)
+            ->getRaw();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->{$groupBy};
+            $raw = $row->{self::AGGREGATE_ALIAS};
+
+            $out[$key] = $aggregate->function === 'count'
+                ? (int) $raw
+                : $this->decodeAggregateColumn($aggregate->column, $raw);
+        }
+
+        /** @var BaseCollection<string, mixed> */
+        return BaseCollection::make($out);
+    }
+
+    /**
+     * Count the matching rows per group of a column — in a single query.
+     *
+     * The result is keyed by the group column's value with int counts.
+     *
+     * The optional seed lists group values that must appear even when the
+     * database has no rows for them — each seeded key absent from the
+     * result becomes 0. The seed is ADDITIVE: database rows always win,
+     * and group values found in the data but missing from the seed still
+     * appear. (Only counts can be seeded — an absent group has no honest
+     * min, max, or average.)
+     *
+     * @param  string  $column  The column whose values key the result.
+     * @param  list<int|string>|null  $seed  Group values guaranteed to appear (0 when absent).
+     * @return BaseCollection<string, int>
+     */
+    public function countBy(string $column, ?array $seed = null): BaseCollection
+    {
+        /** @var BaseCollection<string, int> $counts */
+        $counts = $this->aggregateBy(Aggregate::count('*'), $column);
+
+        if ($seed !== null) {
+            $out = $counts->all();
+
+            foreach ($seed as $value) {
+                $key = (string) $value;
+                $out[$key] ??= 0;
+            }
+
+            /** @var BaseCollection<string, int> */
+            return BaseCollection::make($out);
+        }
+
+        return $counts;
+    }
+
+    /**
+     * Decode one grouped-aggregate value when the aggregated column is a
+     * declared model column.
+     *
+     * Mirrors the scalar decode: declared columns decode through the
+     * column's cast, everything else (raw SQL, Expression arguments,
+     * computed values) passes through raw.
+     *
+     * @param  string|Expression  $column
+     * @param  mixed  $raw
+     * @return mixed
+     */
+    private function decodeAggregateColumn(string|Expression $column, mixed $raw): mixed
+    {
+        if ($column instanceof Expression || $raw === null) {
+            return $raw;
+        }
+
+        return $this->decodeScalar($column, $raw);
+    }
+
+    /**
      * Constrain the query to a primary-key value.
      *
      * Accepts a scalar (the single-PK form), a column => value map (the

@@ -220,6 +220,60 @@ final class SqlConnectionTest extends TestCase
     }
 
     /**
+     * countBy() groups the rows per column with int counts.
+     */
+    public function testCountByGroupsRows(): void
+    {
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25],
+            ['name' => 'Bob', 'email' => 'b2@example.com', 'age' => 40],
+        ]);
+
+        $counts = $this->connection->table('users')->countBy('name');
+
+        self::assertSame(1, $counts['Alice']);
+        self::assertSame(2, $counts['Bob']);
+        self::assertCount(2, $counts);
+    }
+
+    /**
+     * The countBy() seed is additive: absent seeded groups become 0 and
+     * unlisted database values still appear.
+     */
+    public function testCountBySeedIsAdditive(): void
+    {
+        $this->connection->table('users')->insert(['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30]);
+
+        $counts = $this->connection->table('users')->countBy('name', ['Alice', 'Bob', 'Carol']);
+
+        self::assertSame(1, $counts['Alice']);
+        self::assertSame(0, $counts['Bob']);
+        self::assertSame(0, $counts['Carol']);
+        self::assertCount(3, $counts);
+    }
+
+    /**
+     * aggregateBy() sums per group; a group whose values are all NULL
+     * sums to SQL NULL.
+     */
+    public function testAggregateBySumsPerGroup(): void
+    {
+        $this->connection->statement('ALTER TABLE users ADD COLUMN points INTEGER');
+        $this->connection->table('users')->insert([
+            ['name' => 'Alice', 'email' => 'a@example.com', 'age' => 30, 'points' => 10],
+            ['name' => 'Bob', 'email' => 'b@example.com', 'age' => 25, 'points' => 5],
+            ['name' => 'Carol', 'email' => 'c@example.com', 'age' => 40, 'points' => null],
+        ]);
+
+        $sums = $this->connection->table('users')->aggregateBy(Aggregate::sum('points'), 'name');
+
+        self::assertSame(10, $sums['Alice']);
+        self::assertSame(5, $sums['Bob']);
+        self::assertNull($sums['Carol'], 'sum over an all-NULL group is SQL NULL');
+    }
+
+    /**
      * value() honors a user-supplied alias on the aggregate.
      */
     public function testValueWithUserAlias(): void

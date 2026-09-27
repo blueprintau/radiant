@@ -34,6 +34,15 @@ class QueryBuilder
     use FiltersWhere;
 
     /**
+     * The internal result alias for a grouped aggregate's value column.
+     *
+     * The same convention as the scalar reads: a stable alias keeps the
+     * value readable regardless of how each driver names an unaliased
+     * aggregate column.
+     */
+    protected const AGGREGATE_ALIAS = 'radiant_aggregate';
+
+    /**
      * The columns to select.
      *
      * @var list<string|Expression|Aggregate>
@@ -941,6 +950,77 @@ class QueryBuilder
                 'aggregates() cannot run — the query matched no rows to aggregate (this '
                 . 'indicates a connection that returned an empty first() without an aggregate row).'
             );
+    }
+
+    /**
+     * Run one aggregate per group of the matching rows — a grouped
+     * aggregate in a single query.
+     *
+     * The result is keyed by the group column's value, so the aggregate's
+     * own alias is ignored here (it matters only for the multi-aggregate
+     * row shape of aggregates()). A raw table has no casts, so values come
+     * back as the driver delivered them — except `count`, which is always
+     * an int.
+     *
+     * @param  Aggregate  $aggregate  The aggregate to compute per group.
+     * @param  string  $groupBy  The column whose values key the result.
+     * @return Collection<string, mixed>
+     */
+    public function aggregateBy(Aggregate $aggregate, string $groupBy): Collection
+    {
+        $rows = $this->select($groupBy, new Aggregate($aggregate->function, $aggregate->column, self::AGGREGATE_ALIAS))
+            ->groupBy($groupBy)
+            ->get();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->{$groupBy};
+            $raw = $row->{self::AGGREGATE_ALIAS};
+
+            $out[$key] = $aggregate->function === 'count'
+                ? (int) $raw
+                : $raw;
+        }
+
+        /** @var Collection<string, mixed> */
+        return Collection::make($out);
+    }
+
+    /**
+     * Count the matching rows per group of a column — in a single query.
+     *
+     * The result is keyed by the group column's value with int counts.
+     *
+     * The optional seed lists group values that must appear even when the
+     * database has no rows for them — each seeded key absent from the
+     * result becomes 0. The seed is ADDITIVE: database rows always win,
+     * and group values found in the data but missing from the seed still
+     * appear. (Only counts can be seeded — an absent group has no honest
+     * min, max, or average.)
+     *
+     * @param  string  $column  The column whose values key the result.
+     * @param  list<int|string>|null  $seed  Group values guaranteed to appear (0 when absent).
+     * @return Collection<string, int>
+     */
+    public function countBy(string $column, ?array $seed = null): Collection
+    {
+        /** @var Collection<string, int> $counts */
+        $counts = $this->aggregateBy(Aggregate::count('*'), $column);
+
+        if ($seed !== null) {
+            $out = $counts->all();
+
+            foreach ($seed as $value) {
+                $key = (string) $value;
+                $out[$key] ??= 0;
+            }
+
+            /** @var Collection<string, int> */
+            return Collection::make($out);
+        }
+
+        return $counts;
     }
 
     // ---- Writes ----

@@ -203,6 +203,58 @@ final class BuilderParityTest extends DatabaseTestCase
         self::assertInstanceOf(\Carbon\Carbon::class, $result->latest);
     }
 
+    // ---- Grouped aggregates decode through the casts ----
+
+    /**
+     * countBy() groups the rows per column with int counts.
+     */
+    public function testCountByGroupsRows(): void
+    {
+        $counts = BpUser::newQuery()->countBy('name');
+
+        self::assertSame(1, $counts['ada']);
+        self::assertSame(1, $counts['ben']);
+        self::assertCount(2, $counts);
+    }
+
+    /**
+     * The countBy() seed is additive: absent seeded groups become 0 and
+     * unlisted database values still appear.
+     */
+    public function testCountBySeedIsAdditive(): void
+    {
+        $counts = BpUser::newQuery()->countBy('name', ['ada', 'ben', 'carol']);
+
+        self::assertSame(1, $counts['ada']);
+        self::assertSame(1, $counts['ben']);
+        self::assertSame(0, $counts['carol']);
+        self::assertCount(3, $counts);
+    }
+
+    /**
+     * aggregateBy() decodes a declared column's cast — a datetime column
+     * yields Carbon per group.
+     */
+    public function testAggregateByDecodesColumns(): void
+    {
+        $maxes = BpUser::newQuery()->aggregateBy(Aggregate::max('signed_up_at'), 'name');
+
+        self::assertInstanceOf(\Carbon\Carbon::class, $maxes['ada']);
+        self::assertSame('2026-01-15 10:00:00', $maxes['ada']->format('Y-m-d H:i:s'));
+        self::assertNull($maxes['ben'], 'max over an all-NULL group is SQL NULL');
+    }
+
+    /**
+     * countBy() composes with the model-aware filters — the where
+     * constrains the grouped query too.
+     */
+    public function testCountByRespectsComposedFilters(): void
+    {
+        $counts = BpUser::newQuery()->where('name', '=', 'ada')->countBy('name');
+
+        self::assertSame(['ada' => 1], $counts->all());
+    }
+
     // ---- Writes encode through the casts ----
 
     /**

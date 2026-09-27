@@ -112,6 +112,11 @@ $totals = $event->rsvps()->aggregateBy(Aggregate::sum('amount'), 'status');
 Both are reads, not compositions: they never mark the relation composed,
 so a later `getResults()` is unaffected.
 
+The same methods exist on the query builders — `Model::newQuery()` and
+`Database::table()` — with the same contracts. On a model builder the
+values decode through the column casts; on a raw table builder they come
+back as the driver delivered them (`count` is always an int).
+
 ## Key conventions
 
 FK/local-key defaults follow the snake_case convention (`user_id`, the
