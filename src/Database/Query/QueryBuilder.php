@@ -24,7 +24,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * backend: SQL databases compile it to SQL, while a CSV connection applies
  * the filters directly in PHP.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, softDelete?: true} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -1121,19 +1121,21 @@ class QueryBuilder
     }
 
     /**
-     * Mark the most recent where clause as the soft-delete scope clause.
+     * Mark the most recent where clause as a trait-declared scope clause.
      *
+     * @param  string  $trait  The declaring trait's class-string.
      * @return void
      * @throws \LogicException
      */
-    protected function markLastWhereSoftDelete(): void
+    protected function markLastWhereTraitScope(string $trait): void
     {
         if ($this->wheres === []) {
-            throw new \LogicException('Cannot mark the soft-delete scope: the builder has no where clauses.');
+            throw new \LogicException('Cannot mark the trait scope: the builder has no where clauses.');
         }
 
         $last = count($this->wheres) - 1;
-        $this->wheres[$last]['softDelete'] = true;
+        /** @phpstan-ignore assign.propertyType (the marker key is only meaningful on the clause arms that carry scopes; the union shape lists it per-arm) */
+        $this->wheres[$last]['traitScope'] = $trait;
     }
 
     /**

@@ -6,11 +6,15 @@ namespace BlueprintAU\Radiant\Metadata;
 
 use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Attributes\Hook;
+use BlueprintAU\Radiant\Attributes\ModelScope;
+use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\Morphs;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\ScopeCondition;
 use BlueprintAU\Radiant\SoftDeletes;
 use BlueprintAU\Radiant\Timestamps;
 use BlueprintAU\Radiant\Attributes\Index;
@@ -158,7 +162,170 @@ final class MetadataFactory
             softDeleteColumn: $softDeleteColumn,
             parentModel: $parentModel,
             tablePartitions: $partitions,
+            traitScopes: self::collectTraitScopes($reflection, $class, $properties),
+            writeHooks: self::collectWriteHooks($reflection, $class),
         );
+    }
+
+    /**
+     * Collect the trait-declared query scopes for a class.
+     *
+     * Walks the class's traits recursively (declaration order, then
+     * ancestors) and invokes every `#[ModelScope]`-annotated static
+     * method. Columns are validated against the merged metadata — an
+     * unknown scope column fails fast at build.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @param  PropertyMapping[]  $properties  The class's merged column mappings (collected earlier in build()) — validating against these avoids a self::for() call, which would recurse (build() is what invokes this).
+     * @return list<array{trait: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>
+     * @throws \InvalidArgumentException
+     */
+    private static function collectTraitScopes(\ReflectionClass $reflection, string $class, array $properties): array
+    {
+        $scopes = [];
+
+        foreach (self::traitsOf($reflection) as $trait) {
+            foreach ($trait->getMethods() as $method) {
+                $attributes = $method->getAttributes(ModelScope::class);
+
+                if ($attributes === []) {
+                    continue;
+                }
+
+                if (!$method->isStatic() || $method->getNumberOfParameters() > 0) {
+                    throw new \InvalidArgumentException(
+                        "The #[ModelScope] method [{$trait->name}::{$method->name}] must be static "
+                        . 'and take no parameters.'
+                    );
+                }
+
+                // Invoke through the MODEL class, not the trait — the
+                // method's `self::` calls must late-bind to the using class
+                // (e.g. SoftDeletes::deletedAtColumn() overrides).
+                $conditions = $class::{$method->name}();
+
+                if (!is_array($conditions)) {
+                    throw new \InvalidArgumentException(
+                        "The #[ModelScope] method [{$trait->name}::{$method->name}] must return an array "
+                        . 'of ScopeCondition instances.'
+                    );
+                }
+
+                foreach ($conditions as $condition) {
+                    if (!$condition instanceof ScopeCondition) {
+                        throw new \InvalidArgumentException(
+                            "The #[ModelScope] method [{$trait->name}::{$method->name}] must return an array "
+                            . 'of ScopeCondition instances; got ' . get_debug_type($condition) . '.'
+                        );
+                    }
+
+                    $known = false;
+
+                    foreach ($properties as $mapping) {
+                        if ($mapping->columnName === $condition->column) {
+                            $known = true;
+                            break;
+                        }
+                    }
+
+                    if (!$known) {
+                        throw new \InvalidArgumentException(
+                            "The #[ModelScope] on [{$trait->name}] declares the column [{$condition->column}]"
+                            . ", which does not exist on model [{$class}]."
+                        );
+                    }
+
+                    $scopes[] = ['trait' => $trait->name, 'condition' => $condition];
+                }
+            }
+        }
+
+        return $scopes;
+    }
+
+    /**
+     * Collect the trait-declared write hooks for a class.
+     *
+     * Walks the class's traits recursively (declaration order, then
+     * ancestors). Within one trait, methods run in declaration order.
+     * `Hook::Destroy` methods must return void — the hard DELETE is
+     * unclaimable.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @return list<array{trait: class-string, hook: Hook, method: string}>
+     * @throws \InvalidArgumentException
+     */
+    private static function collectWriteHooks(\ReflectionClass $reflection, string $class): array
+    {
+        $hooks = [];
+
+        foreach (self::traitsOf($reflection) as $trait) {
+            foreach ($trait->getMethods() as $method) {
+                foreach ($method->getAttributes(WriteHook::class) as $attribute) {
+                    /** @var WriteHook $writeHook */
+                    $writeHook = $attribute->newInstance();
+
+                    if ($method->isStatic()) {
+                        throw new \InvalidArgumentException(
+                            "The #[WriteHook] method [{$trait->name}::{$method->name}] must be an instance method."
+                        );
+                    }
+
+                    if (
+                        $writeHook->hook === Hook::Destroy
+                        && $method->hasReturnType()
+                        && (string) $method->getReturnType() !== 'void'
+                    ) {
+                        throw new \InvalidArgumentException(
+                            "The #[WriteHook(Hook::Destroy)] method [{$trait->name}::{$method->name}] must "
+                            . 'return void — the hard DELETE is unclaimable.'
+                        );
+                    }
+
+                    $hooks[] = ['trait' => $trait->name, 'hook' => $writeHook->hook, 'method' => $method->name];
+                }
+            }
+        }
+
+        return $hooks;
+    }
+
+    /**
+     * The class's traits, recursively — declaration order on the class,
+     * then ancestors. Deduplicated.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @return list<\ReflectionClass<object>>
+     */
+    private static function traitsOf(\ReflectionClass $reflection): array
+    {
+        $traits = [];
+        $seen = [];
+
+        for ($current = $reflection; $current !== false; $current = $current->getParentClass()) {
+            foreach ($current->getTraitNames() as $traitName) {
+                if (isset($seen[$traitName])) {
+                    continue;
+                }
+
+                $seen[$traitName] = true;
+                $traits[] = new \ReflectionClass($traitName);
+
+                // Traits used BY the trait count too.
+                foreach (class_uses($traitName) ?: [] as $nested) {
+                    if (isset($seen[$nested])) {
+                        continue;
+                    }
+
+                    $seen[$nested] = true;
+                    $traits[] = new \ReflectionClass($nested);
+                }
+            }
+        }
+
+        return $traits;
     }
 
     /**

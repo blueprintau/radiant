@@ -53,6 +53,8 @@ final class ClassMetadata
      * @param  string|null  $softDeleteColumn  The column name when the class uses {@see SoftDeletes}.
      * @param  class-string<Model>|null  $parentModel
      * @param  array<string, string>  $tablePartitions
+     * @param  list<array{trait: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>  $traitScopes
+     * @param  list<array{trait: class-string, hook: \BlueprintAU\Radiant\Attributes\Hook, method: string}>  $writeHooks
      */
     public function __construct(
         public readonly ?string $tableName,
@@ -65,6 +67,8 @@ final class ClassMetadata
         public readonly ?string $softDeleteColumn = null,
         public readonly string|null $parentModel = null,
         array $tablePartitions = [],
+        public readonly array $traitScopes = [],
+        public readonly array $writeHooks = [],
     ) {
         // Eager precompute: the class is built once per process (the
         // MetadataFactory cache), so deriving the lookup map here costs

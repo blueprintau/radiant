@@ -28,6 +28,8 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  *     index: bool,
  *     length: int|null,
  *     precision: int|null,
+ *     scale: int|null,
+ *     values: list<string>|null,
  *     default: mixed,
  *     foreign: string|null,
  *     onDelete: ForeignKeyAction|null,
@@ -332,7 +334,9 @@ final class Blueprint
      * @param  bool  $unique
      * @param  bool  $index
      * @param  int|null  $length
-     * @param  int|null  $precision
+     * @param  int|null  $precision  Fractional-seconds digits (1–6) for datetime columns; total digits for decimal columns.
+     * @param  int|null  $scale  Fractional digits for a decimal column (0–`precision`).
+ * @param  list<string>|null  $values  The allowed values for an enum column.
      * @param  mixed  $default
      * @param  string|null  $foreign
      * @param  ForeignKeyAction|string|null  $onDelete
@@ -349,6 +353,8 @@ final class Blueprint
         bool $index = false,
         ?int $length = null,
         ?int $precision = null,
+        ?int $scale = null,
+        array|null $values = null,
         mixed $default = null,
         ?string $foreign = null,
         ForeignKeyAction|string|null $onDelete = null,
@@ -359,6 +365,8 @@ final class Blueprint
         if ($foreign !== null) {
             $foreign = $this->normalizeForeignReference($foreign, $name);
         }
+
+        self::assertColumnOptions($type, $length, $precision, $scale, $values);
 
         $clone = clone $this;
         $clone->columns = [...$this->columns, [
@@ -371,6 +379,8 @@ final class Blueprint
             'index' => $index,
             'length' => $length,
             'precision' => $precision,
+            'scale' => $scale,
+            'values' => $values,
             'default' => $default,
             'foreign' => $foreign,
             'onDelete' => $onDelete === null ? null : ($onDelete instanceof ForeignKeyAction ? $onDelete : ForeignKeyAction::fromChecked($onDelete)),
@@ -416,6 +426,154 @@ final class Blueprint
     public function string(string $name, int $length): static
     {
         return $this->column(ColumnType::String, $name, length: $length);
+    }
+
+    /**
+     * Add a fixed-length string column.
+     *
+     * @param  string  $name
+     * @param  int  $length
+     * @return static
+     */
+    public function char(string $name, int $length): static
+    {
+        return $this->column(ColumnType::Char, $name, length: $length);
+    }
+
+    /**
+     * Add an unbounded text column.
+     *
+     * @param  string  $name
+     * @return static
+     */
+    public function text(string $name): static
+    {
+        return $this->column(ColumnType::Text, $name);
+    }
+
+    /**
+     * Add an exact fixed-point decimal column.
+     *
+     * @param  string  $name
+     * @param  int  $precision  Total digits (1–65).
+     * @param  int  $scale  Fractional digits (0–`$precision`).
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function decimal(string $name, int $precision, int $scale): static
+    {
+        return $this->column(ColumnType::Decimal, $name, precision: $precision, scale: $scale);
+    }
+
+    /**
+     * Add a calendar date column (no time component).
+     *
+     * @param  string  $name
+     * @return static
+     */
+    public function date(string $name): static
+    {
+        return $this->column(ColumnType::Date, $name);
+    }
+
+    /**
+     * Add a raw binary column.
+     *
+     * @param  string  $name
+     * @param  int|null  $length  Optional byte cap (MySQL renders `varbinary(n)`).
+     * @return static
+     */
+    public function binary(string $name, ?int $length = null): static
+    {
+        return $this->column(ColumnType::Binary, $name, length: $length);
+    }
+
+    /**
+     * Add a RFC 4122 UUID column (fixed 36 characters).
+     *
+     * @param  string  $name
+     * @return static
+     */
+    public function uuid(string $name): static
+    {
+        return $this->column(ColumnType::Uuid, $name);
+    }
+
+    /**
+     * Add a constrained string column — a sized string plus an inline
+     * CHECK over the allowed values.
+     *
+     * @param  string  $name
+     * @param  array<int, mixed>  $values  The allowed values (non-empty, all strings — runtime-validated).
+     * @param  int|null  $length  Optional storage length; defaults to the longest value.
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function enum(string $name, array $values, ?int $length = null): static
+    {
+        if ($values === []) {
+            throw new \InvalidArgumentException("An enum column [{$name}] requires at least one value.");
+        }
+
+        foreach ($values as $value) {
+            if (!is_string($value)) {
+                throw new \InvalidArgumentException(
+                    "An enum column [{$name}] requires string values; got " . get_debug_type($value) . '.'
+                );
+            }
+        }
+
+        $length ??= max(array_map(strlen(...), $values));
+
+        /** @var list<string> $validated */
+        $validated = array_values($values);
+
+        return $this->column(ColumnType::Enum, $name, length: $length, values: $validated);
+    }
+
+    /**
+     * Assert the type-specific options a column declares are usable.
+     *
+     * @param  ColumnType  $type
+     * @param  int|null  $length
+     * @param  int|null  $precision
+     * @param  int|null  $scale
+     * @param  list<string>|null  $values
+     * @return void
+     *
+     * @throws \InvalidArgumentException
+     */
+    private static function assertColumnOptions(ColumnType $type, ?int $length, ?int $precision, ?int $scale, ?array $values): void
+    {
+        if ($type === ColumnType::Decimal) {
+            if ($precision === null || $precision < 1 || $precision > 65) {
+                throw new \InvalidArgumentException(
+                    "A decimal column requires a precision between 1 and 65; got "
+                    . ($precision === null ? 'none' : $precision) . "."
+                );
+            }
+
+            if ($scale === null || $scale < 0 || $scale > $precision) {
+                throw new \InvalidArgumentException(
+                    "A decimal column requires a scale between 0 and its precision [{$precision}]; got "
+                    . ($scale === null ? 'none' : $scale) . "."
+                );
+            }
+        }
+
+        if ($type === ColumnType::Uuid && $length !== null) {
+            throw new \InvalidArgumentException(
+                'A uuid column has a fixed 36-character form; do not declare a length.'
+            );
+        }
+
+        if ($type !== ColumnType::Enum && $values !== null) {
+            throw new \InvalidArgumentException(
+                "Only an enum column accepts values; got values on a [{$type->value}] column."
+            );
+        }
     }
 
     /**
@@ -837,6 +995,8 @@ final class Blueprint
                 index: $column->index,
                 length: $column->length,
                 precision: $column->precision,
+                scale: $column->scale,
+                values: $column->type === ColumnType::Enum ? $column->resolvedEnumValues() : null,
                 default: $column->default,
                 foreign: $column->foreign,
                 onDelete: $column->onDelete,

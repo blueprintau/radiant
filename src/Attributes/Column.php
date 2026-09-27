@@ -33,7 +33,9 @@ final class Column
      * @param  bool  $unique
      * @param  bool  $index
      * @param  int|null  $length
-     * @param  int|null  $precision  Fractional-seconds digits (1–6) for datetime columns; null stores whole seconds.
+     * @param  int|null  $precision  Fractional-seconds digits (1–6) or null (store whole seconds) for datetime columns; total digits (1–65) for decimal columns.
+     * @param  int|null  $scale  Fractional digits for a decimal column (0–`precision`).
+     * @param  list<string>|class-string<\UnitEnum>|null  $values  The allowed values for an enum column — a literal list, or an enum class-string resolved to its cases at metadata build (the column always matches the enum; migrations keep literal lists so schema history stays reproducible).
      * @param  mixed  $default
      * @param  string|null  $foreign
      * @param  ForeignKeyAction|string|null  $onDelete
@@ -50,6 +52,8 @@ final class Column
         public mixed $default = null,
         public ?int $length = null,
         public ?int $precision = null,
+        public ?int $scale = null,
+        public array|string|null $values = null,
         public ?string $foreign = null,
         public ForeignKeyAction|string|null $onDelete = null,
         public ForeignKeyAction|string|null $onUpdate = null,
@@ -78,7 +82,9 @@ final class Column
             );
         }
 
-        $compatible = self::typeCompatibility()[$propertyType] ?? [];
+        $compatible = self::typeCompatibility()[$propertyType]
+            ?? $this->enumCompatibility($propertyType)
+            ?? [];
 
         if (in_array($this->type, $compatible, true)) {
             if ($this->type === ColumnType::String && $this->length === null) {
@@ -87,6 +93,24 @@ final class Column
                     . 'column without a length; declare `length:` (mirroring the schema '
                     . 'layer, where a string column requires one).'
                 );
+            }
+
+            // An enum column's storage length defaults to its longest
+            // value — mirroring Blueprint::enum(). A class-string values
+            // source resolves to its case values (backed) or names (unit)
+            // at metadata build, so the column always matches the enum.
+            if ($this->type === ColumnType::Enum) {
+                $values = $this->resolvedEnumValues();
+
+                if ($values === []) {
+                    throw new \InvalidArgumentException(
+                        "Model [{$class}] property [{$property}] declares an enum "
+                        . 'column without values; declare `values:` with the allowed strings '
+                        . 'or an enum class-string.'
+                    );
+                }
+
+                $this->length ??= max(array_map(strlen(...), $values));
             }
 
             $this->assertPrecisionCompatible($propertyType, $class, $property);
@@ -104,6 +128,65 @@ final class Column
             $propertyType,
             $compatible === [] ? 'none' : implode(', ', array_map(fn (ColumnType $t) => $t->value, $compatible)),
         ));
+    }
+
+    /**
+     * The compatible column types for a PHP enum property type — an
+     * int-backed enum stores in an integer column, a string-backed or
+     * unit enum in a string-family column.
+     *
+     * @param  string  $propertyType
+     * @return list<ColumnType>|null Null when the type is not an enum.
+     */
+    private function enumCompatibility(string $propertyType): array|null
+    {
+        if (!enum_exists($propertyType)) {
+            return null;
+        }
+
+        if (is_a($propertyType, \BackedEnum::class, true)) {
+            $backing = $propertyType::cases()[0]->value;
+
+            return is_int($backing)
+                ? [ColumnType::Int, ColumnType::BigInt]
+                : [ColumnType::String, ColumnType::Char, ColumnType::Enum];
+        }
+
+        return [ColumnType::String, ColumnType::Char, ColumnType::Enum];
+    }
+
+    /**
+     * The enum column's allowed values, resolved from the declared
+     * source — a literal list passes through; an enum class-string
+     * resolves to its case values (backed) or case names (unit).
+     *
+     * @return list<string>
+     * @throws \InvalidArgumentException
+     */
+    public function resolvedEnumValues(): array
+    {
+        if (is_string($this->values)) {
+            if (!enum_exists($this->values)) {
+                throw new \InvalidArgumentException(
+                    "The enum column values source [{$this->values}] is not an enum class-string."
+                );
+            }
+
+            $cases = $this->values::cases();
+
+            if ($cases === []) {
+                throw new \InvalidArgumentException(
+                    "The enum [{$this->values}] declares no cases; an enum column needs at least one value."
+                );
+            }
+
+            return array_map(
+                fn (\UnitEnum $case): string => $case instanceof \BackedEnum ? (string) $case->value : $case->name,
+                $cases,
+            );
+        }
+
+        return $this->values ?? [];
     }
 
     /**
@@ -200,17 +283,32 @@ final class Column
     {
         static $dateTimeTypes = [ColumnType::DateTime, ColumnType::Timestamp];
 
-        return [
+        /** @var array<string, list<ColumnType>> */
+        static $matrix = [
             'int' => [ColumnType::Int, ColumnType::BigInt, ColumnType::Timestamp],
             'float' => [ColumnType::Float],
-            'string' => [ColumnType::String, ColumnType::DateTime, ColumnType::Timestamp, ColumnType::Json],
+            'string' => [
+                ColumnType::String,
+                ColumnType::Char,
+                ColumnType::Text,
+                ColumnType::Decimal,
+                ColumnType::Date,
+                ColumnType::DateTime,
+                ColumnType::Timestamp,
+                ColumnType::Json,
+                ColumnType::Enum,
+                ColumnType::Binary,
+                ColumnType::Uuid,
+            ],
             'bool' => [ColumnType::Boolean],
             'array' => [ColumnType::Json],
-            'Carbon\Carbon' => $dateTimeTypes,
-            'Carbon\CarbonImmutable' => $dateTimeTypes,
-            'DateTime' => $dateTimeTypes,
-            'DateTimeImmutable' => $dateTimeTypes,
+            'Carbon\Carbon' => [...$dateTimeTypes, ColumnType::Date],
+            'Carbon\CarbonImmutable' => [...$dateTimeTypes, ColumnType::Date],
+            'DateTime' => [...$dateTimeTypes, ColumnType::Date],
+            'DateTimeImmutable' => [...$dateTimeTypes, ColumnType::Date],
         ];
+
+        return $matrix;
     }
 
     // ---- Casting (owned by the field type) ----
@@ -229,6 +327,10 @@ final class Column
     {
         if ($value === null) {
             return null;
+        }
+
+        if ($propertyType !== null && $this->isEnumPropertyType($propertyType)) {
+            return $this->decodeEnum($value, $propertyType);
         }
 
         if (
@@ -261,8 +363,39 @@ final class Column
             'float' => (float) $value,
             'bool' => (bool) $value,
             'array' => $this->decodeJson($value),
-            default => $value,
+            default => $this->decodeString($value),
         };
+    }
+
+    /**
+     * Decode a string-typed property value — the column type
+     * disambiguates the stored form.
+     *
+     * A Date column stores `Y-m-d`; decoding re-parses it so a corrupt
+     * cell fails loudly with the column named (mirroring the datetime
+     * path). Other string-family columns pass through untouched — the
+     * DB's string IS the property's string.
+     *
+     * @param  mixed  $value
+     * @return mixed
+     * @throws \RuntimeException
+     */
+    private function decodeString(mixed $value): mixed
+    {
+        if ($this->type !== ColumnType::Date || !is_string($value)) {
+            return $value;
+        }
+
+        try {
+            return \Carbon\Carbon::parse($value)->startOfDay();
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? 'date') . '] could not decode the value ['
+                . var_export($value, true) . '] as a date: ' . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
     }
 
     /**
@@ -298,6 +431,14 @@ final class Column
         }
 
         if ($value instanceof \DateTimeInterface) {
+            if ($this->type === ColumnType::Date) {
+                // A date column stores the calendar day — UTC midnight,
+                // `Y-m-d`, no time component.
+                return \DateTimeImmutable::createFromInterface($value)
+                    ->setTimezone(new \DateTimeZone('UTC'))
+                    ->format('Y-m-d');
+            }
+
             if ($this->precision !== null) {
                 return $this->encodePrecisionDatetime($value);
             }
@@ -305,10 +446,128 @@ final class Column
             return $value;
         }
 
+        if ($propertyType !== null && $this->isEnumPropertyType($propertyType)) {
+            return $this->encodeEnum($value, $propertyType);
+        }
+
+        if ($this->type === ColumnType::Uuid && is_string($value)) {
+            $this->assertUuid($value);
+        }
+
         return match ($propertyType) {
             'array' => $this->encodeJson($value),
             default => $value,
         };
+    }
+
+    /**
+     * Whether a property type is a PHP enum class-string.
+     *
+     * @param  string  $propertyType
+     * @return bool
+     */
+    private function isEnumPropertyType(string $propertyType): bool
+    {
+        return enum_exists($propertyType);
+    }
+
+    /**
+     * Encode a PHP enum value to its storable form — a backed enum's
+     * backing value, a unit enum's case name.
+     *
+     * @param  mixed  $value
+     * @param  string  $propertyType
+     * @return int|string
+     * @throws \InvalidArgumentException
+     */
+    private function encodeEnum(mixed $value, string $propertyType): int|string
+    {
+        // Idempotent on already-encoded input — the builder's write path
+        // re-encodes values that getColumnValues() already encoded (the
+        // same trade encodeJson() makes: an encoded string cell is
+        // indistinguishable from a raw one).
+        if (is_a($propertyType, \BackedEnum::class, true)) {
+            if ($value instanceof \BackedEnum) {
+                return $value->value;
+            }
+
+            if (is_string($value) || is_int($value)) {
+                if ($propertyType::tryFrom($value) !== null) {
+                    return $value;
+                }
+            }
+        } else {
+            if ($value instanceof \UnitEnum) {
+                return $value->name;
+            }
+
+            if (is_string($value)) {
+                foreach ($propertyType::cases() as $case) {
+                    if ($case->name === $value) {
+                        return $value;
+                    }
+                }
+            }
+        }
+
+        throw new \InvalidArgumentException(
+            'Column [' . ($this->name ?? $propertyType) . '] expects an enum value of type ['
+            . $propertyType . ']; got ' . get_debug_type($value) . '.'
+        );
+    }
+
+    /**
+     * Decode a stored value back to its enum case — fail-fast with the
+     * column named when the stored value matches no case.
+     *
+     * @param  mixed  $value
+     * @param  string  $propertyType
+     * @return \BackedEnum|\UnitEnum
+     * @throws \InvalidArgumentException
+     */
+    private function decodeEnum(mixed $value, string $propertyType): \BackedEnum|\UnitEnum
+    {
+        if (is_a($propertyType, \BackedEnum::class, true)) {
+            $case = $propertyType::tryFrom($value);
+
+            if ($case === null) {
+                throw new \InvalidArgumentException(
+                    'Column [' . ($this->name ?? $propertyType) . '] holds the value ['
+                    . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+                    . '], which is not a case of the enum [' . $propertyType . '].'
+                );
+            }
+
+            return $case;
+        }
+
+        foreach ($propertyType::cases() as $case) {
+            if ($case->name === $value) {
+                return $case;
+            }
+        }
+
+        throw new \InvalidArgumentException(
+            'Column [' . ($this->name ?? $propertyType) . '] holds the value ['
+            . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+            . '], which is not a case of the enum [' . $propertyType . '].'
+        );
+    }
+
+    /**
+     * Assert a value is a well-formed RFC 4122 UUID.
+     *
+     * @param  string  $value
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private function assertUuid(string $value): void
+    {
+        if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $value) !== 1) {
+            throw new \InvalidArgumentException(
+                'Column [' . ($this->name ?? 'uuid') . '] requires a valid RFC 4122 UUID; got [' . $value . '].'
+            );
+        }
     }
 
     /**

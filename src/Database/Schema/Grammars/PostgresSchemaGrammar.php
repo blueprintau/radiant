@@ -37,19 +37,27 @@ final class PostgresSchemaGrammar extends SchemaGrammar
      * @param  ColumnType  $type
      * @param  int|null  $length
      * @param  int|null  $precision
+     * @param  int|null  $scale
      * @return string
      */
-    public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string
+    public function type(ColumnType $type, ?int $length = null, ?int $precision = null, ?int $scale = null): string
     {
         return match ($type) {
-            ColumnType::String => 'varchar' . $this->typeSuffix($this->requireLength($length)),
+            ColumnType::String => 'varchar' . $this->suffix($this->requireLength($length)),
+            ColumnType::Char => 'char' . $this->suffix($this->requireLength($length)),
+            ColumnType::Text => 'text',
             ColumnType::BigInt => 'bigint',
             ColumnType::Int => 'integer',
+            ColumnType::Decimal => 'numeric' . $this->suffix($precision, $scale),
             ColumnType::Float => 'double precision',
             ColumnType::Boolean => 'boolean',
-            ColumnType::DateTime => 'timestamp' . $this->typeSuffix($precision),
-            ColumnType::Timestamp => 'timestamp' . $this->typeSuffix($precision),
+            ColumnType::Date => 'date',
+            ColumnType::DateTime => 'timestamp' . $this->suffix($precision),
+            ColumnType::Timestamp => 'timestamp' . $this->suffix($precision),
             ColumnType::Json => 'jsonb',
+            ColumnType::Enum => 'varchar' . $this->suffix($this->requireLength($length)),
+            ColumnType::Binary => 'bytea',
+            ColumnType::Uuid => 'uuid',
         };
     }
 

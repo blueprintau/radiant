@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema;
 
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
+use BlueprintAU\Radiant\Database\Schema\Inspectors\LiveTable;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector;
 
 /**
@@ -486,6 +488,8 @@ final class SchemaDiffer
                     index: $column['index'],
                     length: $column['length'],
                     precision: $column['precision'],
+                    scale: $column['scale'] ?? null,
+                    values: $column['values'] ?? null,
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],
@@ -497,18 +501,21 @@ final class SchemaDiffer
 
             // Content drift: the column exists on both sides — compare the
             // facets. Type via the dialect's round-trip mapping; nullability
-            // and default directly.
+            // and default directly. An enum column's inline CHECK is part
+            // of its definition — a values change is content drift.
             $liveColumn = $liveColumns[$name];
             $typeMatches = $this->inspector->columnTypeMatches(
                 $liveColumn['type'],
                 $column['type'],
                 $column['length'],
                 $column['precision'],
+                $column['scale'] ?? null,
             );
             $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
+            $enumCheckMatches = $this->enumCheckMatches($table, $column, $live);
 
-            if (!$typeMatches || !$nullableMatches || !$defaultMatches) {
+            if (!$typeMatches || !$nullableMatches || !$defaultMatches || !$enumCheckMatches) {
                 $modify = $modify->column(
                     $column['type'],
                     $name,
@@ -519,6 +526,8 @@ final class SchemaDiffer
                     index: $column['index'],
                     length: $column['length'],
                     precision: $column['precision'],
+                    scale: $column['scale'] ?? null,
+                    values: $column['values'] ?? null,
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],
@@ -556,6 +565,7 @@ final class SchemaDiffer
                 $column['type'],
                 $column['length'],
                 $column['precision'],
+                $column['scale'] ?? null,
             );
             $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
             $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
@@ -571,6 +581,8 @@ final class SchemaDiffer
                     index: $column['index'],
                     length: $column['length'],
                     precision: $column['precision'],
+                    scale: $column['scale'] ?? null,
+                    values: $column['values'] ?? null,
                     default: $column['default'],
                     foreign: $column['foreign'],
                     onDelete: $column['onDelete'],
@@ -931,6 +943,45 @@ final class SchemaDiffer
         $normalize = fn (string $expression): string => preg_replace('/\s+/', ' ', trim(str_replace(['"', '`', "'"], '', $expression))) ?? $expression;
 
         return $normalize($declared) === $normalize($live);
+    }
+
+    /**
+     * Whether an enum column's inline CHECK matches the live schema —
+     * the values-drift comparison. A non-enum column always matches
+     * (no CHECK is part of its definition).
+     *
+     * @param  string  $table
+     * @param  array<string, mixed>  $column  The desired ColumnShape.
+     * @param  LiveTable  $live
+     * @return bool
+     */
+    private function enumCheckMatches(string $table, array $column, LiveTable $live): bool
+    {
+        if ($column['type'] !== ColumnType::Enum) {
+            return true;
+        }
+
+        $values = $column['values'] ?? null;
+
+        if ($values === null || $values === []) {
+            return true; // nothing declared — nothing to compare.
+        }
+
+        // Render the desired CHECK exactly as the grammar does, then
+        // compare against every live CHECK on the table (the inline CHECK
+        // is unnamed on some dialects, so match by expression). The
+        // comparison normalizes quoting away, so the dialect's wrap
+        // character does not matter — plain double quotes suffice.
+        $desired = 'CHECK ("' . $column['name'] . '" IN ('
+            . implode(', ', array_map(fn (string $value) => "'" . str_replace("'", "''", $value) . "'", $values)) . '))';
+
+        foreach ($live->checks as $check) {
+            if ($this->checkExpressionsMatch($desired, $check['expression'])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

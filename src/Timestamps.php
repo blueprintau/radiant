@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant;
 
+use BlueprintAU\Radiant\Attributes\Hook;
+use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
@@ -14,6 +16,8 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * sync creates them. A user-declared `#[Column]` of the same name wins;
  * when a resolved column is absent the trait is a silent no-op for that
  * column, so the trait can sit on a shared base model safely.
+ *
+ * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait Timestamps
 {
@@ -68,16 +72,13 @@ trait Timestamps
     }
 
     /**
-     * Stamp the timestamp columns onto the model before a write.
+     * Stamp the timestamp columns before an INSERT — both columns, each
+     * only when unset (a caller-set value always wins).
      *
-     * INSERT fills both columns (each only when unset); UPDATE bumps
-     * `updated_at` only. Runs before dirty computation so `getDirty()`
-     * sees the stamped values.
-     *
-     * @param  bool  $insert  Whether the write is an INSERT (both columns) or an UPDATE (`updated_at` only).
-     * @return void
+     * @return null
      */
-    protected function stampTimestamps(bool $insert): void
+    #[WriteHook(Hook::Insert)]
+    protected function stampOnInsert(): null
     {
         $metadata = MetadataFactory::for(static::class);
 
@@ -87,16 +88,35 @@ trait Timestamps
         // One clock read per save — both stamps carry the same instant.
         $now = $this->freshTimestamp();
 
-        if ($insert && $metadata->hasColumn($createdAt) && !$this->isTimestampColumnSet($createdAt)) {
+        if ($metadata->hasColumn($createdAt) && !$this->isTimestampColumnSet($createdAt)) {
             $this->writeTimestampColumn($createdAt, $now);
         }
 
-        // INSERT: fill updated_at only when the caller has not set it.
-        // UPDATE: always bump — the stamp is the point of the update, even
-        // when the hydrated property already holds a value.
-        if ($metadata->hasColumn($updatedAt) && ($insert ? !$this->isTimestampColumnSet($updatedAt) : true)) {
+        if ($metadata->hasColumn($updatedAt) && !$this->isTimestampColumnSet($updatedAt)) {
             $this->writeTimestampColumn($updatedAt, $now);
         }
+
+        return null;
+    }
+
+    /**
+     * Bump `updated_at` before an UPDATE — always, even when the hydrated
+     * property already holds a value: the stamp is the point of the
+     * update. Runs before dirty computation so `getDirty()` sees it.
+     *
+     * @return null
+     */
+    #[WriteHook(Hook::Update)]
+    protected function stampOnUpdate(): null
+    {
+        $metadata = MetadataFactory::for(static::class);
+        $updatedAt = self::updatedAtColumnName();
+
+        if ($metadata->hasColumn($updatedAt)) {
+            $this->writeTimestampColumn($updatedAt, $this->freshTimestamp());
+        }
+
+        return null;
     }
 
     /**

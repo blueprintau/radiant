@@ -40,19 +40,27 @@ final class SqliteSchemaGrammar extends SchemaGrammar
      * @param  ColumnType  $type
      * @param  int|null  $length
      * @param  int|null  $precision
+     * @param  int|null  $scale
      * @return string
      */
-    public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string
+    public function type(ColumnType $type, ?int $length = null, ?int $precision = null, ?int $scale = null): string
     {
         return match ($type) {
-            ColumnType::String => 'varchar' . $this->typeSuffix($this->requireLength($length)),
+            ColumnType::String => 'varchar' . $this->suffix($this->requireLength($length)),
+            ColumnType::Char => 'char' . $this->suffix($this->requireLength($length)),
+            ColumnType::Text => 'text',
             ColumnType::BigInt => 'integer',
             ColumnType::Int => 'int',
+            ColumnType::Decimal => 'numeric' . $this->suffix($precision, $scale),
             ColumnType::Float => 'double',
             ColumnType::Boolean => 'tinyint(1)',
-            ColumnType::DateTime => 'datetime' . $this->typeSuffix($precision),
-            ColumnType::Timestamp => 'timestamp' . $this->typeSuffix($precision),
+            ColumnType::Date => 'text',
+            ColumnType::DateTime => 'datetime' . $this->suffix($precision),
+            ColumnType::Timestamp => 'timestamp' . $this->suffix($precision),
             ColumnType::Json => 'text',
+            ColumnType::Enum => 'varchar' . $this->suffix($this->requireLength($length)),
+            ColumnType::Binary => 'blob',
+            ColumnType::Uuid => 'text',
         };
     }
 

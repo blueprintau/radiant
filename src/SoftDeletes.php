@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant;
 
+use BlueprintAU\Radiant\Attributes\Hook;
+use BlueprintAU\Radiant\Attributes\ModelScope;
+use BlueprintAU\Radiant\Attributes\WriteHook;
+use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
@@ -19,42 +23,33 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * Soft deletes are portable: the trait only uses `update()` and `whereKey()`
  * — both in the portable subset — so it works on any
  * `ConnectionInterface` (CSV included).
+ *
+ * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait SoftDeletes
 {
     /**
-     * The column holding the soft-delete timestamp.
+     * The trait's read scope: exclude soft-deleted rows from every query.
      *
-     * Return `null` (the default) to use `deleted_at`. Override to rename —
-     * the returned name must match a declared `#[Column]` on the model.
-     *
-     * @return string|null
+     * @return list<ScopeCondition>
      */
-    public static function deletedAtColumn(): ?string
+    #[ModelScope]
+    public static function excludeTrashed(): array
     {
-        return null;
+        return [new ScopeCondition(self::softDeleteColumn(), WhereOperator::Null)];
     }
 
     /**
-     * The resolved soft-delete column name — the override when non-null,
-     * the `deleted_at` default otherwise.
+     * The trait's write hook: claim the delete() path and perform the
+     * soft delete — an UPDATE setting the delete timestamp.
      *
-     * @return string
+     * The `?bool` return IS the delete's outcome: `true` = soft-deleted,
+     * `false` = nothing to delete (unsaved or stale instance).
+     *
+     * @return bool|null
      */
-    private static function softDeleteColumn(): string
-    {
-        /** @phpstan-ignore nullCoalesce.expr (the trait is re-analyzed per using class — overrides narrowing deletedAtColumn() to non-nullable string make the left side look never-null there) */
-        return self::deletedAtColumn() ?? 'deleted_at';
-    }
-
-    /**
-     * Soft-delete the model — set the delete timestamp.
-     *
-     * Overrides the base Model's null-returning hook.
-     *
-     * @return bool
-     */
-    protected function performSoftDelete(): bool
+    #[WriteHook(Hook::Delete)]
+    protected function softDelete(): ?bool
     {
         if (!$this->exists) {
             // An unsaved (or already-deleted) model has no row to
@@ -93,12 +88,45 @@ trait SoftDeletes
     }
 
     /**
+     * The column holding the soft-delete timestamp.
+     *
+     * Return `null` (the default) to use `deleted_at`. Override to rename —
+     * the returned name must match a declared `#[Column]` on the model.
+     *
+     * @return string|null
+     */
+    public static function deletedAtColumn(): ?string
+    {
+        return null;
+    }
+
+    /**
+     * The resolved soft-delete column name — the override when non-null,
+     * the `deleted_at` default otherwise.
+     *
+     * @return string
+     */
+    private static function softDeleteColumn(): string
+    {
+        /** @phpstan-ignore nullCoalesce.expr (the trait is re-analyzed per using class — overrides narrowing deletedAtColumn() to non-nullable string make the left side look never-null there) */
+        return self::deletedAtColumn() ?? 'deleted_at';
+    }
+
+    /**
      * Permanently delete the model — the real DELETE.
+     *
+     * A `deleting` listener returning false vetoes the delete. The
+     * `#[WriteHook(Hook::Destroy)]` observers (audit traits) run before
+     * the DELETE; the hard DELETE itself is unclaimable.
      *
      * @return bool
      */
     public function forceDelete(): bool
     {
+        if (!$this->fireLifecycle('deleting')) {
+            return false;
+        }
+
         $deleted = $this->performDelete();
 
         if ($deleted) {

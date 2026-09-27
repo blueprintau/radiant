@@ -82,7 +82,8 @@ abstract class SchemaInspector
      * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $declaredType
      * @param  int|null  $declaredLength
      * @param  int|null  $declaredPrecision
+     * @param  int|null  $declaredScale  Fractional digits for a decimal column.
      * @return bool
      */
-    abstract public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength, int|null $declaredPrecision = null): bool;
+    abstract public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength, int|null $declaredPrecision = null, int|null $declaredScale = null): bool;
 }

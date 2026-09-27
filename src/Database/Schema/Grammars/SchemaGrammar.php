@@ -35,9 +35,10 @@ abstract class SchemaGrammar
      * @param  ColumnType  $type
      * @param  int|null  $length
      * @param  int|null  $precision  Fractional-seconds digits (1–6) for datetime types.
+     * @param  int|null  $scale  Fractional digits for a decimal column.
      * @return string
      */
-    abstract public function type(ColumnType $type, ?int $length = null, ?int $precision = null): string;
+    abstract public function type(ColumnType $type, ?int $length = null, ?int $precision = null, ?int $scale = null): string;
 
     /**
      * Compile a `CREATE TABLE` statement.
@@ -445,7 +446,7 @@ abstract class SchemaGrammar
     protected function compileColumnDefinition(array $column, bool $composite = false): string
     {
         $name = $this->wrap($column['name']);
-        $type = $this->type($column['type'], $column['length'], $column['precision']);
+        $type = $this->type($column['type'], $column['length'], $column['precision'], $column['scale']);
 
         // A composite PK has no generated id in the ORM's contract (the
         // caller assigns every key part — insertGetId is a single-column
@@ -476,13 +477,37 @@ abstract class SchemaGrammar
             // part of a composite PK must not also get an inline PRIMARY KEY.
             $column['primaryKey'] === true && !$composite ? 'PRIMARY KEY' : '',
             $afterKey ? $this->autoIncrement() : '',
+            $this->compileEnumCheckClause($column),
         ]);
+    }
+
+    /**
+     * The inline CHECK clause for an enum column — the portable enum
+     * rendering (a sized string constrained to its declared values).
+     *
+     * @param  ColumnShape  $column
+     * @return string
+     */
+    protected function compileEnumCheckClause(array $column): string
+    {
+        $values = $column['values'] ?? null;
+
+        if ($column['type'] !== ColumnType::Enum || $values === null || $values === []) {
+            return '';
+        }
+
+        $literals = implode(', ', array_map(
+            fn (string $value) => $this->quoteLiteral($value),
+            $values,
+        ));
+
+        return 'CHECK (' . $this->wrap($column['name']) . ' IN (' . $literals . '))';
     }
 
     /**
      * Compile a column default.
      *
-     * @param  mixed  $default
+     * @param  mixed  $default  A scalar or an Expression.
      * @return string
      * @throws \InvalidArgumentException
      */
@@ -532,14 +557,27 @@ abstract class SchemaGrammar
     }
 
     /**
-     * The parenthesized size suffix for a sized type — `(n)` when a size
-     * is declared, an empty string otherwise.
+     * The parenthesized suffix for a sized type — `(a,b)` when any part is
+     * non-null, an empty string when all are null.
      *
-     * @param  int|null  $size
+     * @param  \Stringable|int|null  ...$parts  The size parts (length, precision, scale).
      * @return string
      */
-    protected function typeSuffix(?int $size): string
+    protected function suffix(\Stringable|int|null ...$parts): string
     {
-        return $size === null ? '' : '(' . $size . ')';
+        // Drop the nulls, then stringify what's left. The filter is
+        // explicit (`!== null`), not the default falsy filter: a numeric
+        // part of 0 stringifies to '0', which is falsy and would be
+        // silently dropped.
+        $rendered = array_map(
+            fn (\Stringable|int $part): string => (string) $part,
+            array_filter($parts, fn (\Stringable|int|null $part): bool => $part !== null),
+        );
+
+        if ($rendered === []) {
+            return '';
+        }
+
+        return '(' . implode(',', $rendered) . ')';
     }
 }

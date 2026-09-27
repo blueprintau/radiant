@@ -124,15 +124,29 @@ final class ModelQueryBuilder extends QueryBuilder
     protected ?array $forcedKeySet = null;
 
     /**
+     * Whether this builder is a nested where group — nested builders skip
+     * trait-scope application (the scopes ride the OUTER builder; applying
+     * them here would recurse: whereNested → newNestedBuilder → ctor →
+     * whereNested).
+     *
+     * @var bool
+     */
+    private bool $nested = false;
+
+    /**
      * Create a builder bound to a model class on a connection.
      *
      * @param  class-string<TModel>  $modelClass
      * @param  ConnectionInterface  $connection
+     * @param  bool  $nested  Whether this builder is a nested where group (skips trait-scope application — the scopes ride the OUTER builder; applying them here would recurse).
      */
     public function __construct(
         public readonly string $modelClass,
         ConnectionInterface $connection,
+        bool $nested = false,
     ) {
+        $this->nested = $nested;
+
         $metadata = MetadataFactory::for($modelClass);
 
         $this->forcedKeys = array_values(array_filter(array_map(
@@ -178,26 +192,53 @@ final class ModelQueryBuilder extends QueryBuilder
             $this->insertIdColumn = $primaryKeys[0]->name;
             $this->insertIdAutoIncrement = $primaryKeys[0]->autoIncrement;
         }
-        // Auto-apply the soft-delete scope. The clause carries the
-        // `softDelete` marker so withTrashed()/onlyTrashed() can find and
-        // remove it by MARKER, not positional index — index-independent
-        // removal is robust under the builder's immutability (clones
-        // reindex nothing). The column name comes off the metadata — no
-        // trait static call on a class that may not have it. MTI: the
-        // scope qualifies to the OWNING table (the synthetic column lives
-        // where the trait declared it).
-        if ($metadata->softDeleteColumn !== null) {
-            $scopeColumn = $metadata->softDeleteColumn;
+        // Auto-apply every trait-declared scope. A trait's conditions group
+        // in ONE nested where group marked with the trait (`traitScope`
+        // marker) so the opt-outs (withTrashed/withoutScope/withoutScopes)
+        // strip the trait's whole scope atomically by MARKER, not positional
+        // index. Between traits the groups always AND — each trait's scope
+        // is a hard filter. MTI: the scope qualifies to the OWNING table
+        // (the column lives where the trait declared it).
+        // Nested builders skip this entirely — the scopes ride the OUTER
+        // builder; applying them here would recurse (whereNested →
+        // newNestedBuilder → ctor → whereNested).
+        $conditionsByTrait = [];
 
-            if (isset($this->partitions[$scopeColumn])) {
-                $scopeColumn = $this->partitions[$scopeColumn] . '.' . $scopeColumn;
+        if (!$this->nested) {
+            foreach ($metadata->traitScopes as ['trait' => $scopeTrait, 'condition' => $condition]) {
+                $conditionsByTrait[$scopeTrait][] = $condition;
             }
+        }
 
+        foreach ($conditionsByTrait as $scopeTrait => $conditions) {
             // The constructor is the ONE place a builder finalizes its own
             // state: the scope rides the instance being built, then is
-            // marked for withTrashed()/onlyTrashed() marker-based removal.
-            $scoped = $this->whereNull($scopeColumn);
-            $scoped->markLastWhereSoftDelete();
+            // marked for marker-based removal.
+            $scoped = $this->whereNested(
+                function (WhereBuilder $nested) use ($conditions): WhereBuilder {
+                    // WhereBuilder is immutable — each where() returns a
+                    // NEW facade; thread it through the loop.
+                    $builder = $nested;
+
+                    foreach ($conditions as $index => $condition) {
+                        $column = $condition->column;
+
+                        if (isset($this->partitions[$column])) {
+                            $column = $this->partitions[$column] . '.' . $column;
+                        }
+
+                        // The first condition in the group carries no
+                        // boolean — the group's internal join starts with
+                        // the SECOND condition's declared boolean.
+                        $builder = $index === 0
+                            ? $builder->where($column, $condition->operator, $condition->value)
+                            : $builder->where($column, $condition->operator, $condition->value, $condition->boolean);
+                    }
+
+                    return $builder;
+                },
+            );
+            $scoped->markLastWhereTraitScope($scopeTrait);
             $this->wheres = $scoped->getWheres();
         }
     }
@@ -606,7 +647,7 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     protected function newNestedBuilder(): QueryBuilder
     {
-        return new self($this->modelClass, $this->connection);
+        return new self($this->modelClass, $this->connection, nested: true);
     }
 
     /**
@@ -646,34 +687,20 @@ final class ModelQueryBuilder extends QueryBuilder
         return parent::orOn($first, $operator, $second);
     }
 
-    // ---- Soft-delete scope ----
+    // ---- Trait scopes ----
 
     /**
-     * Include soft-deleted rows — removes the auto-applied scope (and any
-     * `onlyTrashed()` NOT-NULL clause).
+     * Include soft-deleted rows — strips only the SoftDeletes scope.
      *
      * @return static
      */
     public function withTrashed(): static
     {
-        $wheres = $this->getWheres();
-
-        $filtered = array_values(array_filter(
-            $wheres,
-            fn(array $where): bool => !($where['softDelete'] ?? false),
-        ));
-
-        if ($filtered === $wheres) {
-            return $this; // nothing to remove — reuse the instance.
-        }
-
-        $clone = clone $this;
-        $clone->wheres = $filtered;
-        return $clone;
+        return $this->withoutScope(SoftDeletes::class);
     }
 
     /**
-     * Only soft-deleted rows — replaces the scope with a marked
+     * Only soft-deleted rows — strips the scope and adds a marked
      * `whereNotNull` so the toggle round-trips.
      *
      * @return static
@@ -698,9 +725,56 @@ final class ModelQueryBuilder extends QueryBuilder
         }
 
         $scoped = $cleared->whereNotNull($column);
-        $scoped->markLastWhereSoftDelete();
+        $scoped->markLastWhereTraitScope(SoftDeletes::class);
 
         $clone = clone $scoped;
+        return $clone;
+    }
+
+    /**
+     * Strip every where clause declared by one trait's scope.
+     *
+     * @param  class-string  $trait
+     * @return static
+     */
+    public function withoutScope(string $trait): static
+    {
+        $wheres = $this->getWheres();
+
+        $filtered = array_values(array_filter(
+            $wheres,
+            fn(array $where): bool => ($where['traitScope'] ?? null) !== $trait,
+        ));
+
+        if ($filtered === $wheres) {
+            return $this; // nothing to remove — reuse the instance.
+        }
+
+        $clone = clone $this;
+        $clone->wheres = $filtered;
+        return $clone;
+    }
+
+    /**
+     * Strip every trait-declared scope.
+     *
+     * @return static
+     */
+    public function withoutScopes(): static
+    {
+        $wheres = $this->getWheres();
+
+        $filtered = array_values(array_filter(
+            $wheres,
+            fn(array $where): bool => !array_key_exists('traitScope', $where),
+        ));
+
+        if ($filtered === $wheres) {
+            return $this; // nothing to remove — reuse the instance.
+        }
+
+        $clone = clone $this;
+        $clone->wheres = $filtered;
         return $clone;
     }
 

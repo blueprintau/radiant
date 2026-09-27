@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
@@ -358,19 +359,6 @@ abstract class Model
         return \Carbon\Carbon::now();
     }
 
-    /**
-     * Timestamp-stamping hook, called before the INSERT/UPDATE payload is
-     * built.
-     *
-     * The base implementation is a no-op; the {@see \BlueprintAU\Radiant\Timestamps}
-     * trait overrides it to stamp `created_at`/`updated_at` when the
-     * model's table declares those columns.
-     *
-     * @param  bool  $insert  Whether the write is an INSERT (both columns) or an UPDATE (`updated_at` only).
-     * @return void
-     */
-    protected function stampTimestamps(bool $insert): void {}
-
     // ---- Lifecycle callbacks ----
 
     /**
@@ -513,7 +501,9 @@ abstract class Model
     }
 
     /**
-     * Delete the model (soft-delete when the trait is used).
+     * Delete the model — a trait's `#[WriteHook(Hook::Delete)]` method may
+     * claim the delete (e.g. soft delete); with no claimant the row is
+     * hard-deleted.
      *
      * A `deleting` listener returning false vetoes the delete — the model
      * is untouched and `false` is reported.
@@ -526,14 +516,18 @@ abstract class Model
             return false;
         }
 
-        $softDeleted = $this->performSoftDelete();
+        $claimed = $this->dispatchWriteHooks(Hook::Delete);
 
-        if ($softDeleted !== null) {
-            if ($softDeleted) {
+        if ($claimed !== null) {
+            // The claiming trait owns the instance bookkeeping for its
+            // path — a soft delete leaves the row in the table (exists
+            // stays true; trashed() reflects state), while a stale
+            // instance clears it. Model only fires the event on success.
+            if ($claimed) {
                 $this->fireLifecycle('deleted');
             }
 
-            return $softDeleted;
+            return $claimed;
         }
 
         $hardDeleted = $this->performDelete();
@@ -546,17 +540,29 @@ abstract class Model
     }
 
     /**
-     * Soft-delete hook, called by `delete()` before the real DELETE.
+     * Dispatch one hook path's trait methods in collection order.
      *
-     * The base implementation returns null — the delete proceeds. The
-     * {@see \BlueprintAU\Radiant\SoftDeletes} trait overrides it to run the
-     * soft-delete UPDATE instead; a bool return short-circuits the hard
-     * delete.
+     * A `null` return is an observer — dispatch continues. A `bool`
+     * return claims the write and ends dispatch: `true` = performed and
+     * succeeded, `false` = owned and failed/refused.
      *
-     * @return bool|null Null when the model does not handle soft deletes.
+     * @param  Hook  $hook
+     * @return bool|null Null when no trait claimed the write.
      */
-    protected function performSoftDelete(): ?bool
+    final protected function dispatchWriteHooks(Hook $hook): ?bool
     {
+        foreach (MetadataFactory::for(static::class)->writeHooks as $entry) {
+            if ($entry['hook'] !== $hook) {
+                continue;
+            }
+
+            $result = $this->{$entry['method']}();
+
+            if ($result !== null) {
+                return $result;
+            }
+        }
+
         return null;
     }
 
@@ -565,11 +571,16 @@ abstract class Model
      *
      * @return bool
      */
-    protected function performDelete(): bool
+    final protected function performDelete(): bool
     {
         // A null key would compile to `WHERE pk IS NULL` — matching nothing,
         // or the wrong rows on dialects that permit NULL keys.
         $this->assertKeyResolvedForWrite();
+
+        // Destroy observers run on EVERY hard delete — delete() with no
+        // claimant AND forceDelete() — so audit traits always see the row
+        // going away. The hard DELETE itself is unclaimable.
+        $this->dispatchWriteHooks(Hook::Destroy);
 
         $metadata = MetadataFactory::for(static::class);
 
@@ -640,7 +651,7 @@ abstract class Model
      *
      * @return bool
      */
-    protected function performInsert(): bool
+    final protected function performInsert(): bool
     {
         $metadata = MetadataFactory::for(static::class);
 
@@ -656,11 +667,15 @@ abstract class Model
             return $inserted;
         }
 
-        // Timestamps trait hook — a no-op on models without the trait.
-        // Stamped values land on the properties BEFORE getColumnValues()
-        // builds the payload, so the insert carries them and syncOriginal()
-        // snapshots them.
-        $this->stampTimestamps(insert: true);
+        // Insert-path trait hooks — observers stamp values BEFORE
+        // getColumnValues() builds the payload, so the insert carries them
+        // and syncOriginal() snapshots them. A claimant performs the
+        // insert itself.
+        $claimed = $this->dispatchWriteHooks(Hook::Insert);
+
+        if ($claimed !== null) {
+            return $claimed;
+        }
 
         $values = $this->getColumnValues();
         $pks = static::getPrimaryKeys();
@@ -712,8 +727,16 @@ abstract class Model
      * @return bool
      * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
      */
-    protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): bool
+    final protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): bool
     {
+        // Insert-path trait hooks — MTI children get the same stamping as
+        // single-table models (the hook fires before the payload build).
+        $claimed = $this->dispatchWriteHooks(Hook::Insert);
+
+        if ($claimed !== null) {
+            return $claimed;
+        }
+
         // Fail fast with the MTI-specific message: the insert splits across
         // tables in one transaction, which only a SQL connection can do.
         $connection = static::connection();
@@ -888,7 +911,7 @@ abstract class Model
      * @param  string|int|null  $id
      * @return void
      */
-    protected function setPrimaryKey(string|int|null $id): void
+    final protected function setPrimaryKey(string|int|null $id): void
     {
         if ($id === null) {
             return;
@@ -909,13 +932,17 @@ abstract class Model
      *
      * @return bool
      */
-    protected function performUpdate(): bool
+    final protected function performUpdate(): bool
     {
-        // Timestamps trait hook — a no-op on models without the trait.
-        // Stamping BEFORE getDirty() means the bumped `updated_at` shows up
-        // in the dirty set (and a no-op update with no other changes still
-        // writes the new stamp).
-        $this->stampTimestamps(insert: false);
+        // Update-path trait hooks — stamping BEFORE getDirty() means the
+        // bumped values show up in the dirty set (and a no-op update with
+        // no other changes still writes the stamp). A claimant performs
+        // the update itself.
+        $claimed = $this->dispatchWriteHooks(Hook::Update);
+
+        if ($claimed !== null) {
+            return $claimed;
+        }
 
         $dirty = $this->getDirty();
 
@@ -939,8 +966,16 @@ abstract class Model
      *
      * @return bool
      */
-    protected function performMtiUpdate(): bool
+    final protected function performMtiUpdate(): bool
     {
+        // Update-path trait hooks — MTI children get the same stamping as
+        // single-table models.
+        $claimed = $this->dispatchWriteHooks(Hook::Update);
+
+        if ($claimed !== null) {
+            return $claimed;
+        }
+
         $metadata = MetadataFactory::for(static::class);
         $dirty = $this->getDirty();
 
@@ -1016,7 +1051,7 @@ abstract class Model
      *
      * @return array<string, mixed>
      */
-    protected function getDirty(): array
+    final protected function getDirty(): array
     {
         $dirty = [];
 
@@ -1034,7 +1069,7 @@ abstract class Model
      *
      * @return void
      */
-    protected function syncOriginal(): void
+    final protected function syncOriginal(): void
     {
         $this->original = $this->getColumnValues();
     }
@@ -1319,7 +1354,7 @@ abstract class Model
      *
      * @return array<string, mixed>
      */
-    protected function getColumnValues(): array
+    final protected function getColumnValues(): array
     {
         $values = [];
 
@@ -1361,7 +1396,7 @@ abstract class Model
      * @param  mixed  $value
      * @return mixed
      */
-    protected function castForWrite(string $columnName, mixed $value): mixed
+    final protected function castForWrite(string $columnName, mixed $value): mixed
     {
         $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
 
