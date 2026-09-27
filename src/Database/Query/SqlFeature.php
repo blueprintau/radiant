@@ -58,6 +58,10 @@ enum SqlFeature: string
             $query->getColumns(),
             fn(string|Expression|Aggregate $column) => $column instanceof Expression,
         );
+        $rawHaving = array_filter(
+            $query->getHavings(),
+            fn(array $having) => $having['column'] instanceof Expression,
+        );
 
         if ($query->getJoins() !== []) {
             $used[] = self::Joins;
@@ -71,7 +75,7 @@ enum SqlFeature: string
         ) {
             $used[] = self::Aggregates;
         }
-        if ($rawWhere !== [] || $rawOrderBy !== [] || $rawSelect !== []) {
+        if ($rawWhere !== [] || $rawOrderBy !== [] || $rawSelect !== [] || $rawHaving !== []) {
             $used[] = self::RawSql;
         }
         if ($query->getFromAlias() !== null) {

@@ -781,5 +781,22 @@ final class GrammarTest extends TestCase
             SqlFeature::Aggregates,
             SqlFeature::usedBy($this->builder()->groupBy('status')),
         );
+
+        // Raw-SQL detection covers every Expression position: where, select,
+        // order by — and having. A having-Expression must flag RawSql so a
+        // feature-gated connection (CSV) fails fast instead of compiling
+        // SQL it cannot evaluate.
+        self::assertContains(
+            SqlFeature::RawSql,
+            SqlFeature::usedBy($this->builder()->having(new Expression('lower(name)'), WhereOperator::Eq, 'ada')),
+        );
+        self::assertContains(
+            SqlFeature::RawSql,
+            SqlFeature::usedBy($this->builder()->select(new Expression('1'))),
+        );
+        self::assertContains(
+            SqlFeature::RawSql,
+            SqlFeature::usedBy($this->builder()->orderBy(new Expression('lower(name)'))),
+        );
     }
 }
