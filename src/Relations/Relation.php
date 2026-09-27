@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
+use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Concerns\FiltersQuery;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
+use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
@@ -50,6 +52,15 @@ abstract class Relation
      * load simply runs a few queries instead of failing.
      */
     protected const EAGER_KEY_CHUNK = 500;
+
+    /**
+     * The internal result alias for a grouped aggregate's value column.
+     *
+     * The same convention as the builder's scalar reads: a stable alias
+     * keeps the value readable regardless of how each driver names an
+     * unaliased aggregate column.
+     */
+    private const AGGREGATE_ALIAS = 'radiant_aggregate';
 
     /**
      * The query builder for the related model.
@@ -506,6 +517,117 @@ n     *
         $clone->query = $this->compositionQuery()->having($column, $operator, $value);
 
         return $clone;
+    }
+
+    /**
+     * Run one aggregate per group of the related rows — a grouped
+     * aggregate in a single query.
+     *
+     * The FK constraint rides along automatically: the groups only ever
+     * cover THIS parent's related rows. The result is keyed by the group
+     * column's value, so the aggregate's own alias is ignored here (it
+     * matters only for the multi-aggregate row shape of the builder's
+     * aggregates()).
+     *
+     * The value type follows the aggregate: `count` yields int;
+     * `sum`/`avg` over numeric columns yield int|float; `min`/`max` yield
+     * the column's decoded type (a datetime column yields Carbon); custom
+     * functions and Expression arguments yield the raw driver value. For
+     * a guaranteed-numeric grouped count, use {@see Relation::countBy()}.
+     *
+     * @param  Aggregate  $aggregate  The aggregate to compute per group.
+     * @param  string  $groupBy  The column whose values key the result.
+     * @return BaseCollection<string, mixed>
+     * @throws \LogicException  On a relation whose query is built lazily (MorphTo).
+     */
+    final public function aggregateBy(Aggregate $aggregate, string $groupBy): BaseCollection
+    {
+        $rows = $this->compositionQuery()
+            ->select($groupBy, new Aggregate($aggregate->function, $aggregate->column, self::AGGREGATE_ALIAS))
+            ->groupBy($groupBy)
+            ->getRaw();
+
+        $out = [];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->{$groupBy};
+            $raw = $row->{self::AGGREGATE_ALIAS};
+
+            $out[$key] = $aggregate->function === 'count'
+                ? (int) $raw
+                : $this->decodeAggregate($aggregate->column, $raw);
+        }
+
+        /** @var BaseCollection<string, mixed> */
+        return BaseCollection::make($out);
+    }
+
+    /**
+     * Count the related rows per group of a column — in a single query.
+     *
+     * The FK constraint rides along automatically: the counts only ever
+     * cover THIS parent's related rows. The result is keyed by the group
+     * column's value with int counts.
+     *
+     * The optional seed lists group values that must appear even when the
+     * database has no rows for them — each seeded key absent from the
+     * result becomes 0. The seed is ADDITIVE: database rows always win,
+     * and group values found in the data but missing from the seed still
+     * appear. (Only counts can be seeded — an absent group has no honest
+     * min, max, or average.)
+     *
+     * @param  string  $column  The column whose values key the result.
+     * @param  list<int|string>|null  $seed  Group values guaranteed to appear (0 when absent).
+     * @return BaseCollection<string, int>
+     * @throws \LogicException  On a relation whose query is built lazily (MorphTo).
+     */
+    final public function countBy(string $column, ?array $seed = null): BaseCollection
+    {
+        /** @var BaseCollection<string, int> $counts */
+        $counts = $this->aggregateBy(Aggregate::count('*'), $column);
+
+        if ($seed !== null) {
+            $out = $counts->all();
+
+            foreach ($seed as $value) {
+                $key = (string) $value;
+                $out[$key] ??= 0;
+            }
+
+            /** @var BaseCollection<string, int> */
+            return BaseCollection::make($out);
+        }
+
+        return $counts;
+    }
+
+    /**
+     * Decode one grouped-aggregate value when the aggregated column is a
+     * declared model column.
+     *
+     * Mirrors the builder's scalar decode: declared columns decode
+     * through the column's cast, everything else (raw SQL, Expression
+     * arguments, computed values) passes through raw.
+     *
+     * @param  string|Expression  $column
+     * @param  mixed  $raw
+     * @return mixed
+     */
+    private function decodeAggregate(string|Expression $column, mixed $raw): mixed
+    {
+        if ($column instanceof Expression || $raw === null) {
+            return $raw;
+        }
+
+        $metadata = MetadataFactory::for($this->related);
+
+        if (!$metadata->hasColumn($column)) {
+            return $raw;
+        }
+
+        $mapping = $metadata->mappingFor($column);
+
+        return $mapping->column->decode($raw, $mapping->propertyType);
     }
 
     /**

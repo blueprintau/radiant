@@ -5,6 +5,7 @@ return relation objects; the method name is the relation's key.
 
 - [Declaring a relation](#declaring-a-relation)
 - [Filtering and composing](#filtering-and-composing)
+- [Grouped aggregates](#grouped-aggregates)
 - [Key conventions](#key-conventions)
 - [Eager loading](#eager-loading)
 - [The model Collection](#the-model-collection)
@@ -74,6 +75,42 @@ one throws `MultipleRecordsFoundException`).
 is cache-aware (see [Eager loading](#eager-loading) — after `with()`, the
 unfiltered read returns the loaded result), while `firstOrFail()` and
 `sole()` always execute against the database.
+
+## Grouped aggregates
+
+`countBy()` counts the related rows per group of a column in a single
+`GROUP BY` query — the FK constraint rides along, so the counts only
+ever cover this parent's related rows:
+
+```php
+$counts = $event->rsvps()->countBy('status');
+// ['going' => 12, 'declined' => 3, 'maybe' => 5]
+```
+
+An optional seed lists group values that must appear even when the
+database has no rows for them — each seeded key absent from the result
+becomes `0`. The seed is additive: database rows always win, and group
+values present in the data but missing from the seed still appear.
+
+```php
+$counts = $event->rsvps()->countBy('status', ['going', 'declined', 'maybe']);
+```
+
+`aggregateBy()` is the general form — any aggregate per group. The value
+type follows the aggregate: `count` yields int; `sum`/`avg` over numeric
+columns yield int|float; `min`/`max` yield the column's decoded type (a
+datetime column yields Carbon); custom functions and `Expression`
+arguments yield the raw driver value. A group whose aggregated values
+are all NULL sums to `null` — the SQL-honest result, not a coerced zero.
+
+```php
+use BlueprintAU\Radiant\Database\Query\Aggregate;
+
+$totals = $event->rsvps()->aggregateBy(Aggregate::sum('amount'), 'status');
+```
+
+Both are reads, not compositions: they never mark the relation composed,
+so a later `getResults()` is unaffected.
 
 ## Key conventions
 

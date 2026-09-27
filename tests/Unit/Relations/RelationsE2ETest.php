@@ -7,6 +7,8 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
+use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
@@ -127,6 +129,22 @@ class RelPost extends Model
     public string $title;
 
     /**
+     * A groupable status label (the countBy/aggregateBy fixture column).
+     *
+     * @var string|null
+     */
+    #[Column(type: ColumnType::String, length: 16, nullable: true)]
+    public ?string $status;
+
+    /**
+     * A summable counter (the aggregateBy decode fixture column).
+     *
+     * @var int|null
+     */
+    #[Column(type: ColumnType::Int, nullable: true)]
+    public ?int $views;
+
+    /**
      * The post's author (inverse).
      *
      * @return \BlueprintAU\Radiant\Relations\BelongsTo<RelUser>
@@ -239,7 +257,9 @@ final class RelationsE2ETest extends DatabaseTestCase
             (new Blueprint('rel_posts'))
                 ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
                 ->column(ColumnType::BigInt, 'author_id', nullable: true)
-                ->column(ColumnType::String, 'title', length: 255),
+                ->column(ColumnType::String, 'title', length: 255)
+                ->column(ColumnType::String, 'status', length: 16, nullable: true)
+                ->column(ColumnType::Int, 'views', nullable: true),
             (new Blueprint('rel_teams'))
                 ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
                 ->column(ColumnType::BigInt, 'owner_id')
@@ -262,16 +282,20 @@ final class RelationsE2ETest extends DatabaseTestCase
         $user->email = 'alicia@example.com';
         $user->save();
 
-        foreach (['First', 'Second'] as $title) {
+        foreach (['First' => 'published', 'Second' => 'draft'] as $title => $status) {
             $post = new RelPost();
             $post->authorId = $user->id;
             $post->title = $title;
+            $post->status = $status;
+            $post->views = $title === 'First' ? 10 : null;
             $post->save();
         }
 
         $orphan = new RelPost();
         $orphan->authorId = null;
         $orphan->title = 'Orphan';
+        $orphan->status = 'published';
+        $orphan->views = 5;
         $orphan->save();
 
         $team = new RelTeam();
@@ -695,6 +719,78 @@ final class RelationsE2ETest extends DatabaseTestCase
     }
 
     /**
+     * countBy groups THIS parent's related rows only: the orphan post's
+     * identical status never leaks into the user's counts, and the FK
+     * constraint rides the grouped query automatically.
+     */
+    public function testCountByGroupsRelatedRows(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $counts = $user->posts()->countBy('status');
+
+        self::assertSame(1, $counts['published']);
+        self::assertSame(1, $counts['draft']);
+        self::assertCount(2, $counts);
+    }
+
+    /**
+     * The countBy seed is ADDITIVE: seeded-but-absent groups become 0,
+     * database rows always win, and a group value present in the data
+     * but missing from the seed still appears — the seed never hides data.
+     */
+    public function testCountBySeedIsAdditive(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        // A status the seed list does not know about.
+        $post = new RelPost();
+        $post->authorId = $user->id;
+        $post->title = 'Review';
+        $post->status = 'review';
+        $post->save();
+
+        $counts = $user->posts()->countBy('status', ['published', 'draft', 'archived']);
+
+        self::assertSame(1, $counts['published']);
+        self::assertSame(1, $counts['draft']);
+        self::assertSame(0, $counts['archived']);
+        self::assertSame(1, $counts['review']);
+    }
+
+    /**
+     * An Expression aggregate argument passes through raw: count over a
+     * CASE counts only the rows where the CASE yields a value.
+     */
+    public function testAggregateByExpressionPassesThroughRaw(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $counts = $user->posts()->aggregateBy(
+            new Aggregate('count', new Expression("case when status = 'draft' then 1 end")),
+            'status',
+        );
+
+        self::assertSame(1, $counts['draft']);
+        self::assertSame(0, $counts['published']);
+    }
+
+    /**
+     * countBy runs its own grouped query on a scoped clone — the
+     * relation's builder is untouched, so a later getResults() still
+     * returns every post (the read never marks the relation composed).
+     */
+    public function testCountByLeavesTheRelationUntouched(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $relation = $user->posts();
+        $relation->countBy('status');
+
+        self::assertCount(2, $relation->getResults());
+    }
+
+    /**
      * The fail-fast cross-check: an unknown FK column throws at relation
      * construction.
      */
@@ -721,5 +817,127 @@ final class RelationsE2ETest extends DatabaseTestCase
         $second->save();
 
         return $second;
+    }
+
+    /**
+     * countBy groups the related rows per status — the FK constraint
+     * keeps other authors' rows out of the counts.
+     */
+    public function testCountByGroupsPerStatus(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('author_id', '=', $user->id)->update(['status' => 'going']);
+        $this->connection->table('rel_posts')->where('title', '=', 'Orphan')->update(['status' => 'going']);
+
+        $counts = $user->posts()->countBy('status');
+
+        // The orphan shares the status but not the author — excluded.
+        self::assertSame(['going' => 2], $counts->all());
+    }
+
+    /**
+     * The seed is ADDITIVE: seeded keys absent from the data become 0,
+     * database rows always win, and unlisted group values still appear.
+     */
+    public function testCountBySeedFillsAbsentGroupsAndKeepsUnknown(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('title', '=', 'First')->update(['status' => 'going']);
+        $this->connection->table('rel_posts')->where('title', '=', 'Second')->update(['status' => 'cancelled']);
+
+        $counts = $user->posts()->countBy('status', ['going', 'declined', 'maybe']);
+
+        self::assertSame(1, $counts['going']);
+        self::assertSame(0, $counts['declined']);
+        self::assertSame(0, $counts['maybe']);
+        self::assertSame(1, $counts['cancelled'], 'an unlisted database value still appears');
+        self::assertCount(4, $counts);
+    }
+
+    /**
+     * countBy rides on top of composed filters — the where constrains
+     * the grouped query too.
+     */
+    public function testCountByRespectsComposedFilters(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('title', '=', 'First')->update(['status' => 'going']);
+        $this->connection->table('rel_posts')->where('title', '=', 'Second')->update(['status' => 'declined']);
+
+        $counts = $user->posts()->where('title', '=', 'First')->countBy('status');
+
+        self::assertSame(['going' => 1], $counts->all());
+    }
+
+    /**
+     * aggregateBy sums a declared column per group, decoded through the
+     * column's cast — and the FK constraint excludes other authors' rows.
+     */
+    public function testAggregateBySumsPerGroup(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('title', '=', 'First')->update(['status' => 'going', 'views' => 10]);
+        $this->connection->table('rel_posts')->where('title', '=', 'Second')->update(['status' => 'going', 'views' => 5]);
+        $this->connection->table('rel_posts')->where('title', '=', 'Orphan')->update(['status' => 'going', 'views' => 100]);
+
+        $sums = $user->posts()->aggregateBy(Aggregate::sum('views'), 'status');
+
+        // The orphan's 100 views share the status but not the author.
+        self::assertSame(15, $sums['going']);
+    }
+
+    /**
+     * A group whose aggregated values are ALL null sums to null — the
+     * SQL-honest result, not a coerced zero.
+     */
+    public function testAggregateByAllNullGroupIsNull(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('author_id', '=', $user->id)->update(['status' => 'going', 'views' => null]);
+
+        $sums = $user->posts()->aggregateBy(Aggregate::sum('views'), 'status');
+
+        self::assertSame(['going' => null], $sums->all());
+    }
+
+    /**
+     * An Expression aggregate argument passes through raw — the
+     * conditional-count pattern works on SQL connections.
+     */
+    public function testAggregateByAcceptsExpressionArgument(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('title', '=', 'First')->update(['status' => 'going']);
+        $this->connection->table('rel_posts')->where('title', '=', 'Second')->update(['status' => 'declined']);
+
+        $going = $user->posts()->aggregateBy(
+            new Aggregate('count', new Expression("case when status = 'going' then 1 end")),
+            'status',
+        );
+
+        self::assertSame(1, $going['going']);
+        self::assertSame(0, $going['declined']);
+    }
+
+    /**
+     * countBy is a READ, not a composition: it does not mark the
+     * relation composed, so a later getResults() is unaffected.
+     */
+    public function testCountByLeavesRelationUncomposed(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $this->connection->table('rel_posts')->where('author_id', '=', $user->id)->update(['status' => 'going']);
+
+        $relation = $user->posts();
+        $relation->countBy('status');
+
+        self::assertCount(2, $relation->getResults());
     }
 }

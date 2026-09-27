@@ -455,4 +455,20 @@ final class PolymorphicE2ETest extends DatabaseTestCase
             $this->connection->grammar->compileSelect($relation->getQuery()),
         );
     }
+
+    /**
+     * MorphTo builds its query lazily per resolved type, so a grouped
+     * aggregate cannot compose — the same LogicException as every other
+     * composition method.
+     */
+    public function testMorphToCountByThrows(): void
+    {
+        $comment = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessage('cannot compose filters');
+
+        $comment->commentable()->countBy('id');
+    }
 }
