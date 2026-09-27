@@ -84,6 +84,7 @@ final class Column
 
         $compatible = self::typeCompatibility()[$propertyType]
             ?? $this->enumCompatibility($propertyType)
+            ?? $this->objectCompatibility($propertyType)
             ?? [];
 
         if (in_array($this->type, $compatible, true)) {
@@ -153,6 +154,26 @@ final class Column
         }
 
         return [ColumnType::String, ColumnType::Char, ColumnType::Enum];
+    }
+
+    /**
+     * The compatible column types for an object property type — a
+     * JsonStorable class-string stores in a Json column.
+     *
+     * @param  string  $propertyType
+     * @return list<ColumnType>|null Null when the type is not a class.
+     */
+    private function objectCompatibility(string $propertyType): array|null
+    {
+        if (!class_exists($propertyType) || interface_exists($propertyType)) {
+            return null;
+        }
+
+        if (!is_a($propertyType, \BlueprintAU\Radiant\Database\Query\JsonStorable::class, true)) {
+            return null;
+        }
+
+        return [ColumnType::Json];
     }
 
     /**
@@ -363,7 +384,9 @@ final class Column
             'float' => (float) $value,
             'bool' => (bool) $value,
             'array' => $this->decodeJson($value),
-            default => $this->decodeString($value),
+            default => $this->type === ColumnType::Json && $propertyType !== null && class_exists($propertyType)
+                ? $this->decodeJsonObject($value, $propertyType)
+                : $this->decodeString($value),
         };
     }
 
@@ -399,17 +422,122 @@ final class Column
     }
 
     /**
+     * Encode a Json column cell — strict, with the failure named.
+     *
+     * An array encodes directly; a JsonSerializable object encodes via
+     * jsonSerialize(); an already-encoded string passes through.
+     *
+     * @param  mixed  $value
+     * @param  string|null  $propertyType
+     * @return string
+     * @throws \RuntimeException
+     */
+    private function encodeJson(mixed $value, ?string $propertyType = null): string
+    {
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if ($propertyType !== null && class_exists($propertyType) && !$value instanceof \JsonSerializable) {
+            throw new \InvalidArgumentException(
+                'Column [' . ($this->name ?? $propertyType) . '] expects a '
+                    . $propertyType . ' value; got ' . get_debug_type($value) . '.'
+            );
+        }
+
+        try {
+            return json_encode($value, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? $propertyType) . '] could not encode the value ['
+                    . get_debug_type($value) . '] as JSON: ' . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
+    }
+
+    /**
+     * Encode an object value for a Json column — the value must be an
+     * instance of the property's class.
+     *
+     * @param  mixed  $value
+     * @param  string  $propertyType
+     * @return string
+     * @throws \InvalidArgumentException
+     */
+    private function encodeJsonObject(mixed $value, string $propertyType): string
+    {
+        // Idempotent on already-encoded input — the builder's write path
+        // re-encodes values that getColumnValues() already encoded (the
+        // same trade encodeJson() makes: an encoded string cell is
+        // indistinguishable from a raw one).
+        if (is_string($value)) {
+            return $value;
+        }
+
+        if (!$value instanceof $propertyType) {
+            throw new \InvalidArgumentException(
+                'Column [' . ($this->name ?? $propertyType) . '] expects a '
+                    . $propertyType . ' value; got ' . get_debug_type($value) . '.'
+            );
+        }
+
+        return $this->encodeJson($value, $propertyType);
+    }
+
+    /**
      * Decode a JSON column cell — strict, with the failure named.
      *
      * @param  mixed  $value
+     * @param  bool  $associative  True returns arrays for objects; false returns stdClass instances.
      * @return mixed
      * @throws \RuntimeException
      */
-    private function decodeJson(mixed $value): mixed
+    private function decodeJson(mixed $value, bool $associative = true): mixed
     {
-        $decoded = json_decode((string) $value, true, 512, JSON_THROW_ON_ERROR);
+        try {
+            return json_decode((string) $value, $associative, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $e) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? 'json') . '] could not decode the value ['
+                    . var_export($value, true) . '] as JSON: ' . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
+    }
 
-        return $decoded;
+    /**
+     * Decode a JSON column cell to the property's JsonStorable type.
+     *
+     * @param  mixed  $value
+     * @param  string  $propertyType
+     * @return object
+     * @throws \RuntimeException
+     * @throws \InvalidArgumentException
+     */
+    private function decodeJsonObject(mixed $value, string $propertyType): object
+    {
+        if (!is_a($propertyType, \BlueprintAU\Radiant\Database\Query\JsonStorable::class, true)) {
+            throw new \InvalidArgumentException(
+                'Column [' . ($this->name ?? $propertyType) . '] declares the object type ['
+                    . $propertyType . '], which does not implement JsonStorable.'
+            );
+        }
+
+        // The shape check rides the same decode the hydration uses: a JSON
+        // object yields stdClass, a JSON array yields a list.
+        $payload = $this->decodeJson($value, associative: false);
+
+        if (!$payload instanceof \stdClass) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? $propertyType) . '] holds the value ['
+                    . var_export($value, true) . '], which does not decode to a JSON object.'
+            );
+        }
+
+        return $propertyType::jsonDeserialize($payload);
     }
 
     /**
@@ -448,6 +576,10 @@ final class Column
 
         if ($propertyType !== null && $this->isEnumPropertyType($propertyType)) {
             return $this->encodeEnum($value, $propertyType);
+        }
+
+        if ($propertyType !== null && $this->type === ColumnType::Json && class_exists($propertyType)) {
+            return $this->encodeJsonObject($value, $propertyType);
         }
 
         if ($this->type === ColumnType::Uuid && is_string($value)) {
@@ -586,21 +718,5 @@ final class Column
         // date chars + the dot + 6 fraction digits), so truncating to
         // 20 + precision keeps the fraction exact and never cuts the date.
         return substr($utc->format('Y-m-d H:i:s.u'), 0, 20 + ($this->precision ?? 6));
-    }
-
-    /**
-     * Encode a JSON column value — idempotent on already-encoded input.
-     *
-     * @param  mixed  $value
-     * @return string
-     * @throws \JsonException
-     */
-    private function encodeJson(mixed $value): string
-    {
-        if (is_string($value)) {
-            return $value;
-        }
-
-        return json_encode($value, JSON_THROW_ON_ERROR);
     }
 }
