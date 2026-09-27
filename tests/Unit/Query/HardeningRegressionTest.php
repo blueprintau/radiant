@@ -154,6 +154,62 @@ final class HardeningRegressionTest extends TestCase
     }
 
     /**
+     * Injection-shaped where-operator payloads — all must be rejected.
+     *
+     * @return iterable<string, array{0: string}> The payloads.
+     */
+    public static function whereOperatorProvider(): iterable
+    {
+        yield 'or injection' => ['= 1 OR 1=1 --'];
+        yield 'stacked statement' => ['=; DROP TABLE users; --'];
+        yield 'subquery payload' => ['= (SELECT password FROM users)'];
+        yield 'empty' => [''];
+        yield 'whitespace garbage' => ['  '];
+        yield 'unknown word' => ['REGEXP'];
+    }
+
+    /**
+     * where() must reject anything that is not a WhereOperator case —
+     * with a clear InvalidArgumentException, not a bare ValueError.
+     *
+     * @param string $operator The payload.
+     */
+    #[DataProvider('whereOperatorProvider')]
+    public function testWhereRejectsInvalidOperators(string $operator): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid where operator');
+        $this->builder()->where('a', $operator, 1);
+    }
+
+    /**
+     * having() resolves through the same checked path.
+     */
+    public function testHavingRejectsInvalidOperators(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid where operator');
+        $this->builder()->having('count', '=>', 1);
+    }
+
+    /**
+     * Case-insensitive operator strings are accepted and normalized.
+     */
+    public function testWhereAcceptsCaseInsensitiveOperators(): void
+    {
+        $b = $this->builder()
+            ->where('a', 'like', '%x%')
+            ->where('b', 'not in', [1, 2])
+            ->where('c', 'between', [1, 10]);
+
+        $sql = (new MySqlGrammar())->compileSelect($b);
+
+        $this->assertStringContainsString('`a` LIKE', $sql);
+        $this->assertStringContainsString('`b` NOT IN', $sql);
+        $this->assertStringContainsString('`c` BETWEEN', $sql);
+    }
+
+    /**
      * Union bindings are captured EAGERLY at union() call time — the
      * sub-builder is a frozen value when captured (value semantics), so
      * its placeholders match its bindings in compiled order.

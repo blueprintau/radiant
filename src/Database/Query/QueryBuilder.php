@@ -447,7 +447,7 @@ class QueryBuilder
      */
     public function where(string|Expression $column, WhereOperator|string $operator, mixed $value, WhereBoolean $boolean = WhereBoolean::And): static
     {
-        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
+        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::fromChecked($operator);
 
         if ($operator === WhereOperator::In || $operator === WhereOperator::NotIn) {
             if (!is_array($value)) {
@@ -666,7 +666,7 @@ class QueryBuilder
      */
     public function having(string|Expression|Aggregate $column, WhereOperator|string $operator, mixed $value): static
     {
-        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::from(strtoupper($operator));
+        $operator = $operator instanceof WhereOperator ? $operator : WhereOperator::fromChecked($operator);
         $clone = clone $this;
         $clone->havings[] = ['type' => WhereType::Basic, 'column' => $column, 'operator' => $operator, 'value' => $value];
         if ($value !== null && !$value instanceof Expression && !$value instanceof ToSqlValue) {

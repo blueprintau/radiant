@@ -56,4 +56,21 @@ enum WhereOperator: string
 
     /** `IS NOT NULL`. */
     case NotNull = 'NOT NULL';
+
+    /**
+     * Resolve a string to a case, failing fast on anything else.
+     *
+     * @param  string  $operator
+     * @return self
+     * @throws \InvalidArgumentException
+     */
+    public static function fromChecked(string $operator): self
+    {
+        return self::tryFrom($operator)
+            ?? self::tryFrom(strtoupper($operator))
+            ?? throw new \InvalidArgumentException(
+                "Invalid where operator [{$operator}]. Expected one of: =, !=, <, <=, >, >=, "
+                . 'LIKE, NOT LIKE, IN, NOT IN, IS, IS NOT, BETWEEN, NOT BETWEEN, IS NULL, IS NOT NULL.'
+            );
+    }
 }
