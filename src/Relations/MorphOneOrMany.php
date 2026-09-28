@@ -11,15 +11,12 @@ use BlueprintAU\Radiant\Model;
 /**
  * The shared base of the polymorphic one-to-one/one-to-many relations.
  *
- * A morph relation is a HasMany whose FK match carries a SECOND constraint:
- * the related rows must also declare THIS parent's morph alias in the
- * `{name}_type` column. Two parents of different classes can share the same
- * `{name}_id` value — the type column is what keeps their children apart.
- *
- * The morph alias is the parent model's FULL class-string (FQCN): stable
- * under namespaces, unambiguous across modules, and the same value the
- * inverse {@see MorphTo} dispatches on. Renaming a class changes the stored
- * alias — a data-migration concern, documented in docs/relations.md.
+ * A morph relation is a HasMany whose FK match carries a second
+ * constraint: the related rows must also declare this parent's morph
+ * alias in the `{name}_type` column. The alias is the parent model's full
+ * class-string — the same value the inverse {@see MorphTo} dispatches on;
+ * renaming a class changes the stored alias, a data-migration concern
+ * documented in docs/relations.md.
  *
  * @template TRelated of Model
  * @extends Relation<TRelated>

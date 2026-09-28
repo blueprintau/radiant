@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\DuplicateMorphs;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\JsonKeyMorphs;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphDeclared;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphReaction;
@@ -211,4 +212,13 @@ final class MorphsAttributeTest extends DatabaseTestCase
 
         MetadataFactory::for(UuidMorphMismatch::class);
     }
-}
+    /**
+     * A keyType that cannot hold a primary-key value is a build error.
+     */
+    public function testNonPkCapableKeyTypeFailsFast(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('cannot hold a primary-key value');
+
+        MetadataFactory::for(JsonKeyMorphs::class);
+    }}

@@ -82,6 +82,14 @@ final class Column
             );
         }
 
+        if ($this->primaryKey && !$this->type->primaryKeyCapable()) {
+            throw new \InvalidArgumentException(
+                "Model [{$class}] property [{$property}] declares a [{$this->type->value}] "
+                . 'column as the primary key; a primary key requires an integer, string, char, '
+                . 'or uuid type.'
+            );
+        }
+
         $compatible = self::typeCompatibility()[$propertyType]
             ?? $this->enumCompatibility($propertyType)
             ?? $this->objectCompatibility($propertyType)

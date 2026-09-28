@@ -13,6 +13,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\AlignedDefaultModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ArityMismatchModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteBase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteUser;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\JsonPrimaryKey;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Contractor;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ColumnAddingAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\CustomDeletedAtPost;
@@ -118,6 +119,17 @@ final class MetadataFactoryTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('string column without a length');
         MetadataFactory::for(LengthlessStringModel::class);
+    }
+
+    /**
+     * A primary key on a non-PK-capable column type is a fail-fast
+     * metadata error.
+     */
+    public function testNonPkCapablePrimaryKeyThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('requires an integer, string, char, or uuid type');
+        MetadataFactory::for(JsonPrimaryKey::class);
     }
 
     /**

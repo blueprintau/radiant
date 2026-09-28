@@ -53,4 +53,17 @@ enum ColumnType: string
 
     /** A RFC 4122 UUID (fixed 36 characters). */
     case Uuid = 'uuid';
+
+    /**
+     * Whether this type can hold a primary-key (or morph-key) value.
+     *
+     * @return bool
+     */
+    public function primaryKeyCapable(): bool
+    {
+        return match ($this) {
+            ColumnType::BigInt, ColumnType::Int, ColumnType::String, ColumnType::Char, ColumnType::Uuid => true,
+            default => false,
+        };
+    }
 }

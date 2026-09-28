@@ -9,20 +9,16 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Model;
 
 /**
- * Many-to-many POLYMORPHIC: the pivot's parent-side key is a (type, key)
- * pair, so models of ANY class can share the same related pool through
- * one pivot table (`Post` and `Video` both tag through `taggables`).
+ * Many-to-many polymorphic: the pivot's parent-side key is a (type, key)
+ * pair, so models of any class share the same related pool through one
+ * pivot table.
  *
- * The pivot carries `{morphName}_id` + `{morphName}_type` on the parent
- * side and `{relatedTable}_id` on the related side. Every query — lazy
- * and eager — filters the type column to THIS parent's morph alias (the
- * FQCN convention {@see MorphOneOrMany} writes), and the write API
- * stamps the alias on every inserted row.
- *
- * `morphedByMany()` is the INVERSE direction: the parent is the RELATED
- * side of the pivot (a `Tag` lists every post and video tagged with it).
- * The constructor's `$inverse` flag swaps which side's alias filters the
- * type column and which side's key the queries filter on.
+ * Every query — lazy and eager — filters the type column to this side's
+ * morph alias (the FQCN convention {@see MorphOneOrMany} writes), and the
+ * write API stamps the alias on every inserted row. `morphedByMany()` is
+ * the inverse direction: the constructor's `$inverse` flag swaps which
+ * side's alias filters the type column and which side's key the queries
+ * filter on.
  *
  * @template TRelated of Model
  * @extends BelongsToMany<TRelated>
@@ -37,7 +33,7 @@ class MorphToMany extends BelongsToMany
     protected readonly string $morphTypeColumn;
 
     /**
-     * The morph alias THIS side filters (and writes) — the parent's FQCN
+     * The morph alias this side filters (and writes) — the parent's FQCN
      * in the direct direction, the related's in the inverse.
      *
      * @var string

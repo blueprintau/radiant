@@ -634,10 +634,10 @@ final class MetadataFactory
      * Inject the synthetic morph columns declared by class-level
      * `#[Morphs]` attributes.
      *
-     * Each attribute emits two synthetic mappings — `{name}_type` (string)
-     * and `{name}_id` (the attribute's keyType, bigint by default). A
-     * user-declared `#[Column]` with the same name wins, but a declared
-     * column whose type cannot hold the morph value fails fast.
+     * Each attribute emits `{name}_type` (string) and `{name}_id` (the
+     * attribute's keyType). A user-declared `#[Column]` with the same name
+     * wins, but a declared column whose type cannot hold the morph value
+     * fails fast.
      *
      * @param  \ReflectionClass<Model>  $reflection
      * @param  class-string<Model>  $class
@@ -672,6 +672,8 @@ final class MetadataFactory
                     . 'a morph name must be unique per class.'
                 );
             }
+
+            $morphs->assertKeyTypeCapable();
 
             $seen[$morphs->name] = true;
 

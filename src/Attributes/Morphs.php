@@ -9,36 +9,14 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 /**
  * Declares a polymorphic (morph) column pair on the model's table.
  *
- * One attribute emits TWO synthetic columns: `{name}_type` (a string
- * holding the related model's class-string — the morph alias) and
- * `{name}_id` (the related model's primary-key value). Together they
- * point at a row of ANY model table — the polymorphic target.
- *
- * The key column's type defaults to bigint; declare `keyType:` when the
- * morph targets use a different primary-key type (e.g. UUID keys).
- *
- * The columns are SYNTHETIC mappings (no PHP property backs them), the
- * same mechanism the soft-delete column uses: values live on the model's
- * runtime attribute store, read and written through
- * {@see \BlueprintAU\Radiant\Model::attribute()} /
- * {@see \BlueprintAU\Radiant\Model::setAttribute()}. The relations
- * (`morphTo`/`morphOne`/`morphMany`) read the pair through those
- * accessors, so a morph column needs no declared property to work.
- *
- * The DDL side is shared with hand-built blueprints:
- * {@see \BlueprintAU\Radiant\Database\Schema\Blueprint::morphs()} emits
- * the identical column pair, and `Blueprint::fromMetadata()` folds this
- * attribute through the metadata factory's synthetic mappings — the
- * shapes match the helper's, so a metadata-driven table and a hand-built
- * one always agree.
- *
- * The morph alias convention is the related model's FULL class-string
- * (FQCN): unambiguous across namespaces (a short name would silently
- * corrupt resolution when two modules each declare a `Comment`), and
- * consistent with what the relations write. The trade — renaming a class
- * changes the stored alias — is a data-migration concern, documented in
- * docs/relations.md; an alias registry can be added later without
- * changing the convention.
+ * Emits two synthetic columns — `{name}_type` (the related model's
+ * class-string) and `{name}_id` (its primary-key value) — read and
+ * written through {@see \BlueprintAU\Radiant\Model::attribute()} /
+ * {@see \BlueprintAU\Radiant\Model::setAttribute()}. The key column's
+ * type defaults to bigint; declare `keyType:` when the morph targets use
+ * a different primary-key type. The alias convention is the related
+ * model's full class-string; renaming a class changes the stored alias —
+ * a data-migration concern documented in docs/relations.md.
  */
 #[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]
 final class Morphs
@@ -75,5 +53,21 @@ final class Morphs
     public function keyColumn(): string
     {
         return $this->name . '_id';
+    }
+
+    /**
+     * Assert the declared key type can hold a primary-key value.
+     *
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    public function assertKeyTypeCapable(): void
+    {
+        if (!$this->keyType->primaryKeyCapable()) {
+            throw new \InvalidArgumentException(
+                "#[Morphs(name: '{$this->name}')] declares keyType [{$this->keyType->value}], "
+                . 'which cannot hold a primary-key value; use an integer, string, char, or uuid type.'
+            );
+        }
     }
 }

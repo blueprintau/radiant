@@ -11,35 +11,15 @@ use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
- * The inverse polymorphic relation: the PARENT holds the (type, key) pair
- * and the related class is resolved PER ROW from the type column.
+ * The inverse polymorphic relation: the parent holds the (type, key) pair
+ * and the related class is resolved per row from the type column.
  *
- * `Comment::commentable()` reads `commentable_type` (a model class-string
- * — the morph alias {@see MorphOneOrMany} writes) and `commentable_id`,
- * then queries THAT model's table for the matching key. One relation name
- * spans many target tables.
- *
- * Because the related class is dynamic, the constrained builder cannot be
- * built in the constructor (the base does) — it is built lazily per
- * resolved type. Eager loading groups the parents by type value and runs
- * ONE chunked `IN` query per distinct type (the per-type strategy: no
- * grammar changes, each type's rows hydrate through its own model class,
- * portable across backends), then merges the results into a single
- * mixed-class {@see EagerResult} whose per-row (alias, key) pairs
- * {@see MorphTo::match()} dispatches by.
- *
- * The static type rides the `$types` allowlist: a relation constructed
- * WITH an allowlist (`morphTo('commentable', types: [Post::class])`)
- * narrows its template to exactly those classes, so
- * `commentable()->getResults()->first()` types as `(Post|Video)|null` —
- * the same classes the runtime allowlist already enforces, now visible
- * statically. Without an allowlist the template is the honest bound
- * `Model` — any class can resolve, and callers narrow with a local
- * `instanceof`.
- *
- * An optional `$types` allowlist restricts which classes may resolve:
- * a parent whose type value is not on the list fails fast (a typo'd or
- * stale alias is a data bug, not an empty result).
+ * The constrained builder is built lazily per resolved type; eager loading
+ * runs one chunked `IN` query per distinct type and merges the results
+ * into a single mixed-class {@see EagerResult} dispatched by
+ * {@see MorphTo::match()}. An optional `$types` allowlist restricts which
+ * classes may resolve — and narrows the template statically to exactly
+ * those classes; without one the honest bound is `Model`.
  *
  * @template TRelated of Model The classes the allowlist admits (Model
  *         when no allowlist is declared).
@@ -49,7 +29,7 @@ use BlueprintAU\Radiant\ModelQueryBuilder;
 final class MorphTo extends Relation
 {
     /**
-     * The type-discriminator column on THIS (the parent's) table.
+     * The type-discriminator column on the parent's table.
      *
      * @var string
      */
@@ -67,8 +47,8 @@ final class MorphTo extends Relation
      *
      * The base constructor's `$related` slot is filled with the abstract
      * {@see Model::class} marker — the real class resolves per parent from
-     * the type column. The base's query build + constraint pass are skipped
-     * via {@see Relation::defersConstraints()}.
+     * the type column, and the base's constraint pass is skipped via
+     * {@see Relation::defersConstraints()}.
      *
      * @param  Model  $parent
      * @param  string  $typeColumn
