@@ -426,6 +426,99 @@ final class SchemaDiffer
             $liveColumns[$column['name']] = $column;
         }
 
+        // A declared rename SATISFIES the desired `to` column (it arrives
+        // via the rename, not an add) and RETIRES the live `from` column
+        // (it leaves via the rename, not a drop) — the add/drop diff must
+        // not double-count either side. The desired `to` shape is kept
+        // for the MODIFY comparison: a rename + shape change sequences
+        // RenameColumn then ModifyColumn.
+        ['columns' => $desiredColumns, 'renames' => $renames, 'renamedDesired' => $renamedDesired] = $this->columnSets($blueprint, $liveColumns);
+
+        $alter = new Blueprint($table);
+        $modify = new Blueprint($table);
+        $destructive = false;
+        $additions = [];
+        $drops = [];
+        $modifications = [];
+
+        foreach ($desiredColumns as $name => $column) {
+            if (!isset($liveColumns[$name])) {
+                $alter = $this->withColumn($alter, $column);
+                $additions[] = $name;
+                continue;
+            }
+
+            // Content drift: the column exists on both sides — compare the
+            // facets. Type via the dialect's round-trip mapping; nullability
+            // and default directly. An enum column's inline CHECK is part
+            // of its definition — a values change is content drift.
+            if ($this->columnDrifts($liveColumns[$name], $column) || !$this->enumCheckMatches($table, $column, $live)) {
+                $modify = $this->withColumn($modify, $column);
+                $modifications[] = $name;
+            }
+        }
+
+        foreach ($liveColumns as $name => $liveColumn) {
+            if (isset($renames[$name])) {
+                continue; // a declared rename — not a drop.
+            }
+
+            if (!isset($desiredColumns[$name])) {
+                $alter = $alter->dropColumn($name);
+                $drops[] = $name;
+                $destructive = true;
+            }
+        }
+
+        // Renamed columns: the desired `to` shape is compared against the
+        // live `from` shape — a rename + shape change sequences
+        // RenameColumn (first) then ModifyColumn.
+        foreach ($renamedDesired as $to => $column) {
+            $from = array_search($to, $renames, true);
+
+            if ($from === false || !isset($liveColumns[$from])) {
+                continue;
+            }
+
+            if ($this->columnDrifts($liveColumns[$from], $column)) {
+                $modify = $this->withColumn($modify, $column);
+                $modifications[] = $to;
+            }
+        }
+
+        $changes = [];
+
+        // The rename change FIRST — subsequent alters target the new name.
+        if ($renames !== []) {
+            $changes[] = $this->renameChange($table, $renames);
+        }
+
+        if ($additions !== [] || $drops !== []) {
+            $changes[] = $this->alterChange($table, $alter, $additions, $drops, $destructive);
+        }
+
+        if ($modifications !== []) {
+            // The change carries the ORIGINAL desired blueprint: dialects
+            // without an in-place modify form (SQLite) rebuild the whole
+            // table from it (the rebuild re-binds via forTable()); the
+            // in-place dialects compile the modified subset from the
+            // change's own record. The description names the modified
+            // subset.
+            $changes[] = $this->modifyChange($table, $modify, $blueprint, $modifications, $renames, $liveColumns);
+        }
+
+        return $changes;
+    }
+
+    /**
+     * Build the desired column set, the verified renames, and the renamed desired shapes.
+     *
+     * @param  Blueprint  $blueprint
+     * @param  array<string, array<string, mixed>>  $liveColumns
+     * @return array{columns: array<string, array<string, mixed>>, renames: array<string, string>, renamedDesired: array<string, array<string, mixed>>}
+     */
+    private function columnSets(Blueprint $blueprint, array $liveColumns): array
+    {
         $desiredColumns = [];
 
         foreach ($blueprint->getColumns() as $column) {
@@ -453,12 +546,6 @@ final class SchemaDiffer
             }
         }
 
-        // A declared rename SATISFIES the desired `to` column (it arrives
-        // via the rename, not an add) and RETIRES the live `from` column
-        // (it leaves via the rename, not a drop) — the add/drop diff must
-        // not double-count either side. The desired `to` shape is kept
-        // for the MODIFY comparison: a rename + shape change sequences
-        // RenameColumn then ModifyColumn.
         $renamedDesired = [];
 
         foreach ($renames as $from => $to) {
@@ -469,228 +556,178 @@ final class SchemaDiffer
             unset($desiredColumns[$to]);
         }
 
-        $alter = new Blueprint($table);
-        $modify = new Blueprint($table);
-        $destructive = false;
-        $additions = [];
-        $drops = [];
-        $modifications = [];
+        return ['columns' => $desiredColumns, 'renames' => $renames, 'renamedDesired' => $renamedDesired];
+    }
 
-        foreach ($desiredColumns as $name => $column) {
-            if (!isset($liveColumns[$name])) {
-                $alter = $alter->column(
-                    $column['type'],
-                    $name,
-                    primaryKey: $column['primaryKey'],
-                    autoIncrement: $column['autoIncrement'],
-                    nullable: $column['nullable'],
-                    unique: $column['unique'],
-                    index: $column['index'],
-                    length: $column['length'],
-                    precision: $column['precision'],
-                    scale: $column['scale'] ?? null,
-                    values: $column['values'] ?? null,
-                    default: $column['default'],
-                    foreign: $column['foreign'],
-                    onDelete: $column['onDelete'],
-                    onUpdate: $column['onUpdate'],
-                );
-                $additions[] = $name;
+    /**
+     * Append a desired column definition to a blueprint.
+     *
+     * @param  Blueprint  $target
+     * @param  array<string, mixed>  $column
+     * @return Blueprint
+     */
+    private function withColumn(Blueprint $target, array $column): Blueprint
+    {
+        return $target->column(
+            $column['type'],
+            $column['name'],
+            primaryKey: $column['primaryKey'],
+            autoIncrement: $column['autoIncrement'],
+            nullable: $column['nullable'],
+            unique: $column['unique'],
+            index: $column['index'],
+            length: $column['length'],
+            precision: $column['precision'],
+            scale: $column['scale'] ?? null,
+            values: $column['values'] ?? null,
+            default: $column['default'],
+            foreign: $column['foreign'],
+            onDelete: $column['onDelete'],
+            onUpdate: $column['onUpdate'],
+        );
+    }
+
+    /**
+     * Determine whether a live column's type, nullability, or default drifts from the declared shape.
+     *
+     * @param  array<string, mixed>  $liveColumn
+     * @param  array<string, mixed>  $column
+     * @return bool
+     */
+    private function columnDrifts(array $liveColumn, array $column): bool
+    {
+        $typeMatches = $this->inspector->columnTypeMatches(
+            $liveColumn['type'],
+            $column['type'],
+            $column['length'],
+            $column['precision'],
+            $column['scale'] ?? null,
+        );
+
+        return !$typeMatches
+            || $liveColumn['nullable'] !== $column['nullable']
+            || !$this->defaultsMatch($liveColumn['default'], $column['default']);
+    }
+
+    /**
+     * Build the RenameColumn change for a table's verified renames.
+     *
+     * @param  string  $table
+     * @param  array<string, string>  $renames
+     * @return SchemaChange
+     */
+    private function renameChange(string $table, array $renames): SchemaChange
+    {
+        $renameBlueprint = new Blueprint($table);
+
+        foreach ($renames as $from => $to) {
+            $renameBlueprint = $renameBlueprint->renameColumn($from, $to);
+        }
+
+        return new SchemaChange(
+            $table,
+            SchemaOperation::RenameColumn,
+            $renameBlueprint,
+            false,
+            sprintf(
+                'rename column(s) on [%s]: [%s] — data travels with the rename',
+                $table,
+                implode(', ', array_map(fn (string $from) => "[{$from}] -> [{$renames[$from]}]", array_keys($renames))),
+            ),
+        );
+    }
+
+    /**
+     * Build the Add/DropColumn change for a table's column additions and drops.
+     *
+     * @param  string  $table
+     * @param  Blueprint  $alter
+     * @param  list<string>  $additions
+     * @param  list<string>  $drops
+     * @param  bool  $destructive
+     * @return SchemaChange
+     */
+    private function alterChange(string $table, Blueprint $alter, array $additions, array $drops, bool $destructive): SchemaChange
+    {
+        // The operation reflects what DOMINATES the alter; both sides are
+        // always in the blueprint and the description.
+        $operation = $drops === [] ? SchemaOperation::AddColumn : SchemaOperation::DropColumn;
+
+        $parts = [];
+        if ($additions !== []) {
+            $parts[] = sprintf('add column(s) [%s]', implode(', ', $additions));
+        }
+        if ($drops !== []) {
+            $parts[] = sprintf('drop column(s) [%s]', implode(', ', $drops));
+        }
+        $description = sprintf(
+            'alter table [%s]: %s%s',
+            $table,
+            implode(', ', $parts),
+            $destructive ? ' — DESTRUCTIVE: data loss' : '',
+        );
+
+        // A mixed add+drop is the rename SHAPE — flagged so the host asks,
+        // never guessed.
+        $possibleRename = $additions !== [] && $drops !== [];
+
+        if ($possibleRename) {
+            $description .= sprintf(
+                ' — POSSIBLE RENAME: [%s] -> [%s]? If intended, declare it with'
+                . ' Blueprint::renameColumn() and re-diff; applying as-is destroys the dropped data.',
+                implode(', ', $drops),
+                implode(', ', $additions),
+            );
+        }
+
+        return new SchemaChange($table, $operation, $alter, $destructive, $description, $possibleRename);
+    }
+
+    /**
+     * Build the ModifyColumn change, classifying destructiveness from nullability tightening.
+     *
+     * @param  string  $table
+     * @param  Blueprint  $modify  Blueprint collecting the drifted column definitions.
+     * @param  Blueprint  $blueprint  The original desired blueprint carried on the change.
+     * @param  list<string>  $modifications
+     * @param  array<string, string>  $renames
+     * @param  array<string, array<string, mixed>>  $liveColumns
+     * @return SchemaChange
+     */
+    private function modifyChange(string $table, Blueprint $modify, Blueprint $blueprint, array $modifications, array $renames, array $liveColumns): SchemaChange
+    {
+        // Destructive when the change tightens nullability (existing rows
+        // may violate the new shape); non-destructive for a default-only
+        // change.
+        $modifyDestructive = false;
+
+        foreach ($modify->getColumns() as $column) {
+            // A renamed column's live shape is the FROM column's (the
+            // rename has not applied yet at diff time).
+            $liveName = array_search($column['name'], $renames, true) ?: $column['name'];
+            $liveColumn = $liveColumns[$liveName] ?? null;
+
+            if ($liveColumn === null) {
                 continue;
             }
 
-            // Content drift: the column exists on both sides — compare the
-            // facets. Type via the dialect's round-trip mapping; nullability
-            // and default directly. An enum column's inline CHECK is part
-            // of its definition — a values change is content drift.
-            $liveColumn = $liveColumns[$name];
-            $typeMatches = $this->inspector->columnTypeMatches(
-                $liveColumn['type'],
-                $column['type'],
-                $column['length'],
-                $column['precision'],
-                $column['scale'] ?? null,
-            );
-            $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
-            $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
-            $enumCheckMatches = $this->enumCheckMatches($table, $column, $live);
-
-            if (!$typeMatches || !$nullableMatches || !$defaultMatches || !$enumCheckMatches) {
-                $modify = $modify->column(
-                    $column['type'],
-                    $name,
-                    primaryKey: $column['primaryKey'],
-                    autoIncrement: $column['autoIncrement'],
-                    nullable: $column['nullable'],
-                    unique: $column['unique'],
-                    index: $column['index'],
-                    length: $column['length'],
-                    precision: $column['precision'],
-                    scale: $column['scale'] ?? null,
-                    values: $column['values'] ?? null,
-                    default: $column['default'],
-                    foreign: $column['foreign'],
-                    onDelete: $column['onDelete'],
-                    onUpdate: $column['onUpdate'],
-                );
-                $modifications[] = $name;
+            if ($column['nullable'] === false && $liveColumn['nullable'] === true) {
+                $modifyDestructive = true; // nullability tightened.
             }
         }
 
-        foreach ($liveColumns as $name => $liveColumn) {
-            if (isset($renames[$name])) {
-                continue; // a declared rename — not a drop.
-            }
-
-            if (!isset($desiredColumns[$name])) {
-                $alter = $alter->dropColumn($name);
-                $drops[] = $name;
-                $destructive = true;
-            }
-        }
-
-        // Renamed columns: the desired `to` shape is compared against the
-        // live `from` shape — a rename + shape change sequences
-        // RenameColumn (first) then ModifyColumn.
-        foreach ($renamedDesired as $to => $column) {
-            $from = array_search($to, $renames, true);
-
-            if ($from === false || !isset($liveColumns[$from])) {
-                continue;
-            }
-
-            $liveColumn = $liveColumns[$from];
-            $typeMatches = $this->inspector->columnTypeMatches(
-                $liveColumn['type'],
-                $column['type'],
-                $column['length'],
-                $column['precision'],
-                $column['scale'] ?? null,
-            );
-            $nullableMatches = $liveColumn['nullable'] === $column['nullable'];
-            $defaultMatches = $this->defaultsMatch($liveColumn['default'], $column['default']);
-
-            if (!$typeMatches || !$nullableMatches || !$defaultMatches) {
-                $modify = $modify->column(
-                    $column['type'],
-                    $to,
-                    primaryKey: $column['primaryKey'],
-                    autoIncrement: $column['autoIncrement'],
-                    nullable: $column['nullable'],
-                    unique: $column['unique'],
-                    index: $column['index'],
-                    length: $column['length'],
-                    precision: $column['precision'],
-                    scale: $column['scale'] ?? null,
-                    values: $column['values'] ?? null,
-                    default: $column['default'],
-                    foreign: $column['foreign'],
-                    onDelete: $column['onDelete'],
-                    onUpdate: $column['onUpdate'],
-                );
-                $modifications[] = $to;
-            }
-        }
-
-        $changes = [];
-
-        // The rename change FIRST — subsequent alters target the new name.
-        if ($renames !== []) {
-            $renameBlueprint = new Blueprint($table);
-
-            foreach ($renames as $from => $to) {
-                $renameBlueprint = $renameBlueprint->renameColumn($from, $to);
-            }
-
-            $changes[] = new SchemaChange(
+        return new SchemaChange(
+            $table,
+            SchemaOperation::ModifyColumn,
+            $blueprint,
+            $modifyDestructive,
+            sprintf(
+                'modify column(s) on [%s]: [%s]%s',
                 $table,
-                SchemaOperation::RenameColumn,
-                $renameBlueprint,
-                false,
-                sprintf(
-                    'rename column(s) on [%s]: [%s] — data travels with the rename',
-                    $table,
-                    implode(', ', array_map(fn (string $from) => "[{$from}] -> [{$renames[$from]}]", array_keys($renames))),
-                ),
-            );
-        }
-
-        if ($additions !== [] || $drops !== []) {
-            // The operation reflects what DOMINATES the alter; both sides are
-            // always in the blueprint and the description. A mixed add+drop
-            // is the rename SHAPE — flagged so the host asks, never guessed.
-            $possibleRename = $additions !== [] && $drops !== [];
-
-            $operation = $drops === [] ? SchemaOperation::AddColumn : SchemaOperation::DropColumn;
-
-            $parts = [];
-            if ($additions !== []) {
-                $parts[] = sprintf('add column(s) [%s]', implode(', ', $additions));
-            }
-            if ($drops !== []) {
-                $parts[] = sprintf('drop column(s) [%s]', implode(', ', $drops));
-            }
-            $description = sprintf(
-                'alter table [%s]: %s%s',
-                $table,
-                implode(', ', $parts),
-                $destructive ? ' — DESTRUCTIVE: data loss' : '',
-            );
-
-            if ($possibleRename) {
-                $description .= sprintf(
-                    ' — POSSIBLE RENAME: [%s] -> [%s]? If intended, declare it with'
-                    . ' Blueprint::renameColumn() and re-diff; applying as-is destroys the dropped data.',
-                    implode(', ', $drops),
-                    implode(', ', $additions),
-                );
-            }
-
-            $changes[] = new SchemaChange($table, $operation, $alter, $destructive, $description, $possibleRename);
-        }
-
-        if ($modifications !== []) {
-            // The change carries the ORIGINAL desired blueprint: dialects
-            // without an in-place modify form (SQLite) rebuild the whole
-            // table from it (the rebuild re-binds via forTable()); the
-            // in-place dialects compile the modified subset from the
-            // change's own record. The description names the modified
-            // subset.
-            // Destructive when the change tightens nullability or shrinks
-            // the type/length (existing rows may violate the new shape);
-            // non-destructive for a default-only change.
-            $modifyDestructive = false;
-
-            foreach ($modify->getColumns() as $column) {
-                // A renamed column's live shape is the FROM column's (the
-                // rename has not applied yet at diff time).
-                $liveName = array_search($column['name'], $renames, true) ?: $column['name'];
-                $liveColumn = $liveColumns[$liveName] ?? null;
-
-                if ($liveColumn === null) {
-                    continue;
-                }
-
-                if ($column['nullable'] === false && $liveColumn['nullable'] === true) {
-                    $modifyDestructive = true; // nullability tightened.
-                }
-            }
-
-            $changes[] = new SchemaChange(
-                $table,
-                SchemaOperation::ModifyColumn,
-                $blueprint,
-                $modifyDestructive,
-                sprintf(
-                    'modify column(s) on [%s]: [%s]%s',
-                    $table,
-                    implode(', ', $modifications),
-                    $modifyDestructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
-                ),
-            );
-        }
-
-        return $changes;
+                implode(', ', $modifications),
+                $modifyDestructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
+            ),
+        );
     }
 
     /**
