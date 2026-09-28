@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdDirtyProbe;
+use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdRenamedPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdUndeclaredOverridePost;
@@ -152,17 +152,17 @@ final class SoftDeletesTest extends DatabaseTestCase
      */
     public function testDeleteLeavesNoPhantomDirtyStamp(): void
     {
-        $post = new SdDirtyProbe();
+        $post = new SdPost();
         $post->title = 'Probe';
         $post->save();
 
-        self::assertSame([], $post->dirtyColumns(), 'a fresh save leaves nothing dirty');
+        self::assertSame([], ModelIntrospection::dirtyOf($post), 'a fresh save leaves nothing dirty');
 
         $post->delete();
 
         self::assertSame(
             [],
-            $post->dirtyColumns(),
+            ModelIntrospection::dirtyOf($post),
             'delete() must not leave deleted_at phantom-dirty in the encoded snapshot space'
         );
     }

@@ -9,10 +9,10 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DefaultedModelProbe;
-use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DirtyProbe;
+use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Admin;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DefaultedModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnModel;
-use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RenamedColumnProbe;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\SoftDeletingPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\User;
 
@@ -231,11 +231,11 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $user->meta = ['theme' => 'dark'];
         $user->save();
 
-        $probe = DirtyProbe::find($user->id);
+        $probe = Admin::find($user->id);
 
         self::assertNotNull($probe);
-        self::assertInstanceOf(DirtyProbe::class, $probe);
-        self::assertSame([], $probe->dirtyColumns());
+        self::assertInstanceOf(Admin::class, $probe);
+        self::assertSame([], ModelIntrospection::dirtyOf($probe));
     }
 
     /**
@@ -249,11 +249,11 @@ final class MetadataPipelineTest extends DatabaseTestCase
      */
     public function testDirtyColumnsNameExactlyTheChangedOnes(): void
     {
-        $user = new DirtyProbe();
+        $user = new User();
         $user->email = 'partial@example.com';
         $user->meta = ['theme' => 'dark'];
 
-        $dirty = $user->dirtyColumns();
+        $dirty = ModelIntrospection::dirtyOf($user);
 
         self::assertSame(['email' => 'partial@example.com', 'meta' => '{"theme":"dark"}'], $dirty);
     }
@@ -272,14 +272,14 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $user->meta = ['a' => 1];
         $user->save();
 
-        $probe = DirtyProbe::find($user->id);
+        $probe = Admin::find($user->id);
         self::assertNotNull($probe);
-        self::assertInstanceOf(DirtyProbe::class, $probe);
-        self::assertSame([], $probe->dirtyColumns()); // baseline clean
+        self::assertInstanceOf(Admin::class, $probe);
+        self::assertSame([], ModelIntrospection::dirtyOf($probe)); // baseline clean
 
         $probe->password = 'new';
 
-        self::assertSame(['password' => 'new'], $probe->dirtyColumns());
+        self::assertSame(['password' => 'new'], ModelIntrospection::dirtyOf($probe));
 
         // Same-value re-assignment: NOT dirty (the whole point of the
         // encoded-space comparison — no spurious UPDATE).
@@ -287,7 +287,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         // phpstan 2.2.16's alreadyNarrowedType check wrongly treats a
         // concrete shape vs array<string, mixed> as always-identical.
         /** @phpstan-ignore staticMethod.alreadyNarrowedType (the shape-vs-generic-array comparison is the assertion's subject) */
-        self::assertSame(['password' => 'new'], $probe->dirtyColumns());
+        self::assertSame(['password' => 'new'], ModelIntrospection::dirtyOf($probe));
     }
 
     /**
@@ -304,9 +304,9 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $user->emailVerifiedAt = new \Carbon\Carbon('2026-09-06 08:00:00', 'UTC');
         $user->save();
 
-        $probe = DirtyProbe::find($user->id);
+        $probe = Admin::find($user->id);
         self::assertNotNull($probe);
-        self::assertInstanceOf(DirtyProbe::class, $probe);
+        self::assertInstanceOf(Admin::class, $probe);
 
         // A DIFFERENT instant → dirty (Carbon compared BY VALUE — two
         // Carbon objects for the same instant are equal; assertSame would
@@ -314,12 +314,12 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $probe->emailVerifiedAt = new \Carbon\Carbon('2027-01-01 00:00:00', 'UTC');
         self::assertEquals(
             ['emailVerifiedAt' => new \Carbon\Carbon('2027-01-01 00:00:00', 'UTC')],
-            $probe->dirtyColumns(),
+            ModelIntrospection::dirtyOf($probe),
         );
 
         // Save → the dirty value is persisted and the snapshot re-syncs.
         $probe->save();
-        self::assertSame([], $probe->dirtyColumns());
+        self::assertSame([], ModelIntrospection::dirtyOf($probe));
 
         // The new instant survived the round-trip.
         $reloaded = User::find($user->id);
@@ -403,15 +403,15 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $model->status = 'draft';
         $model->save();
 
-        $probe = RenamedColumnProbe::find($model->id);
+        $probe = RenamedColumnModel::find($model->id);
         self::assertNotNull($probe);
-        self::assertInstanceOf(RenamedColumnProbe::class, $probe);
-        self::assertSame([], $probe->dirtyColumns()); // hydrated = clean
+        self::assertInstanceOf(RenamedColumnModel::class, $probe);
+        self::assertSame([], ModelIntrospection::dirtyOf($probe)); // hydrated = clean
 
         $probe->status = 'published';
 
         // Dirty is keyed by the DB column name (`state`), not `status`.
-        self::assertSame(['state' => 'published'], $probe->dirtyColumns());
+        self::assertSame(['state' => 'published'], ModelIntrospection::dirtyOf($probe));
 
         $probe->save();
 
@@ -420,7 +420,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $raw = $this->connection->table('renamed_columns')->where('pk', '=', $model->id)->first();
         self::assertNotNull($raw);
         self::assertSame('published', $raw->state);
-        self::assertSame([], $probe->dirtyColumns());
+        self::assertSame([], ModelIntrospection::dirtyOf($probe));
     }
 
     /**
@@ -443,16 +443,16 @@ final class MetadataPipelineTest extends DatabaseTestCase
 
         // EVERY column omitted at insert — the empty-row compile path
         // (`INSERT INTO ... DEFAULT VALUES`) fires, applying all defaults.
-        $model = new DefaultedModelProbe();
+        $model = new DefaultedModel();
         $model->save();
 
-        self::assertTrue($model->existsExposed());
+        self::assertTrue(ModelIntrospection::existsOf($model));
         self::assertSame(0, $model->hits);
         self::assertSame('anon', $model->author);
 
         // `note` was never set and has no declared default — the property
         // stays uninitialized after save().
-        self::assertFalse($model->propertyIsInitialized('note'));
+        self::assertFalse(ModelIntrospection::propertyInitialized($model, 'note'));
 
         // The row agrees with the model.
         $raw = $this->connection->table('defaulted_models')->first();
@@ -462,7 +462,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
 
         // Materialized values are the original snapshot, not dirty state —
         // a second save() emits no spurious UPDATE.
-        self::assertSame([], $model->dirtyColumns());
+        self::assertSame([], ModelIntrospection::dirtyOf($model));
         $model->save();
     }
 }
