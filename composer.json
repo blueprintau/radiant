@@ -37,7 +37,8 @@
             "BlueprintAU\\Radiant\\": "src/"
         },
         "exclude-from-classmap": [
-            "tests/"
+            "tests/",
+            "phpstan/"
         ]
     },
     "autoload-dev": {
