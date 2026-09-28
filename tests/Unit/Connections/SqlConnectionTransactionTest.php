@@ -226,7 +226,7 @@ final class SqlConnectionTransactionTest extends TestCase
         $this->connection->table('users')->insert(['name' => 'Alice']);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('transaction');
+        $this->expectExceptionMessageIsOrContains('transaction');
         $this->connection->select(
             $this->connection->table('users')->where('name', '=', 'Alice')->lockForUpdate(),
         );

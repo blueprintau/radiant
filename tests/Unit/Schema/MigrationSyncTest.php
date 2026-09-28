@@ -88,7 +88,7 @@ final class MigrationSyncTest extends DatabaseTestCase
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('does not exist in the live schema');
+        $this->expectExceptionMessageIsOrContains('does not exist in the live schema');
         $differ->diff([$desired]);
     }
 
@@ -202,6 +202,39 @@ final class MigrationSyncTest extends DatabaseTestCase
         self::assertContains('users_email_index', $indexNames);
 
         // Convergence.
+        self::assertSame([], $differ->diff([$desired]));
+    }
+
+    /**
+     * A morph keyType switch (bigint → uuid) is detected as a
+     * ModifyColumn drift — the DDL side of the switch is handled by the
+     * differ; migrating the stored values is the host's concern.
+     */
+    public function testMorphKeyTypeSwitchDetectedAsModifyColumn(): void
+    {
+        $blueprint = (new Blueprint('comments'))
+            ->id()
+            ->string('body', 64)
+            ->morphs('commentable');
+        $this->connection->create($blueprint);
+
+        // The model switched its #[Morphs] to keyType: Uuid — the desired
+        // shape now carries a uuid key column.
+        $desired = (new Blueprint('comments'))
+            ->id()
+            ->string('body', 64)
+            ->uuidMorphs('commentable');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::ModifyColumn, $changes[0]->operation);
+        self::assertStringContainsString('[commentable_id]', $changes[0]->description);
+
+        $this->connection->apply($changes[0]);
+
+        // Convergence: the uuid shape is now live.
         self::assertSame([], $differ->diff([$desired]));
     }
 
@@ -381,7 +414,7 @@ final class MigrationSyncTest extends DatabaseTestCase
         $differ = new SchemaDiffer($this->connection->schemaInspector);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('Circular foreign-key dependency');
+        $this->expectExceptionMessageIsOrContains('Circular foreign-key dependency');
         $differ->diff([$a, $b]);
     }
 
@@ -409,7 +442,7 @@ final class MigrationSyncTest extends DatabaseTestCase
         // A destructive change (drop the table from the desired set) with
         // no confirm → fail-fast throw.
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('Refusing to apply the destructive change');
+        $this->expectExceptionMessageIsOrContains('Refusing to apply the destructive change');
         $synchronizer->sync([]);
     }
 

@@ -371,7 +371,7 @@ final class RelationsE2ETest extends DatabaseTestCase
     public function testWithUnknownRelationThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('no method [pst()]');
+        $this->expectExceptionMessageIsOrContains('no method [pst()]');
         RelUser::with('pst')->get();
     }
 
@@ -381,7 +381,7 @@ final class RelationsE2ETest extends DatabaseTestCase
     public function testWithNonRelationMethodThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('does not return a Relation');
+        $this->expectExceptionMessageIsOrContains('does not return a Relation');
         RelUser::with('notARelation')->get();
     }
 
@@ -598,7 +598,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $user->save();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown foreign key column [bogus_id]');
+        $this->expectExceptionMessageIsOrContains('Unknown foreign key column [bogus_id]');
         $user->brokenPosts();
     }
 

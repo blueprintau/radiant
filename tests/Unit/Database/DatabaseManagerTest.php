@@ -75,7 +75,7 @@ final class DatabaseManagerTest extends TestCase
     public function testSqlConnectionOnNonSqlConnectionThrows(): void
     {
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('The connection is not a SQL connection.');
+        $this->expectExceptionMessageIsOrContains('The connection is not a SQL connection.');
         $this->manager->sqlConnection('csv');
     }
 
@@ -130,7 +130,7 @@ final class DatabaseManagerTest extends TestCase
     public function testAddConnectionDuplicateThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('already defined');
+        $this->expectExceptionMessageIsOrContains('already defined');
         $this->manager->addConnection('sqlite', ['driver' => 'sqlite', 'database' => ':memory:']);
     }
 
@@ -144,7 +144,7 @@ final class DatabaseManagerTest extends TestCase
     public function testInvalidConfigThrows(array $connections, string $expectedMessage): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage($expectedMessage);
+        $this->expectExceptionMessageIsOrContains($expectedMessage);
         new DatabaseManager($connections);
     }
 

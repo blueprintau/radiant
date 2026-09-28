@@ -50,4 +50,17 @@ class PolyPost extends Model
     {
         return $this->morphOne(PolyImage::class, 'imageable');
     }
+
+    /**
+     * A morphMany with a caller-chosen related class — the fail-fast
+     * PK-type-mismatch test's entry point.
+     *
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $related
+     * @return MorphMany<\BlueprintAU\Radiant\Model>
+     */
+    public function commentsTo(string $related): MorphMany
+    {
+        /** @var MorphMany<\BlueprintAU\Radiant\Model> */
+        return $this->morphMany($related, 'commentable');
+    }
 }

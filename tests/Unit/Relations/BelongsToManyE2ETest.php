@@ -115,7 +115,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         self::assertNotNull($post);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('starts with the reserved prefix [radiant_]');
+        $this->expectExceptionMessageIsOrContains('starts with the reserved prefix [radiant_]');
 
         $post->tags()->withPivot('radiant_position');
     }

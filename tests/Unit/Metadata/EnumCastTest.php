@@ -80,7 +80,7 @@ final class EnumCastTest extends DatabaseTestCase
             [$post->id],
         );
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage(
+        $this->expectExceptionMessageIsOrContains(
             "Column [status] holds the value ['archived'], which is not a case of the enum ["
             . StringStatus::class . '].',
         );
@@ -94,7 +94,7 @@ final class EnumCastTest extends DatabaseTestCase
     public function testNonEnumValueOnEncodeThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('expects an enum value of type [' . StringStatus::class . ']; got string');
+        $this->expectExceptionMessageIsOrContains('expects an enum value of type [' . StringStatus::class . ']; got string');
 
         EnumPost::newQuery()->insert(['status' => 'bogus', 'level' => 1, 'kind' => 'Alpha']);
     }
@@ -111,7 +111,7 @@ final class EnumCastTest extends DatabaseTestCase
 
         // An int-backed enum on a string column is incompatible.
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('cannot store the field type [' . IntLevel::class . ']');
+        $this->expectExceptionMessageIsOrContains('cannot store the field type [' . IntLevel::class . ']');
 
         $probe = new /** @description A probe model declaring an incompatible enum/column combo. */ class extends \BlueprintAU\Radiant\Model {
             /**

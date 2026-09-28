@@ -288,7 +288,8 @@ allowlisted morph.
 
 Fail-fast semantics: a null type column resolves empty (an optional morph
 target); an unknown class, a non-model class, or a non-string type value
-throws.
+throws; a target whose primary-key type does not match the key column's
+declared type throws at construction or resolution.
 
 ## Many-to-many relations
 

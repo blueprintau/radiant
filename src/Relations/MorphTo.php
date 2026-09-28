@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Relations;
 
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 
@@ -181,7 +182,41 @@ final class MorphTo extends Relation
             );
         }
 
+        $this->assertKeyMatches($alias);
+
         return $alias;
+    }
+
+    /**
+     * Fail fast when the resolved target's primary-key type cannot be
+     * held by this parent's morph key column.
+     *
+     * @param  class-string<Model>  $alias
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private function assertKeyMatches(string $alias): void
+    {
+        $declared = MetadataFactory::for($this->parent::class)
+            ->mappingFor($this->getForeignKey())->column->type;
+        $primaryKey = MetadataFactory::for($alias)->primaryKeys;
+
+        if (count($primaryKey) !== 1 || $primaryKey[0]->name === null) {
+            throw new \LogicException(
+                'A morph target requires a single named primary key; model [' . $alias
+                . '] declares none, a composite key, or an unnamed key.'
+            );
+        }
+
+        if ($primaryKey[0]->type !== $declared) {
+            throw new \InvalidArgumentException(
+                'The morph key column [' . $this->getForeignKey() . '] on [' . $this->parent::class
+                . '] is [' . $declared->value . '], but [' . $alias . ']\'s primary key is ['
+                . $primaryKey[0]->type->value . ']. A morph pair can only point at models whose '
+                . 'primary-key type matches the key column — declare the pair with a matching '
+                . 'keyType (or uuidMorphs()).'
+            );
+        }
     }
 
     /**

@@ -167,7 +167,7 @@ final class SqlConnectionTest extends TestCase
     public function testBindGuardRejectsUnbindable(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Binding must be a scalar');
+        $this->expectExceptionMessageIsOrContains('Binding must be a scalar');
         $this->connection->selectSql('SELECT * FROM users WHERE id = ?', [new \stdClass()]);
     }
 

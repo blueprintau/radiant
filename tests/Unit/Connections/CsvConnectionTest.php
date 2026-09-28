@@ -195,7 +195,7 @@ final class CsvConnectionTest extends TestCase
         ]);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('selectColumn() requires a single named column');
+        $this->expectExceptionMessageIsOrContains('selectColumn() requires a single named column');
 
         $csv->selectColumn($csv->table('users')->select('*'));
     }
@@ -316,7 +316,7 @@ final class CsvConnectionTest extends TestCase
         ]);
 
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('[joins]');
+        $this->expectExceptionMessageIsOrContains('[joins]');
         $csv->table('users')->join('orders', 'users.id', '=', 'orders.user_id')->get();
     }
 
@@ -333,7 +333,7 @@ final class CsvConnectionTest extends TestCase
         // CsvConnection has no selectSql — the SQL-only raw path is gated
         // by the facade. This asserts the where-level fail-fast instead.
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('[raw-sql]');
+        $this->expectExceptionMessageIsOrContains('[raw-sql]');
         $csv->table('users')->whereRaw('1 = 1')->get();
     }
 
@@ -347,7 +347,7 @@ final class CsvConnectionTest extends TestCase
         $csv = new CsvConnection($this->path, readOnly: true);
 
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('read-only');
+        $this->expectExceptionMessageIsOrContains('read-only');
         $csv->table('users')->insert(['id' => 2, 'name' => 'Bob']);
     }
 }

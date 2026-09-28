@@ -187,7 +187,7 @@ final class CollectionTest extends DatabaseTestCase
         $this->seed();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown relation [nope]');
+        $this->expectExceptionMessageIsOrContains('Unknown relation [nope]');
         CollUser::all()->load('nope');
     }
 

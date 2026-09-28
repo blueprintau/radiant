@@ -106,7 +106,7 @@ final class MetadataFactoryTest extends TestCase
     public function testUnionTypeThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('union/intersection type');
+        $this->expectExceptionMessageIsOrContains('union/intersection type');
         MetadataFactory::for(UnionTypedModel::class);
     }
 
@@ -116,7 +116,7 @@ final class MetadataFactoryTest extends TestCase
     public function testStringWithoutLengthThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('string column without a length');
+        $this->expectExceptionMessageIsOrContains('string column without a length');
         MetadataFactory::for(LengthlessStringModel::class);
     }
 
@@ -129,7 +129,7 @@ final class MetadataFactoryTest extends TestCase
     public function testDivergentDefaultThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('declares a PHP default');
+        $this->expectExceptionMessageIsOrContains('declares a PHP default');
         MetadataFactory::for(DivergentDefaultModel::class);
     }
 
@@ -225,7 +225,7 @@ final class MetadataFactoryTest extends TestCase
     public function testColumnAddingSubclassOfTableOwnerThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('inherits columns from an ancestor and declares columns of its own');
+        $this->expectExceptionMessageIsOrContains('inherits columns from an ancestor and declares columns of its own');
         MetadataFactory::for(ColumnAddingAdmin::class);
     }
 
@@ -236,7 +236,7 @@ final class MetadataFactoryTest extends TestCase
     public function testTableRedeclaringSubclassOfTableOwnerThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('inherits ALL columns from an ancestor and declares its own #[Table]');
+        $this->expectExceptionMessageIsOrContains('inherits ALL columns from an ancestor and declares its own #[Table]');
         MetadataFactory::for(TableRedeclaringAdmin::class);
     }
 
@@ -246,7 +246,7 @@ final class MetadataFactoryTest extends TestCase
     public function testEmptyTableNameThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage("declares #[Table(name: '')]");
+        $this->expectExceptionMessageIsOrContains("declares #[Table(name: '')]");
         MetadataFactory::for(EmptyTableModel::class);
     }
 
@@ -317,7 +317,7 @@ final class MetadataFactoryTest extends TestCase
     public function testMtiRedeclaredKeyThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('redeclares primary-key column [id]');
+        $this->expectExceptionMessageIsOrContains('redeclares primary-key column [id]');
         MetadataFactory::for(MtiRedeclaredKey::class);
     }
 
@@ -390,7 +390,7 @@ final class MetadataFactoryTest extends TestCase
     public function testNonDatetimeSoftDeleteColumnThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('SoftDeletes requires datetime');
+        $this->expectExceptionMessageIsOrContains('SoftDeletes requires datetime');
         MetadataFactory::for(NonDatetimeSoftDeletePost::class);
     }
 
@@ -418,7 +418,7 @@ final class MetadataFactoryTest extends TestCase
     public function testUnknownConstraintColumnThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('unknown column [emial]');
+        $this->expectExceptionMessageIsOrContains('unknown column [emial]');
         MetadataFactory::for(UnknownConstraintColumnModel::class);
     }
 
@@ -428,7 +428,7 @@ final class MetadataFactoryTest extends TestCase
     public function testForeignKeyArityMismatchThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('matching arity; got 1 and 2');
+        $this->expectExceptionMessageIsOrContains('matching arity; got 1 and 2');
         MetadataFactory::for(ArityMismatchModel::class);
     }
 
@@ -439,7 +439,7 @@ final class MetadataFactoryTest extends TestCase
     public function testDuplicateFlagAndAttributeThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('duplicate declaration');
+        $this->expectExceptionMessageIsOrContains('duplicate declaration');
         MetadataFactory::for(DoubleUniqueModel::class);
     }
 

@@ -41,7 +41,7 @@ final class MySqlCharsetTest extends TestCase
     public function testValidConfigRejectsInvalidCharsets(mixed $charset): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('"charset" must be one of');
+        $this->expectExceptionMessageIsOrContains('"charset" must be one of');
         (new MySqlConnector())->validConfig($this->config($charset));
     }
 
@@ -54,7 +54,7 @@ final class MySqlCharsetTest extends TestCase
     public function testConnectRejectsInvalidCharsets(mixed $charset): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('"charset" must be one of');
+        $this->expectExceptionMessageIsOrContains('"charset" must be one of');
         (new MySqlConnector())->connect($this->config($charset));
     }
 

@@ -684,11 +684,12 @@ final class Blueprint
      *
      * @param  string  $name
      * @param  bool  $nullable
+     * @param  ColumnType  $keyType  The `{name}_id` column's type; every morph target's primary key must match it.
      * @return static
      *
      * @throws \InvalidArgumentException
      */
-    public function morphs(string $name, bool $nullable = false): static
+    public function morphs(string $name, bool $nullable = false, ColumnType $keyType = ColumnType::BigInt): static
     {
         if ($name === '') {
             throw new \InvalidArgumentException('A morph pair requires a non-empty name.');
@@ -696,7 +697,21 @@ final class Blueprint
 
         return $this
             ->column(ColumnType::String, $name . '_type', nullable: $nullable, length: 255)
-            ->column(ColumnType::BigInt, $name . '_id', nullable: $nullable);
+            ->column($keyType, $name . '_id', nullable: $nullable);
+    }
+
+    /**
+     * Add a polymorphic column pair keyed by UUID primary keys.
+     *
+     * @param  string  $name
+     * @param  bool  $nullable
+     * @return static
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function uuidMorphs(string $name, bool $nullable = false): static
+    {
+        return $this->morphs($name, $nullable, ColumnType::Uuid);
     }
 
     /**
@@ -1070,7 +1085,7 @@ final class Blueprint
         // metadata factory injects the `{name}_type`/`{name}_id` synthetic
         // mappings into $metadata->properties, so the properties loop above
         // already emitted them as ordinary columns — with the exact shapes
-        // morphs() produces.
+        // morphs() produces (including the attribute's keyType).
 
         // MTI children: the factory-emitted FK to the parent table. The
         // shared primary key IS the table link — the child declares no key

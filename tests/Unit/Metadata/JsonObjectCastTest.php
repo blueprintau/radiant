@@ -83,7 +83,7 @@ final class JsonObjectCastTest extends DatabaseTestCase
         $mapping = $metadata->mappingFor('preferences');
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage(
+        $this->expectExceptionMessageIsOrContains(
             'Column [preferences] expects a ' . UserPreferences::class . ' value; got stdClass.'
         );
 
@@ -107,7 +107,7 @@ final class JsonObjectCastTest extends DatabaseTestCase
         );
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('does not decode to a JSON object');
+        $this->expectExceptionMessageIsOrContains('does not decode to a JSON object');
 
         JsonObjectPost::find($post->id);
     }
@@ -128,7 +128,7 @@ final class JsonObjectCastTest extends DatabaseTestCase
         );
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('could not decode the value');
+        $this->expectExceptionMessageIsOrContains('could not decode the value');
 
         JsonObjectPost::find($post->id);
     }
@@ -156,7 +156,7 @@ final class JsonObjectCastTest extends DatabaseTestCase
         $mapping = $metadata->mappingFor('preferences');
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('does not implement JsonStorable');
+        $this->expectExceptionMessageIsOrContains('does not implement JsonStorable');
 
         $mapping->column->decode('{"theme":"dark"}', NoFromJson::class);
     }

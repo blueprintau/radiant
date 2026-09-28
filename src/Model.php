@@ -1576,6 +1576,7 @@ abstract class Model
         self::assertColumnExists($related, $foreignKey, 'foreign key');
         self::assertColumnExists($related, $typeColumn, 'morph type');
         self::assertColumnExists(static::class, $localKey, 'local key');
+        self::assertMorphKeyMatches($related, $foreignKey, static::class);
 
         return (new Relations\MorphMany($this, $related, $foreignKey, $localKey, $typeColumn))
             ->withName(self::relationName());
@@ -1617,6 +1618,7 @@ abstract class Model
         self::assertColumnExists($related, $foreignKey, 'foreign key');
         self::assertColumnExists($related, $typeColumn, 'morph type');
         self::assertColumnExists(static::class, $localKey, 'local key');
+        self::assertMorphKeyMatches($related, $foreignKey, static::class);
 
         return (new Relations\MorphOne($this, $related, $foreignKey, $localKey, $typeColumn))
             ->withName(self::relationName());
@@ -2002,6 +2004,52 @@ abstract class Model
         }
 
         return count($names) === 1 ? $names[0] : $names;
+    }
+
+    /**
+     * Fail fast when a morph key column's type cannot hold the primary
+     * key it stores.
+     *
+     * @param  class-string<Model>  $holder  The model whose table carries the `{name}_id` column.
+     * @param  string  $keyColumn
+     * @param  class-string<Model>  $target  The model whose primary key the column must hold.
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private static function assertMorphKeyMatches(string $holder, string $keyColumn, string $target): void
+    {
+        $declared = MetadataFactory::for($holder)->mappingFor($keyColumn)->column->type;
+        $primaryKey = self::singlePrimaryKeyOf($target);
+
+        if ($primaryKey->type !== $declared) {
+            throw new \InvalidArgumentException(
+                "The morph key column [{$keyColumn}] on [{$holder}] is [{$declared->value}], but "
+                . "[{$target}]'s primary key is [{$primaryKey->type->value}]. A morph pair can "
+                . 'only point at models whose primary-key type matches the key column — '
+                . 'declare the pair with a matching keyType (or uuidMorphs()).'
+            );
+        }
+    }
+
+    /**
+     * A model's single named primary-key column.
+     *
+     * @param  class-string<Model>  $class
+     * @return Column
+     * @throws \LogicException
+     */
+    private static function singlePrimaryKeyOf(string $class): Column
+    {
+        $keys = MetadataFactory::for($class)->primaryKeys;
+
+        if (count($keys) !== 1 || $keys[0]->name === null) {
+            throw new \LogicException(
+                "A morph target requires a single named primary key; model [{$class}] "
+                . 'declares none, a composite key, or an unnamed key.'
+            );
+        }
+
+        return $keys[0];
     }
 
     /**

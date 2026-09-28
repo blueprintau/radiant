@@ -67,7 +67,7 @@ final class SchemaSyncTest extends DatabaseTestCase
     public function testFromMetadataRejectsTablelessModel(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('owns no table');
+        $this->expectExceptionMessageIsOrContains('owns no table');
         Blueprint::fromMetadata(\BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteBase::class);
     }
 
@@ -469,7 +469,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $this->connection->table('sync_meta_check')->insert(['price' => 5.0]);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
-        $this->expectExceptionMessage('SQL error executing query');
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
         $this->connection->table('sync_meta_check')->insert(['price' => -5.0]);
     }
 
@@ -528,7 +528,7 @@ final class SchemaSyncTest extends DatabaseTestCase
     public function testDuplicateIndexNamesFailFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('two indexes named [sync_dup_constraint_regionId_country_unique]');
+        $this->expectExceptionMessageIsOrContains('two indexes named [sync_dup_constraint_regionId_country_unique]');
 
         Blueprint::fromMetadata(DuplicateConstraint::class);
     }
@@ -570,7 +570,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $blueprint = new Blueprint('sync_comments');
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('composite primary key');
+        $this->expectExceptionMessageIsOrContains('composite primary key');
         $blueprint->column(
             ColumnType::BigInt,
             'ownerId',
@@ -681,7 +681,7 @@ final class SchemaSyncTest extends DatabaseTestCase
 
         // Two accepted rows with the same email violate the partial index.
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
-        $this->expectExceptionMessage('SQL error executing query');
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
         $connection->table('sync_partial')->insert(['email' => 'a@x.io', 'accepted' => 1]);
     }
 
@@ -720,7 +720,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $this->connection->table('sync_checked')->insert(['price' => 10.0]);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
-        $this->expectExceptionMessage('SQL error executing query');
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
         $this->connection->table('sync_checked')->insert(['price' => -1.0]);
     }
 

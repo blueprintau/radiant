@@ -118,8 +118,8 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post->title = 'Edited while trashed';
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('soft-deleted');
-        $this->expectExceptionMessage('restore() first');
+        $this->expectExceptionMessageIsOrContains('soft-deleted');
+        $this->expectExceptionMessageIsOrContains('restore() first');
 
         $post->save();
     }
@@ -138,7 +138,7 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post->title = 'Edited while trashed';
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('soft-deleted');
+        $this->expectExceptionMessageIsOrContains('soft-deleted');
 
         $post->save();
     }
@@ -280,7 +280,7 @@ final class SoftDeletesTest extends DatabaseTestCase
         $loaded->title = 'Edited while trashed';
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('soft-deleted');
+        $this->expectExceptionMessageIsOrContains('soft-deleted');
 
         $loaded->save();
     }
@@ -315,7 +315,7 @@ final class SoftDeletesTest extends DatabaseTestCase
     public function testOverrideWithoutDeclaredColumnFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('overrides deletedAtColumn() to [missing_at]');
+        $this->expectExceptionMessageIsOrContains('overrides deletedAtColumn() to [missing_at]');
 
         \BlueprintAU\Radiant\Metadata\MetadataFactory::for(SdUndeclaredOverridePost::class);
     }

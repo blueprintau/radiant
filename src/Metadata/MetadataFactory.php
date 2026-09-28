@@ -635,9 +635,9 @@ final class MetadataFactory
      * `#[Morphs]` attributes.
      *
      * Each attribute emits two synthetic mappings — `{name}_type` (string)
-     * and `{name}_id` (bigint). A user-declared `#[Column]` with the same
-     * name wins, but a declared column whose type cannot hold the morph
-     * value fails fast.
+     * and `{name}_id` (the attribute's keyType, bigint by default). A
+     * user-declared `#[Column]` with the same name wins, but a declared
+     * column whose type cannot hold the morph value fails fast.
      *
      * @param  \ReflectionClass<Model>  $reflection
      * @param  class-string<Model>  $class
@@ -676,7 +676,7 @@ final class MetadataFactory
             $seen[$morphs->name] = true;
 
             self::injectMorphColumn($class, $properties, $morphs->typeColumn(), ColumnType::String, 255, 'string', $morphs->nullable);
-            self::injectMorphColumn($class, $properties, $morphs->keyColumn(), ColumnType::BigInt, null, 'bigint', $morphs->nullable);
+            self::injectMorphColumn($class, $properties, $morphs->keyColumn(), $morphs->keyType, null, $morphs->keyType->value, $morphs->nullable);
         }
     }
 
@@ -722,7 +722,7 @@ final class MetadataFactory
             if ($type === ColumnType::String && ($mapping->column->length ?? 0) < ($length ?? 0)) {
                 throw new \InvalidArgumentException(
                     "Model [{$class}] declares column [{$columnName}] with length "
-                    . '[{$mapping->column->length}]; the #[Morphs] type column requires '
+                    . "[{$mapping->column->length}]; the #[Morphs] type column requires "
                     . "a length of at least {$length} (a full class-string must fit)."
                 );
             }

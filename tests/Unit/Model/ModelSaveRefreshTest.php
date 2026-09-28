@@ -153,7 +153,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $item = new MstItem();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('backed by a typed property');
+        $this->expectExceptionMessageIsOrContains('backed by a typed property');
         $item->setAttribute('name', 'nope');
     }
 
@@ -165,7 +165,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $item = new MstItem();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column');
+        $this->expectExceptionMessageIsOrContains('Unknown column');
         $item->setAttribute('bogus', 'nope');
     }
 
@@ -186,7 +186,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $ref->setValue($item, true);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('cannot target its row');
+        $this->expectExceptionMessageIsOrContains('cannot target its row');
 
         $item->name = 'Edited';
         $item->save();
@@ -205,7 +205,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $ref->setValue($item, true);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('cannot target its row');
+        $this->expectExceptionMessageIsOrContains('cannot target its row');
 
         $item->delete();
     }

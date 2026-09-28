@@ -13,6 +13,8 @@ use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphDeclared;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MorphReaction;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\ShortMorphType;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\UuidMorphComment;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\UuidMorphMismatch;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\WrongMorphType;
 
 /**
@@ -125,7 +127,7 @@ final class MorphsAttributeTest extends DatabaseTestCase
     public function testDuplicateMorphNameFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage("declares #[Morphs(name: 'dupable')] twice");
+        $this->expectExceptionMessageIsOrContains("declares #[Morphs(name: 'dupable')] twice");
 
         MetadataFactory::for(DuplicateMorphs::class);
     }
@@ -136,7 +138,7 @@ final class MorphsAttributeTest extends DatabaseTestCase
     public function testWrongMorphTypeFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('requires string');
+        $this->expectExceptionMessageIsOrContains('requires string');
 
         MetadataFactory::for(WrongMorphType::class);
     }
@@ -147,7 +149,7 @@ final class MorphsAttributeTest extends DatabaseTestCase
     public function testShortMorphTypeFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('length of at least 255');
+        $this->expectExceptionMessageIsOrContains('length of at least 255');
 
         MetadataFactory::for(ShortMorphType::class);
     }
@@ -158,8 +160,55 @@ final class MorphsAttributeTest extends DatabaseTestCase
     public function testMorphsRejectsEmptyName(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('non-empty name');
+        $this->expectExceptionMessageIsOrContains('non-empty name');
 
         (new Blueprint('t'))->morphs('');
+    }
+
+    /**
+     * A keyType: Uuid attribute injects a uuid `{name}_id` column.
+     */
+    public function testKeyTypeUuidInjectsUuidKeyColumn(): void
+    {
+        $metadata = MetadataFactory::for(UuidMorphComment::class);
+
+        $key = $metadata->mappingFor('commentable_id');
+        self::assertNull($key->property);
+        self::assertSame(ColumnType::Uuid, $key->column->type);
+        self::assertNull($key->column->length);
+    }
+
+    /**
+     * fromMetadata() with a keyType attribute and a hand-built uuidMorphs()
+     * call produce IDENTICAL DDL — the one-emission-path guarantee holds
+     * for the keyType path too.
+     */
+    public function testFromMetadataMatchesHandBuiltUuidMorphs(): void
+    {
+        $fromMetadata = Blueprint::fromMetadata(UuidMorphComment::class);
+
+        $handBuilt = (new Blueprint('uuid_morph_comments'))
+            ->id()
+            ->string('body', 64)
+            ->uuidMorphs('commentable');
+
+        $grammar = $this->connection->schemaGrammar;
+
+        self::assertSame(
+            $grammar->compileCreate($fromMetadata),
+            $grammar->compileCreate($handBuilt),
+        );
+    }
+
+    /**
+     * A declared key column whose type contradicts the attribute's
+     * keyType is a build error.
+     */
+    public function testDeclaredKeyColumnContradictingKeyTypeFailsFast(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('requires uuid');
+
+        MetadataFactory::for(UuidMorphMismatch::class);
     }
 }

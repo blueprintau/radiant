@@ -11,6 +11,8 @@ use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyImage;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyVideo;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\UuidMorphComment;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\UuidVideo;
 
 /**
  * Phase B: the polymorphic relations — lazy + eager morphMany/morphOne/
@@ -110,7 +112,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         self::assertNotNull($comment);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('does not resolve to an existing model class');
+        $this->expectExceptionMessageIsOrContains('does not resolve to an existing model class');
 
         $comment->commentable()->getResults();
     }
@@ -128,7 +130,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $relation = $comment->allowlistedWith([PolyPost::class]);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('is not in the relation\'s allowlist');
+        $this->expectExceptionMessageIsOrContains('is not in the relation\'s allowlist');
 
         $relation->getResults();
     }
@@ -288,8 +290,84 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         self::assertNotNull($comment);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('cannot compose filters');
+        $this->expectExceptionMessageIsOrContains('cannot compose filters');
 
         $comment->commentable()->countBy('id');
+    }
+
+    /**
+     * A UUID-keyed morph pair round-trips: a uuidMorphs() child points at
+     * a UUID-PK parent, lazy + eager, through the attribute store.
+     */
+    public function testUuidKeyedMorphRoundTrips(): void
+    {
+        $this->createTables(
+            Blueprint::fromMetadata(UuidVideo::class),
+            Blueprint::fromMetadata(UuidMorphComment::class),
+        );
+
+        $videoId = '0b8df450-0e82-4c6e-9c1d-3f2a5b6c7d8e';
+        $this->connection->table('uuid_videos')->insert(['id' => $videoId, 'title' => 'Uuid One']);
+
+        $comment = new UuidMorphComment();
+        $comment->id = 1;
+        $comment->body = 'on uuid video';
+        $comment->setAttribute('commentable_type', UuidVideo::class);
+        $comment->setAttribute('commentable_id', $videoId);
+        $comment->save();
+
+        $loaded = UuidMorphComment::newQuery()->find(1);
+        self::assertNotNull($loaded);
+        self::assertSame(UuidVideo::class, $loaded->attribute('commentable_type'));
+        self::assertSame($videoId, $loaded->attribute('commentable_id'));
+
+        $parent = $loaded->commentable()->getResults()->first();
+        self::assertInstanceOf(UuidVideo::class, $parent);
+        self::assertSame('Uuid One', $parent->title);
+    }
+
+    /**
+     * A BigInt morph pair pointing at a UUID-PK model fails fast at
+     * relation construction — the forward side: the pair's `_id` column
+     * lives on the child and must hold the UUID parent's key.
+     */
+    public function testBigIntMorphToUuidTargetFailsFastOnForwardSide(): void
+    {
+        $this->createTables(Blueprint::fromMetadata(UuidVideo::class));
+
+        $video = new UuidVideo();
+        $video->id = '0b8df450-0e82-4c6e-9c1d-3f2a5b6c7d8e';
+        $video->title = 'Uuid One';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains("[" . UuidVideo::class . "]'s primary key is [uuid]");
+
+        $video->comments();
+    }
+
+    /**
+     * A stored alias whose target's PK type contradicts the key column
+     * fails fast at resolution — the inverse side.
+     */
+    public function testMorphToTypeMismatchFailsFastOnInverseSide(): void
+    {
+        $this->createTables(Blueprint::fromMetadata(UuidVideo::class));
+
+        $videoId = '0b8df450-0e82-4c6e-9c1d-3f2a5b6c7d8e';
+        $this->connection->table('uuid_videos')->insert(['id' => $videoId, 'title' => 'Uuid One']);
+
+        // A bigint-keyed morph pair holding a uuid target's alias — the
+        // corrupt state the check exists to catch.
+        $this->connection->table('poly_comments')->insert([
+            ['id' => 6, 'body' => 'mismatch', 'commentable_type' => UuidVideo::class, 'commentable_id' => 1],
+        ]);
+
+        $comment = PolyComment::newQuery()->find(6);
+        self::assertNotNull($comment);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains("[" . UuidVideo::class . "]'s primary key is [uuid]");
+
+        $comment->commentable()->getResults();
     }
 }

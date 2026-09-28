@@ -43,7 +43,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testWhereColumnRejectsUnknownColumn(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [not_a_column]');
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()->whereColumn('name', '=', 'not_a_column');
@@ -67,7 +67,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testWhereNestedRejectsUnknownColumnInCallback(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [typo_column]');
+        $this->expectExceptionMessageIsOrContains('Unknown column [typo_column]');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()->whereNested(fn ($nested) => $nested->where('typo_column', '=', 1));
@@ -80,7 +80,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testWhereNestedRejectsEmptyGroup(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('must contain at least one clause');
+        $this->expectExceptionMessageIsOrContains('must contain at least one clause');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()->whereNested(fn ($nested) => $nested);
@@ -93,7 +93,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testOnRejectsUnknownColumn(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [not_a_column]');
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()
@@ -259,7 +259,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testInsertRejectsUnknownColumn(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [not_a_column]');
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()->insert(['name' => 'x', 'not_a_column' => 1]);

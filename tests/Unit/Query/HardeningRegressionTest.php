@@ -55,7 +55,7 @@ final class HardeningRegressionTest extends TestCase
     public function testOrderByDirectionRejectsNonAscDesc(string $direction): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Order direction must be ASC or DESC');
+        $this->expectExceptionMessageIsOrContains('Order direction must be ASC or DESC');
         $this->builder()->orderBy('name', $direction);
     }
 
@@ -94,7 +94,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereColumnRejectsNonComparisonOperators(string $operator): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid column comparison operator');
+        $this->expectExceptionMessageIsOrContains('Invalid column comparison operator');
         $this->builder()->whereColumn('a', $operator, 'b');
     }
 
@@ -107,7 +107,7 @@ final class HardeningRegressionTest extends TestCase
     public function testJoinsRejectNonComparisonOperators(string $operator): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid column comparison operator');
+        $this->expectExceptionMessageIsOrContains('Invalid column comparison operator');
         $this->builder()->join('orders', 'users.id', $operator, 'orders.user_id');
     }
 
@@ -129,7 +129,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereInEmptyArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('require a non-empty array of values');
+        $this->expectExceptionMessageIsOrContains('require a non-empty array of values');
         $this->builder()->where('status', 'IN', []);
     }
 
@@ -139,7 +139,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereNotInEmptyArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('require a non-empty array of values');
+        $this->expectExceptionMessageIsOrContains('require a non-empty array of values');
         $this->builder()->where('status', 'NOT IN', []);
     }
 
@@ -149,7 +149,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereInNonArrayThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('require an array of values');
+        $this->expectExceptionMessageIsOrContains('require an array of values');
         $this->builder()->where('status', 'IN', 'active');
     }
 
@@ -178,7 +178,7 @@ final class HardeningRegressionTest extends TestCase
     public function testWhereRejectsInvalidOperators(string $operator): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid where operator');
+        $this->expectExceptionMessageIsOrContains('Invalid where operator');
         $this->builder()->where('a', $operator, 1);
     }
 
@@ -188,7 +188,7 @@ final class HardeningRegressionTest extends TestCase
     public function testHavingRejectsInvalidOperators(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid where operator');
+        $this->expectExceptionMessageIsOrContains('Invalid where operator');
         $this->builder()->having('count', '=>', 1);
     }
 

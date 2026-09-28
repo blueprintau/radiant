@@ -143,7 +143,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
     public function testUnknownColumnValidation(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [nonexistent] on model');
+        $this->expectExceptionMessageIsOrContains('Unknown column [nonexistent] on model');
         User::where('nonexistent', '=', 1);
     }
 
@@ -158,7 +158,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $user = new User();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('backed by a typed property; write the property directly');
+        $this->expectExceptionMessageIsOrContains('backed by a typed property; write the property directly');
         $user->setAttribute('email', 'via-set-attribute@example.com');
     }
 
@@ -171,7 +171,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $user = new User();
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Unknown column [nonexistent]');
+        $this->expectExceptionMessageIsOrContains('Unknown column [nonexistent]');
         $user->setAttribute('nonexistent', 'x');
     }
 
@@ -356,7 +356,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $blueprint = (new Blueprint('users'))->dropColumn('meta');
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('does not support dropping columns');
+        $this->expectExceptionMessageIsOrContains('does not support dropping columns');
         $this->connection->alter(SchemaOperation::DropColumn, $blueprint);
     }
 

@@ -107,7 +107,7 @@ final class MigrationFeaturesTest extends DatabaseTestCase
     public function testCompileCopyTableRejectsEmptyColumns(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('requires at least one column');
+        $this->expectExceptionMessageIsOrContains('requires at least one column');
         $this->sqlite->compileCopyTable('users', 'users__radiant_new', []);
     }
 
@@ -154,7 +154,7 @@ final class MigrationFeaturesTest extends DatabaseTestCase
             ->column(ColumnType::String, 'name', length: 100);
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('requires a table rebuild');
+        $this->expectExceptionMessageIsOrContains('requires a table rebuild');
         $this->sqlite->compileModifyColumn($blueprint);
     }
 
@@ -276,7 +276,7 @@ final class MigrationFeaturesTest extends DatabaseTestCase
             ->column(ColumnType::String, 'brand_new', length: 100);
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('would copy no columns');
+        $this->expectExceptionMessageIsOrContains('would copy no columns');
         $this->sqlite->compileRebuildTable(
             $desired,
             'users__radiant_new',
@@ -381,7 +381,7 @@ final class MigrationFeaturesTest extends DatabaseTestCase
     public function testCompileDropCheckMySqlThrows(): void
     {
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('table rebuild');
+        $this->expectExceptionMessageIsOrContains('table rebuild');
         $this->mysql->compileDropCheck('users', 'users_age_check');
     }
 }

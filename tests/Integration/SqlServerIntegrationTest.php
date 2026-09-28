@@ -285,7 +285,7 @@ final class SqlServerIntegrationTest extends TestCase
         // The config values don't matter — the connector fails before
         // connecting, on the missing host/port/database.
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage($expectedMessage);
+        $this->expectExceptionMessageIsOrContains($expectedMessage);
         $connector->connect(['driver' => '']);
     }
 }

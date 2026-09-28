@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Attributes;
 
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+
 /**
  * Declares a polymorphic (morph) column pair on the model's table.
  *
@@ -11,6 +13,9 @@ namespace BlueprintAU\Radiant\Attributes;
  * holding the related model's class-string — the morph alias) and
  * `{name}_id` (the related model's primary-key value). Together they
  * point at a row of ANY model table — the polymorphic target.
+ *
+ * The key column's type defaults to bigint; declare `keyType:` when the
+ * morph targets use a different primary-key type (e.g. UUID keys).
  *
  * The columns are SYNTHETIC mappings (no PHP property backs them), the
  * same mechanism the soft-delete column uses: values live on the model's
@@ -23,8 +28,9 @@ namespace BlueprintAU\Radiant\Attributes;
  * The DDL side is shared with hand-built blueprints:
  * {@see \BlueprintAU\Radiant\Database\Schema\Blueprint::morphs()} emits
  * the identical column pair, and `Blueprint::fromMetadata()` folds this
- * attribute BY CALLING that helper — one emission path, so a
- * metadata-driven table and a hand-built one always agree.
+ * attribute through the metadata factory's synthetic mappings — the
+ * shapes match the helper's, so a metadata-driven table and a hand-built
+ * one always agree.
  *
  * The morph alias convention is the related model's FULL class-string
  * (FQCN): unambiguous across namespaces (a short name would silently
@@ -42,10 +48,12 @@ final class Morphs
      *
      * @param  string  $name
      * @param  bool  $nullable
+     * @param  ColumnType  $keyType  The `{name}_id` column's type; every morph target's primary key must match it.
      */
     public function __construct(
         public string $name,
         public bool $nullable = false,
+        public ColumnType $keyType = ColumnType::BigInt,
     ) {
     }
 

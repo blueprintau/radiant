@@ -119,7 +119,7 @@ final class SchemaGrammarTest extends TestCase
     public function testCreateNoColumnsThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('no columns');
+        $this->expectExceptionMessageIsOrContains('no columns');
         (new SqliteSchemaGrammar())->compileCreate(new Blueprint('users'));
     }
 
@@ -134,7 +134,7 @@ final class SchemaGrammarTest extends TestCase
         // compile-time).
         $blueprint = (new Blueprint('users'))->column(ColumnType::String, 'name');
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('requires a length');
+        $this->expectExceptionMessageIsOrContains('requires a length');
         (new SqliteSchemaGrammar())->compileCreate($blueprint);
     }
 
@@ -236,7 +236,7 @@ final class SchemaGrammarTest extends TestCase
     public function testIndexRequiresColumns(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('at least one column');
+        $this->expectExceptionMessageIsOrContains('at least one column');
         (new Blueprint('users'))->index('empty', []);
     }
 
@@ -275,7 +275,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = (new Blueprint('subscriptions'))
             ->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('NULLS NOT DISTINCT');
+        $this->expectExceptionMessageIsOrContains('NULLS NOT DISTINCT');
         (new MySqlSchemaGrammar())->compileIndexes($blueprint);
     }
 
@@ -287,7 +287,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = (new Blueprint('subscriptions'))
             ->index(null, ['user_id'], unique: true, nullsNotDistinct: true);
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('NULLS NOT DISTINCT');
+        $this->expectExceptionMessageIsOrContains('NULLS NOT DISTINCT');
         (new SqliteSchemaGrammar())->compileIndexes($blueprint);
     }
 
@@ -298,7 +298,7 @@ final class SchemaGrammarTest extends TestCase
     public function testNullsNotDistinctWithoutUniqueThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('only applies to a UNIQUE index');
+        $this->expectExceptionMessageIsOrContains('only applies to a UNIQUE index');
         (new Blueprint('users'))->index(null, ['user_id'], nullsNotDistinct: true);
     }
 
@@ -339,7 +339,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = (new Blueprint('invitations'))
             ->index(null, ['email'], where: 'accepted_at IS NULL');
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('partial (filtered) indexes');
+        $this->expectExceptionMessageIsOrContains('partial (filtered) indexes');
         (new MySqlSchemaGrammar())->compileIndexes($blueprint);
     }
 
@@ -349,7 +349,7 @@ final class SchemaGrammarTest extends TestCase
     public function testPartialIndexEmptyPredicateThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('must be non-empty');
+        $this->expectExceptionMessageIsOrContains('must be non-empty');
         (new Blueprint('users'))->index(null, ['user_id'], where: '   ');
     }
 
@@ -422,7 +422,7 @@ final class SchemaGrammarTest extends TestCase
     public function testEmptyCheckThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('non-empty expression');
+        $this->expectExceptionMessageIsOrContains('non-empty expression');
         (new Blueprint('products'))->check('  ');
     }
 
@@ -454,7 +454,7 @@ final class SchemaGrammarTest extends TestCase
             ->column(ColumnType::BigInt, 'account_id')
             ->foreignKey(['account_id'], 'accounts', ['id'], deferrable: true);
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('DEFERRABLE foreign keys');
+        $this->expectExceptionMessageIsOrContains('DEFERRABLE foreign keys');
         (new MySqlSchemaGrammar())->compileCreate($blueprint);
     }
 
@@ -465,7 +465,7 @@ final class SchemaGrammarTest extends TestCase
     public function testInitiallyDeferredWithoutDeferrableThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('implies DEFERRABLE');
+        $this->expectExceptionMessageIsOrContains('implies DEFERRABLE');
         (new Blueprint('transfers'))->foreignKey(['account_id'], 'accounts', ['id'], initiallyDeferred: true);
     }
 
@@ -530,7 +530,7 @@ final class SchemaGrammarTest extends TestCase
             ->column(ColumnType::BigInt, 'tenant_id')
             ->column(ColumnType::BigInt, 'user_id');
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('matching arity');
+        $this->expectExceptionMessageIsOrContains('matching arity');
         $blueprint->foreignKey(['tenant_id', 'user_id'], 'memberships', ['tenant_id']);
     }
 
@@ -562,7 +562,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = new Blueprint('users');
 
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('A foreign key action must be one of CASCADE, SET NULL, RESTRICT, NO ACTION, or SET DEFAULT');
+        $this->expectExceptionMessageIsOrContains('A foreign key action must be one of CASCADE, SET NULL, RESTRICT, NO ACTION, or SET DEFAULT');
         $blueprint->foreignKey(['user_id'], 'users', ['id'], onDelete: 'cascade; DROP TABLE users');
     }
 
@@ -587,7 +587,7 @@ final class SchemaGrammarTest extends TestCase
         $blueprint = (new Blueprint('posts'))
             ->column(ColumnType::BigInt, 'count', default: [1, 2, 3]);
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('default must be a scalar');
+        $this->expectExceptionMessageIsOrContains('default must be a scalar');
         (new SqliteSchemaGrammar())->compileCreate($blueprint);
     }
 
@@ -630,7 +630,7 @@ final class SchemaGrammarTest extends TestCase
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('does not support dropping columns');
+        $this->expectExceptionMessageIsOrContains('does not support dropping columns');
         (new SqliteSchemaGrammar())->compileDropColumns($blueprint);
     }
 
@@ -706,7 +706,7 @@ final class SchemaGrammarTest extends TestCase
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
         // The message is log-safe by contract — it never embeds the SQL.
-        $this->expectExceptionMessage('SQL error executing query');
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
         $connection->table('users')->get();
     }
 
@@ -778,7 +778,7 @@ final class SchemaGrammarTest extends TestCase
     public function testDecimalRequiresPrecision(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('A decimal column requires a precision between 1 and 65; got none.');
+        $this->expectExceptionMessageIsOrContains('A decimal column requires a precision between 1 and 65; got none.');
         (new Blueprint('ledger'))->column(ColumnType::Decimal, 'amount');
     }
 
@@ -788,7 +788,7 @@ final class SchemaGrammarTest extends TestCase
     public function testDecimalScaleAbovePrecisionThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('A decimal column requires a scale between 0 and its precision [4]; got 5.');
+        $this->expectExceptionMessageIsOrContains('A decimal column requires a scale between 0 and its precision [4]; got 5.');
         (new Blueprint('ledger'))->decimal('amount', 4, 5);
     }
 
@@ -798,7 +798,7 @@ final class SchemaGrammarTest extends TestCase
     public function testUuidRejectsLength(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('A uuid column has a fixed 36-character form; do not declare a length.');
+        $this->expectExceptionMessageIsOrContains('A uuid column has a fixed 36-character form; do not declare a length.');
         (new Blueprint('refs'))->column(ColumnType::Uuid, 'external_id', length: 36);
     }
 
@@ -808,7 +808,7 @@ final class SchemaGrammarTest extends TestCase
     public function testEnumRequiresValues(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('An enum column [status] requires at least one value.');
+        $this->expectExceptionMessageIsOrContains('An enum column [status] requires at least one value.');
         (new Blueprint('posts'))->enum('status', []);
     }
 
@@ -818,7 +818,7 @@ final class SchemaGrammarTest extends TestCase
     public function testEnumRejectsNonStringValues(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('An enum column [status] requires string values; got int.');
+        $this->expectExceptionMessageIsOrContains('An enum column [status] requires string values; got int.');
         (new Blueprint('posts'))->enum('status', ['draft', 1]);
     }
 
@@ -828,7 +828,7 @@ final class SchemaGrammarTest extends TestCase
     public function testValuesRejectedOnNonEnumColumn(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Only an enum column accepts values; got values on a [string] column.');
+        $this->expectExceptionMessageIsOrContains('Only an enum column accepts values; got values on a [string] column.');
         (new Blueprint('posts'))->column(ColumnType::String, 'status', length: 10, values: ['draft']);
     }
 
@@ -887,7 +887,7 @@ final class SchemaGrammarTest extends TestCase
         );
 
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\QueryException::class);
-        $this->expectExceptionMessage('SQL error executing query');
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
         $connection->table('posts')->insert(['status' => 'archived']);
     }
 }

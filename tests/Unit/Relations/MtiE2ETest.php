@@ -135,7 +135,7 @@ final class MtiE2ETest extends DatabaseTestCase
         $ref->setValue($admin, true);
 
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('cannot target its row');
+        $this->expectExceptionMessageIsOrContains('cannot target its row');
 
         $admin->delete();
     }

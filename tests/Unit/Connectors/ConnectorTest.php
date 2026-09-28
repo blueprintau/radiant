@@ -36,7 +36,7 @@ final class ConnectorTest extends TestCase
     public function testSqliteRequiresDatabase(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('SQLite database must be a non-empty path string');
+        $this->expectExceptionMessageIsOrContains('SQLite database must be a non-empty path string');
         (new SqliteConnector())->validConfig(['driver' => 'sqlite']);
     }
 
@@ -47,7 +47,7 @@ final class ConnectorTest extends TestCase
     public function testSqliteRejectsEmptyDatabase(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('SQLite database must be a non-empty path string');
+        $this->expectExceptionMessageIsOrContains('SQLite database must be a non-empty path string');
         (new SqliteConnector())->validConfig(['driver' => 'sqlite', 'database' => '']);
     }
 
@@ -71,7 +71,7 @@ final class ConnectorTest extends TestCase
     public function testMySqlRequiresDatabase(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('MySQL requires a non-empty string "database"');
+        $this->expectExceptionMessageIsOrContains('MySQL requires a non-empty string "database"');
         (new MySqlConnector())->validConfig(['driver' => 'mysql', 'host' => 'localhost', 'port' => 3306]);
     }
 
@@ -94,7 +94,7 @@ final class ConnectorTest extends TestCase
     public function testPostgresRequiresHost(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Postgres requires a non-empty string "host"');
+        $this->expectExceptionMessageIsOrContains('Postgres requires a non-empty string "host"');
         (new PostgresConnector())->validConfig(['driver' => 'pgsql', 'database' => 'app']);
     }
 
@@ -116,7 +116,7 @@ final class ConnectorTest extends TestCase
     public function testCsvRequiresPath(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('CSV requires a non-empty "path" string');
+        $this->expectExceptionMessageIsOrContains('CSV requires a non-empty "path" string');
         (new CsvConnector())->validConfig(['driver' => 'csv']);
     }
 
@@ -126,7 +126,7 @@ final class ConnectorTest extends TestCase
     public function testCsvRejectsEmptyPath(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('CSV requires a non-empty "path" string');
+        $this->expectExceptionMessageIsOrContains('CSV requires a non-empty "path" string');
         (new CsvConnector())->validConfig(['driver' => 'csv', 'path' => '']);
     }
 
@@ -138,7 +138,7 @@ final class ConnectorTest extends TestCase
     public function testPostgresRejectsNonIntegerPort(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Postgres "port" must be an integer');
+        $this->expectExceptionMessageIsOrContains('Postgres "port" must be an integer');
         (new PostgresConnector())->validConfig([
             'driver' => 'pgsql',
             'host' => 'localhost',

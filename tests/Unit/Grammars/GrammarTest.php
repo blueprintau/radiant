@@ -316,7 +316,7 @@ final class GrammarTest extends TestCase
     public function testOnWithoutJoinThrows(): void
     {
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('Cannot call on()/orOn() before a join');
+        $this->expectExceptionMessageIsOrContains('Cannot call on()/orOn() before a join');
         $this->builder()->on('a.id', '=', 'b.id');
     }
 
@@ -326,7 +326,7 @@ final class GrammarTest extends TestCase
     public function testOnRejectsNonColumnOperator(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('Invalid column comparison operator [IN]');
+        $this->expectExceptionMessageIsOrContains('Invalid column comparison operator [IN]');
         $this->builder()
             ->join('posts', 'posts.user_id', '=', 'users.id')
             ->on('posts.user_id', 'IN', 'users.id');
@@ -512,7 +512,7 @@ final class GrammarTest extends TestCase
     public function testSqliteLockThrows(): void
     {
         $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessage('does not support row locks');
+        $this->expectExceptionMessageIsOrContains('does not support row locks');
         (new SqliteGrammar())->compileSelect($this->builder()->lockForUpdate());
     }
 
@@ -684,7 +684,7 @@ final class GrammarTest extends TestCase
         $sub = $this->builder('orders');
         $builder = $this->builder()->fromSub($sub, 'o');
         $this->expectException(\LogicException::class);
-        $this->expectExceptionMessage('already set and cannot be changed');
+        $this->expectExceptionMessageIsOrContains('already set and cannot be changed');
         $builder->fromSub($this->builder('other'), 'x');
     }
 
