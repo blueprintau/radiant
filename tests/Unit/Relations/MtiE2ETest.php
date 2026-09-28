@@ -4,49 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * Fixture: the MTI root.
- */
-#[Table(name: 'mti_users')]
-class MtiUser extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The user's email.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $email;
-}
-
-/**
- * Fixture: the MTI child — own table, derived shared key.
- */
-#[Table(name: 'mti_admins')]
-class MtiChild extends MtiUser
-{
-    /**
-     * The admin level (on the child's own table).
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $level;
-}
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiChild;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiUser;
 
 /**
  * End-to-end MTI tests on live SQLite: the split write, the joined read,

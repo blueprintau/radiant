@@ -4,113 +4,13 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * A polymorphic many-to-many parent — posts tag through taggables.
- */
-#[Table(name: 'mtm_posts')]
-class MtmPost extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The polymorphic many-to-many relation.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphToMany<MtmTag>
-     */
-    public function tags(): \BlueprintAU\Radiant\Relations\MorphToMany
-    {
-        return $this->morphToMany(MtmTag::class, 'taggable');
-    }
-}
-
-/**
- * A SECOND polymorphic many-to-many parent class — same pivot, same pool.
- */
-#[Table(name: 'mtm_videos')]
-class MtmVideo extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The polymorphic many-to-many relation.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphToMany<MtmTag>
-     */
-    public function tags(): \BlueprintAU\Radiant\Relations\MorphToMany
-    {
-        return $this->morphToMany(MtmTag::class, 'taggable');
-    }
-}
-
-/**
- * The shared related model — and the INVERSE direction's parent.
- */
-#[Table(name: 'mtm_tags')]
-class MtmTag extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $label;
-
-    /**
-     * The INVERSE polymorphic many-to-many relation — every post tagged
-     * with this tag.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphToMany<MtmPost>
-     */
-    public function posts(): \BlueprintAU\Radiant\Relations\MorphToMany
-    {
-        return $this->morphedByMany(MtmPost::class, 'taggable');
-    }
-}
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtmPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtmTag;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtmVideo;
 
 /**
  * Phase D: `MorphToMany` + `morphedByMany` — the type-filtered pivot
@@ -160,7 +60,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
 
         $tags = $post->tags()->getResults();
         self::assertCount(2, $tags);
-        self::assertSame(['php', 'db'], $tags->map(fn (Model $m) => $m->attribute('label'))->all());
+        self::assertSame(['php', 'db'], $tags->map(fn (MtmTag $m) => $m->attribute('label'))->all());
 
         $video = MtmVideo::newQuery()->find(1);
         self::assertNotNull($video);

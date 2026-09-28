@@ -4,192 +4,13 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Morphs;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * A polymorphic PARENT — posts own comments of any class.
- */
-#[Table(name: 'poly_posts')]
-class PolyPost extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The polymorphic children.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphMany<PolyComment>
-     */
-    public function comments(): \BlueprintAU\Radiant\Relations\MorphMany
-    {
-        return $this->morphMany(PolyComment::class, 'commentable');
-    }
-
-    /**
-     * The polymorphic single child.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphOne<PolyImage>
-     */
-    public function image(): \BlueprintAU\Radiant\Relations\MorphOne
-    {
-        return $this->morphOne(PolyImage::class, 'imageable');
-    }
-}
-
-/**
- * A SECOND polymorphic parent class — same id space, different alias.
- */
-#[Table(name: 'poly_videos')]
-class PolyVideo extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The polymorphic children.
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphMany<PolyComment>
-     */
-    public function comments(): \BlueprintAU\Radiant\Relations\MorphMany
-    {
-        return $this->morphMany(PolyComment::class, 'commentable');
-    }
-}
-
-/**
- * The polymorphic CHILD — its (type, key) pair points at any parent.
- */
-#[Morphs(name: 'commentable', nullable: true)]
-#[Table(name: 'poly_comments')]
-class PolyComment extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $body;
-
-    /**
-     * The inverse polymorphic relation — the dynamic form: no allowlist,
-     * so any model class can resolve (the honest Model bound).
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphTo<Model> The relation.
-     */
-    public function commentable(): \BlueprintAU\Radiant\Relations\MorphTo
-    {
-        return $this->morphTo('commentable');
-    }
-
-    /**
-     * An allowlisted variant of the relation — exercises the $types gate.
-     *
-     * The template makes the narrowing FLOW at the call site: the
-     * caller's class-string list infers `$TParent`, and the declared
-     * `MorphTo<TParent>` return delivers the static narrowing directly —
-     * `allowlistedWith([PolyPost::class])` IS a `MorphTo<PolyPost>`, no
-     * per-class wrapper method needed.
-     *
-     * @template TParent of Model
-     *
-     * @param list<class-string<TParent>> $types The allowed morph aliases.
-     * @return \BlueprintAU\Radiant\Relations\MorphTo<TParent> The constrained
-     *         relation, statically narrowed to the caller's list.
-     */
-    public function allowlistedWith(array $types): \BlueprintAU\Radiant\Relations\MorphTo
-    {
-        return $this->morphTo('commentable', null, null, null, $types);
-    }
-}
-
-/**
- * A second child class for the morphOne side.
- */
-#[Morphs(name: 'imageable', nullable: true)]
-#[Table(name: 'poly_images')]
-class PolyImage extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $path;
-
-    /**
-     * The inverse polymorphic relation — the dynamic form: no allowlist,
-     * so any model class can resolve (the honest Model bound).
-     *
-     * @return \BlueprintAU\Radiant\Relations\MorphTo<Model> The relation.
-     */
-    public function imageable(): \BlueprintAU\Radiant\Relations\MorphTo
-    {
-        return $this->morphTo('imageable');
-    }
-
-    /**
-     * An allowlisted variant of the relation — exercises the $types gate.
-     * The caller-chosen list means the template stays the Model bound.
-     *
-     * @param list<class-string<Model>> $types The allowed morph aliases.
-     * @return \BlueprintAU\Radiant\Relations\MorphTo<Model> The constrained relation.
-     */
-    public function allowlistedWith(array $types): \BlueprintAU\Radiant\Relations\MorphTo
-    {
-        return $this->morphTo('imageable', null, null, null, $types);
-    }
-}
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyComment;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyImage;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyVideo;
 
 /**
  * Phase B: the polymorphic relations — lazy + eager morphMany/morphOne/
@@ -236,7 +57,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
 
         $comments = $post->comments()->getResults();
         self::assertCount(2, $comments);
-        self::assertSame(['on post', 'on post too'], $comments->map(fn (Model $m) => $m->attribute('body'))->all());
+        self::assertSame(['on post', 'on post too'], $comments->map(fn (PolyComment $m) => $m->attribute('body'))->all());
     }
 
     /**

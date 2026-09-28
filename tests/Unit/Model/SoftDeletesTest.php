@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\SoftDeletes;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdDirtyProbe;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdRenamedPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdUndeclaredOverridePost;
 
 /**
  * Dedicated coverage for the {@see SoftDeletes} trait beyond the lifecycle
@@ -155,13 +156,13 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post->title = 'Probe';
         $post->save();
 
-        self::assertSame([], $post->exposeDirty(), 'a fresh save leaves nothing dirty');
+        self::assertSame([], $post->dirtyColumns(), 'a fresh save leaves nothing dirty');
 
         $post->delete();
 
         self::assertSame(
             [],
-            $post->exposeDirty(),
+            $post->dirtyColumns(),
             'delete() must not leave deleted_at phantom-dirty in the encoded snapshot space'
         );
     }
@@ -359,145 +360,4 @@ final class SoftDeletesTest extends DatabaseTestCase
             @unlink($path . '.radiant-tmp');
         }
     }
-}
-
-/**
- * Fixture: soft-deletable post.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'sd_posts')]
-class SdPost extends Model
-{
-    use SoftDeletes;
-
-    /**
-     * The post's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $title;
-}
-
-/**
- * Fixture: probe exposing the protected dirty read — the established
- * pattern for asserting snapshot-space internals (see the DirtyProbe /
- * DefaultedModelProbe fixtures in the Metadata tests).
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'sd_posts')]
-class SdDirtyProbe extends Model
-{
-    use SoftDeletes;
-
-    /**
-     * The post's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $title;
-
-    /**
-     * The protected dirty read, exposed for the snapshot-space lock.
-     *
-     * @return array<string, mixed>
-     */
-    public function exposeDirty(): array
-    {
-        return $this->getDirty();
-    }
-}
-
-/**
- * Fixture: soft-deletable post with a RENAMED delete column.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'sd_renamed_posts')]
-class SdRenamedPost extends Model
-{
-    use SoftDeletes;
-
-    /**
-     * The renamed soft-delete column.
-     *
-     * @return string The column name.
-     */
-    public static function deletedAtColumn(): string
-    {
-        return 'renamed_at';
-    }
-
-    /**
-     * The post's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $title;
-
-    /**
-     * The renamed soft-delete timestamp (user-declared, name matches).
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::DateTime, name: 'renamed_at', nullable: true)]
-    public ?\Carbon\Carbon $renamedAt;
-}
-
-/**
- * Fixture: a SoftDeletes model whose deletedAtColumn() override names a
- * column with NO matching #[Column] declaration — the fail-fast metadata
- * error (an override is an explicit claim that the column is declared).
- */
-class SdUndeclaredOverridePost extends Model
-{
-    use SoftDeletes;
-
-    /**
-     * Names a column that is never declared — the build error.
-     *
-     * @return string The column name.
-     */
-    public static function deletedAtColumn(): ?string
-    {
-        return 'missing_at';
-    }
-
-    /**
-     * The post's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $title;
 }

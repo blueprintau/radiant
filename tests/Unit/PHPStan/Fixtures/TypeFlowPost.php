@@ -5,14 +5,12 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\PHPStan\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 
 /**
  * The related model of the type-flow fixture.
  */
-#[Table(name: 'type_flow_posts')]
 class TypeFlowPost extends Model
 {
     /**

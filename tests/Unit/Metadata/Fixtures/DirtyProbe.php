@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures;
 
+use BlueprintAU\Radiant\Tests\Support\ProbesDirty;
+
 /**
  * A probe exposing the protected dirty-tracking surface of {@see User} for
  * hydration-stability assertions.
@@ -14,13 +16,5 @@ namespace BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures;
  */
 class DirtyProbe extends User
 {
-    /**
-     * The dirty columns (encoded space), exposed for tests.
-     *
-     * @return array<string, mixed> column => encoded value
-     */
-    public function dirtyColumns(): array
-    {
-        return $this->getDirty();
-    }
+    use ProbesDirty;
 }

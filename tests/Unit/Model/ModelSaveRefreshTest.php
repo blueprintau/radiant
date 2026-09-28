@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MstGuid;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MstItem;
 
 /**
  * Model save/refresh edge cases beyond MetadataPipelineTest: insert-vs-
@@ -18,20 +18,13 @@ use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 final class ModelSaveRefreshTest extends DatabaseTestCase
 {
     /**
-     * Create the mst_items / mst_guids fixture tables from BLUEPRINTS —
-     * the assigned-PK fixture deliberately has no autoIncrement column.
+     * Create the mst_items / mst_guids fixture tables from the models'
+     * attributes — the assigned-PK fixture deliberately has no
+     * autoIncrement column, which fromMetadata() preserves.
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(
-            (new Blueprint('mst_items'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::String, 'name', length: 64)
-                ->column(ColumnType::Int, 'qty', nullable: true),
-            (new Blueprint('mst_guids'))
-                ->column(ColumnType::String, 'uuid', length: 36, primaryKey: true)
-                ->column(ColumnType::String, 'label', length: 64),
-        );
+        $this->createTables(MstItem::class, MstGuid::class);
     }
 
     /**
@@ -228,58 +221,4 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
 
         self::assertNull($item->getKeyForRefresh());
     }
-}
-
-/**
- * Fixture: item with an auto-increment key.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'mst_items')]
-class MstItem extends Model
-{
-    /**
-     * The item's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The item name.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * The stocked quantity (nullable).
-     *
-     * @var int|null
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::Int, nullable: true)]
-    public ?int $qty;
-}
-
-/**
- * Fixture: entity with a caller-assigned string PK.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'mst_guids')]
-class MstGuid extends Model
-{
-    /**
-     * The caller-assigned UUID key (NOT auto-increment).
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 36, primaryKey: true)]
-    public string $uuid;
-
-    /**
-     * The label.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 64)]
-    public string $label;
 }

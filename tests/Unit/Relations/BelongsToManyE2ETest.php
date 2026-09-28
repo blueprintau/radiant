@@ -4,69 +4,12 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * A many-to-many parent — posts link to tags through posts_tags.
- */
-#[Table(name: 'b2m_posts')]
-class B2mPost extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The many-to-many relation.
-     *
-     * @return \BlueprintAU\Radiant\Relations\BelongsToMany<B2mTag>
-     */
-    public function tags(): \BlueprintAU\Radiant\Relations\BelongsToMany
-    {
-        return $this->belongsToMany(B2mTag::class);
-    }
-}
-
-/**
- * A many-to-many related model.
- */
-#[Table(name: 'b2m_tags')]
-class B2mTag extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * A plain column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $label;
-}
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\B2mPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\B2mTag;
 
 /**
  * Phase C: `BelongsToMany` — the joined query, eager loading with pivot
@@ -119,7 +62,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
 
         $tags = $post->tags()->getResults();
         self::assertCount(2, $tags);
-        self::assertSame(['php', 'db'], $tags->map(fn (Model $m) => $m->attribute('label'))->all());
+        self::assertSame(['php', 'db'], $tags->map(fn (B2mTag $m) => $m->attribute('label'))->all());
     }
 
     /**
@@ -241,7 +184,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         self::assertSame(['attached' => [3], 'detached' => [1], 'updated' => []], $diff);
 
         $labels = $post->tags()->getResults()
-            ->map(fn (Model $m) => $m->attribute('label'))->all();
+            ->map(fn (B2mTag $m) => $m->attribute('label'))->all();
         self::assertSame(['db', 'orm'], $labels);
     }
 
@@ -293,7 +236,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         self::assertSame(['attached' => [3], 'detached' => [2]], $diff);
 
         $labels = $post->tags()->getResults()
-            ->map(fn (Model $m) => $m->attribute('label'))->all();
+            ->map(fn (B2mTag $m) => $m->attribute('label'))->all();
         self::assertSame(['php', 'orm'], $labels);
     }
 

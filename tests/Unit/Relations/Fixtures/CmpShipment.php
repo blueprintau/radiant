@@ -6,7 +6,6 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Model;
@@ -18,7 +17,6 @@ use BlueprintAU\Radiant\Relations\BelongsTo;
  * (defaults to the target's full composite PK).
  */
 #[ForeignKey(columns: ['region_id', 'country'], references: CmpRegion::class, onDelete: ForeignKeyAction::Cascade)]
-#[Table(name: 'cmp_shipments')]
 class CmpShipment extends Model
 {
     /**

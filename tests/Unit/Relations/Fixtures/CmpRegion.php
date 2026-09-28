@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Relations\HasMany;
@@ -13,7 +12,6 @@ use BlueprintAU\Radiant\Relations\HasMany;
 /**
  * Fixture: the composite-PK owner — a region identified by id + country.
  */
-#[Table(name: 'cmp_regions')]
 class CmpRegion extends Model
 {
     /**

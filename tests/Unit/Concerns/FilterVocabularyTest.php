@@ -4,102 +4,10 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Concerns;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * Fixture: filter-vocabulary parent.
- */
-#[Table(name: 'fv_users')]
-class FvUser extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The user's name.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * The user's age (0 = unknown).
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::Int, nullable: true)]
-    public ?int $age;
-
-    /**
-     * The user's posts.
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasMany<FvPost>
-     */
-    public function posts(): \BlueprintAU\Radiant\Relations\HasMany
-    {
-        return $this->hasMany(FvPost::class, 'user_id');
-    }
-}
-
-/**
- * Fixture: filter-vocabulary child.
- */
-#[Table(name: 'fv_posts')]
-class FvPost extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The author's id.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, name: 'user_id')]
-    public int $userId;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
-
-    /**
-     * The view count.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::Int)]
-    public int $views;
-
-    /**
-     * The post's author.
-     *
-     * @return \BlueprintAU\Radiant\Relations\BelongsTo<FvUser>
-     */
-    public function author(): \BlueprintAU\Radiant\Relations\BelongsTo
-    {
-        return $this->belongsTo(FvUser::class, 'user_id');
-    }
-}
+use BlueprintAU\Radiant\Tests\Unit\Concerns\Fixtures\FvPost;
+use BlueprintAU\Radiant\Tests\Unit\Concerns\Fixtures\FvUser;
 
 /**
  * The shared filter traits, exercised method by method.

@@ -5,16 +5,18 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
-use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\SoftDeletes;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-use BlueprintAU\Radiant\Timestamps;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\MetadataProbeModel;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\TpEvent;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\TpPlain;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\TpPost;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\TpRenamed;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\TpTraitNoColumns;
 use Carbon\Carbon;
 
 /**
@@ -525,228 +527,6 @@ final class TimestampPrecisionTest extends DatabaseTestCase
 }
 
 /**
- * A stamped model with millisecond-precision datetime columns.
- */
-#[Table('tp_events')]
-final class TpEvent extends Model
-{
-    use Timestamps;
-
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The event name.
-     *
-     * @var string
-     */
-    #[Column(ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * When the event started — millisecond precision.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $started_at;
-
-    /**
-     * The insert stamp — millisecond precision.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $created_at;
-
-    /**
-     * The update stamp — millisecond precision.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $updated_at;
-}
-
-/**
- * An unstamped model with a second-precision datetime column.
- */
-#[Table('tp_plain')]
-final class TpPlain extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The row name.
-     *
-     * @var string
-     */
-    #[Column(ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * When the row started — whole seconds.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true)]
-    public ?Carbon $started_at;
-}
-
-/**
- * A stamped model whose stamp columns carry non-default names.
- */
-#[Table('tp_renamed')]
-final class TpRenamed extends Model
-{
-    use Timestamps;
-
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The row name.
-     *
-     * @var string
-     */
-    #[Column(ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * The renamed created-at stamp.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $began_at;
-
-    /**
-     * The renamed updated-at stamp.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $modified_at;
-
-    /**
-     * The renamed created-at column.
-     *
-     * @return string
-     */
-    public static function createdAtColumn(): string
-    {
-        return 'began_at';
-    }
-
-    /**
-     * The renamed updated-at column.
-     *
-     * @return string
-     */
-    public static function updatedAtColumn(): string
-    {
-        return 'modified_at';
-    }
-}
-
-/**
- * A stamped model with NO declared stamp columns — the trait auto-declares
- * them as synthetic NOT NULL datetime mappings.
- */
-#[Table('tp_auto')]
-final class TpTraitNoColumns extends Model
-{
-    use Timestamps;
-
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The row name.
-     *
-     * @var string
-     */
-    #[Column(ColumnType::String, length: 64)]
-    public string $name;
-}
-
-/**
- * A model whose int property declares precision on a Timestamp column —
- * the metadata build must fail fast.
- */
-/**
- * A model using BOTH SoftDeletes and Timestamps — the composition must
- * work without a trait-method collision.
- */
-#[Table('tp_posts')]
-final class TpPost extends Model
-{
-    use SoftDeletes;
-    use Timestamps;
-
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The post name.
-     *
-     * @var string
-     */
-    #[Column(ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * The insert stamp.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $created_at;
-
-    /**
-     * The update stamp.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $updated_at;
-
-    /**
-     * The soft-delete stamp.
-     *
-     * @var \Carbon\Carbon|null
-     */
-    #[Column(ColumnType::DateTime, nullable: true, precision: 3)]
-    public ?Carbon $deleted_at;
-}
-
-/**
  * Entry point for the fail-fast metadata probe — the exception must fire
  * during the metadata build, not at class load.
  */
@@ -760,31 +540,5 @@ final class MetadataProbe
     public static function trigger(): void
     {
         MetadataProbeModel::buildForTest();
-    }
-}
-
-/**
- * A model whose int property declares precision on a Timestamp column —
- * the metadata build must fail fast.
- */
-#[Table('tp_bad')]
-final class MetadataProbeModel extends Model
-{
-    /**
-     * Precision on an int Unix-timestamp column is meaningless.
-     *
-     * @var int
-     */
-    #[Column(ColumnType::Timestamp, precision: 3)]
-    public int $occurred_at;
-
-    /**
-     * Force a metadata build so the fail-fast fires.
-     *
-     * @return void
-     */
-    public static function buildForTest(): void
-    {
-        \BlueprintAU\Radiant\Metadata\MetadataFactory::for(self::class);
     }
 }

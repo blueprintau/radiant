@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
-use BlueprintAU\Radiant\Relations\HasMany;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CollPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CollUser;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 
 /**
@@ -21,19 +19,12 @@ use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 final class CollectionTest extends DatabaseTestCase
 {
     /**
-     * Create the coll_users / coll_posts fixture tables.
+     * Create the coll_users / coll_posts fixture tables from the models'
+     * attributes.
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(
-            (new Blueprint('coll_users'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::String, 'email', length: 255),
-            (new Blueprint('coll_posts'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::BigInt, 'user_id', nullable: true)
-                ->column(ColumnType::String, 'title', length: 255),
-        );
+        $this->createTables(CollUser::class, CollPost::class);
     }
 
     /**
@@ -273,68 +264,4 @@ final class CollectionTest extends DatabaseTestCase
         self::assertSame($users, $users->fresh());
         $this->addToAssertionCount(1);
     }
-}
-
-/**
- * Fixture: user with a posts relation.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'coll_users')]
-class CollUser extends Model
-{
-    /**
-     * The user's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The user's email.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $email;
-
-    /**
-     * The user's posts.
-     *
-     * @return HasMany<CollPost>
-     */
-    public function posts(): HasMany
-    {
-        return $this->hasMany(CollPost::class, 'user_id');
-    }
-}
-
-/**
- * Fixture: post owned by a user.
- */
-#[\BlueprintAU\Radiant\Attributes\Table(name: 'coll_posts')]
-class CollPost extends Model
-{
-    /**
-     * The post's id.
-     *
-     * @var int
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The owning user's id (nullable — orphans exist).
-     *
-     * @var int|null
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::BigInt, name: 'user_id', nullable: true)]
-    public ?int $userId;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[\BlueprintAU\Radiant\Attributes\Column(type: ColumnType::String, length: 255)]
-    public string $title;
 }

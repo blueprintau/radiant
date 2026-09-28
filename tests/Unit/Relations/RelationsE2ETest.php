@@ -4,239 +4,14 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
-use BlueprintAU\Radiant\Database\Schema\Blueprint;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
-
-/**
- * Fixture: the parent — one-to-many owner.
- */
-#[Table(name: 'rel_users')]
-class RelUser extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The user's email.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $email;
-
-    /**
-     * The user's posts (one-to-many).
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasMany<RelPost>
-     */
-    public function posts(): \BlueprintAU\Radiant\Relations\HasMany
-    {
-        return $this->hasMany(RelPost::class, 'author_id');
-    }
-
-    /**
-     * A relation declaring a nonexistent FK — the fail-fast cross-check
-     * fixture.
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasMany<RelPost>
-     */
-    public function brokenPosts(): \BlueprintAU\Radiant\Relations\HasMany
-    {
-        return $this->hasMany(RelPost::class, 'bogus_id');
-    }
-
-    /**
-     * The user's newest post (one-to-one).
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasOne<RelPost>
-     */
-    public function featuredPost(): \BlueprintAU\Radiant\Relations\HasOne
-    {
-        return $this->hasOne(RelPost::class, 'author_id');
-    }
-
-    /**
-     * A non-relation method referenced in with() — the fail-fast fixture.
-     *
-     * @return string
-     */
-    public function notARelation(): string
-    {
-        return 'nope';
-    }
-
-    /**
-     * The user's team posts (two-hop through the team).
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasManyThrough<RelTeamPost>
-     */
-    public function teamPosts(): \BlueprintAU\Radiant\Relations\HasManyThrough
-    {
-        return $this->hasManyThrough(RelTeamPost::class, RelTeam::class, 'owner_id', 'team_id');
-    }
-
-    /**
-     * The user's first team post (one-to-one through the team).
-     *
-     * @return \BlueprintAU\Radiant\Relations\HasOneThrough<RelTeamPost>
-     */
-    public function featuredTeamPost(): \BlueprintAU\Radiant\Relations\HasOneThrough
-    {
-        return $this->hasOneThrough(RelTeamPost::class, RelTeam::class, 'owner_id', 'team_id');
-    }
-}
-
-/**
- * Fixture: the child — belongsTo + hasMany target.
- */
-#[Table(name: 'rel_posts')]
-class RelPost extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The author's id (the FK; stored as author_id).
-     *
-     * @var int|null
-     */
-    #[Column(type: ColumnType::BigInt, nullable: true, name: 'author_id')]
-    public ?int $authorId;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $title;
-
-    /**
-     * A groupable status label (the countBy/aggregateBy fixture column).
-     *
-     * @var string|null
-     */
-    #[Column(type: ColumnType::String, length: 16, nullable: true)]
-    public ?string $status;
-
-    /**
-     * A summable counter (the aggregateBy decode fixture column).
-     *
-     * @var int|null
-     */
-    #[Column(type: ColumnType::Int, nullable: true)]
-    public ?int $views;
-
-    /**
-     * The post's author (inverse).
-     *
-     * @return \BlueprintAU\Radiant\Relations\BelongsTo<RelUser>
-     */
-    public function author(): \BlueprintAU\Radiant\Relations\BelongsTo
-    {
-        return $this->belongsTo(RelUser::class, 'author_id');
-    }
-}
-
-/**
- * Fixture: an intermediate table for through relations.
- */
-#[Table(name: 'rel_teams')]
-class RelTeam extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The team owner's user id (stored as owner_id).
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, name: 'owner_id')]
-    public int $ownerId;
-
-    /**
-     * The team name.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $name;
-
-    /**
-     * The team's owner (inverse belongsTo) — the third level of the
-     * teamPosts nesting chain.
-     *
-     * @return \BlueprintAU\Radiant\Relations\BelongsTo<RelUser>
-     */
-    public function owner(): \BlueprintAU\Radiant\Relations\BelongsTo
-    {
-        return $this->belongsTo(RelUser::class, 'owner_id');
-    }
-}
-
-/**
- * Fixture: the through target — a post that belongs to a team.
- */
-#[Table(name: 'rel_team_posts')]
-class RelTeamPost extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The team's id (stored as team_id).
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, name: 'team_id')]
-    public int $teamId;
-
-    /**
-     * The post title.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $title;
-
-    /**
-     * The post's team.
-     *
-     * @return \BlueprintAU\Radiant\Relations\BelongsTo<RelTeam>
-     */
-    public function team(): \BlueprintAU\Radiant\Relations\BelongsTo
-    {
-        return $this->belongsTo(RelTeam::class, 'team_id');
-    }
-}
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeam;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeamPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelUser;
 
 /**
  * End-to-end relation tests on live SQLite: lazy + eager HasMany / HasOne /
@@ -246,29 +21,12 @@ class RelTeamPost extends Model
 final class RelationsE2ETest extends DatabaseTestCase
 {
     /**
-     * Create the rel_users / rel_posts / rel_teams / rel_team_posts fixture tables.
+     * Create the rel_users / rel_posts / rel_teams / rel_team_posts fixture
+     * tables from the models' attributes.
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(
-            (new Blueprint('rel_users'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::String, 'email', length: 255),
-            (new Blueprint('rel_posts'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::BigInt, 'author_id', nullable: true)
-                ->column(ColumnType::String, 'title', length: 255)
-                ->column(ColumnType::String, 'status', length: 16, nullable: true)
-                ->column(ColumnType::Int, 'views', nullable: true),
-            (new Blueprint('rel_teams'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::BigInt, 'owner_id')
-                ->column(ColumnType::String, 'name', length: 64),
-            (new Blueprint('rel_team_posts'))
-                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
-                ->column(ColumnType::BigInt, 'team_id')
-                ->column(ColumnType::String, 'title', length: 255),
-        );
+        $this->createTables(RelUser::class, RelPost::class, RelTeam::class, RelTeamPost::class);
     }
 
     /**

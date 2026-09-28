@@ -20,6 +20,7 @@ on:
             - "phpunit.xml"
             - "composer.json"
             - "composer.lock"
+            - "ci/**"
             - ".github/workflows/coverage.yml"
     pull_request:
         paths:
@@ -28,6 +29,7 @@ on:
             - "phpunit.xml"
             - "composer.json"
             - "composer.lock"
+            - "ci/**"
             - ".github/workflows/coverage.yml"
     workflow_dispatch:
 
@@ -121,51 +123,30 @@ jobs:
               run: composer install --no-interaction --prefer-dist
 
             - name: Run tests with coverage
-              # The default phpunit.xml run excludes the integration-remote-sql
-              # group; these service containers ARE the required servers, so
-              # the group is run explicitly. Skipping it would undercount the
-              # DB-layer code paths that make up most of src/Database/**.
+              # Single PHPUnit process over the FULL suite — the same
+              # selection as `composer test:all` (default +
+              # integration-remote-sql). The service containers above ARE
+              # the required servers, so the integration group runs here
+              # rather than being excluded by phpunit.xml. One process
+              # means one coverage object: no merging, no undercount.
+              # NOTE: repeated --group flags, NOT a comma-separated value —
+              # PHPUnit 13 treats "default,integration-remote-sql" as a
+              # single group name and matches nothing (verified locally).
+              # PHPUnit renders the HTML report (native light/dark themes)
+              # and Clover XML itself; only the badge JSON needs a script.
               run: |
                   php vendor/bin/phpunit --no-progress \
-                      --coverage-html coverage-report \
-                      --coverage-clover coverage.xml
-                  php vendor/bin/phpunit --no-progress \
+                      --group default \
                       --group integration-remote-sql \
-                      --coverage-php coverage-integration.php
+                      --coverage-html coverage-report \
+                      --coverage-clover coverage-report/coverage.xml \
+                      --coverage-php coverage.php
 
-            - name: Merge coverage reports
-              run: |
-                  # The integration run contributes its collected data via
-                  # --coverage-php (a PHP file returning a CodeCoverage
-                  # object), merged into the main report and re-rendered.
-                  # Verified against php-code-coverage 10.1: Filter methods
-                  # return void, the HTML facade takes Thresholds, and the
-                  # .php coverage file must be require'd, not read as text.
-                  php -r '
-                      require "vendor/autoload.php";
-                      $filter = new \SebastianBergmann\CodeCoverage\Filter();
-                      $filter->includeDirectory("src");
-                      $coverage = require "coverage-integration.php";
-                      (new \SebastianBergmann\CodeCoverage\Report\Html\Facade(
-                          thresholds: \SebastianBergmann\CodeCoverage\Report\Thresholds::default()
-                      ))->process($coverage, "coverage-report");
-                      (new \SebastianBergmann\CodeCoverage\Report\Clover())
-                          ->process($coverage, "coverage.xml");
-                      # Shields endpoint badge (README links to this file
-                      # served from Pages): {"schemaVersion":1,...}
-                      # Written into coverage-report/ so the Pages deploy
-                      # publishes it next to the HTML report.
-                      $total = $coverage->getReport()->percentageOfExecutedLines();
-                      $pct = $total->asFloat();
-                      file_put_contents("coverage-report/coverage-badge.json", json_encode([
-                          "schemaVersion" => 1,
-                          "label" => "coverage",
-                          "message" => $total->asString(),
-                          "color" => $pct >= 90 ? "brightgreen"
-                              : ($pct >= 75 ? "green"
-                              : ($pct >= 50 ? "yellow" : "red")),
-                      ]));
-                  '
+            - name: Build coverage badge
+              # The one artifact PHPUnit cannot emit: the Shields endpoint
+              # JSON. A separate script (not inline php -r) so it can be
+              # syntax-checked and dry-run locally.
+              run: php ci/coverage-badge.php
 
             - name: Upload coverage artifact
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

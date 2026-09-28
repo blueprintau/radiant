@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\PHPStan\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Relations\HasMany;
@@ -16,7 +15,6 @@ use BlueprintAU\Radiant\Relations\HasMany;
  * seam. Analyzers (PHPStan + Intelephense) resolve `User::posts()`'s
  * element type through this declaration alone — no @var at the call site.
  */
-#[Table(name: 'type_flow_users')]
 class TypeFlowUser extends Model
 {
     /**

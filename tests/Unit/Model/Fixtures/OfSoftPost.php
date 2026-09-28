@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Model\Fixtures;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\SoftDeletes;
@@ -13,7 +12,6 @@ use BlueprintAU\Radiant\SoftDeletes;
 /**
  * Fixture: a soft-deleting model — the scope-interplay orFail probe.
  */
-#[Table(name: 'of_soft_posts')]
 class OfSoftPost extends Model
 {
     use SoftDeletes;

@@ -105,13 +105,28 @@ final class SqlServerIntegrationTest extends TestCase
     }
 
     /**
+     * The MySQL and Postgres config/connector/driver triples, without the
+     * expected-message element. PHPUnit 13 warns when a data set provides
+     * more arguments than the test method accepts, so connection tests
+     * consume this trimmer provider instead of ignoring the fourth slot.
+     *
+     * @return iterable<string, array{0: array<string, mixed>, 1: ConnectorInterface, 2: string}>
+     */
+    public static function connectionProvider(): iterable
+    {
+        foreach (self::configProvider() as $name => [$config, $connector, $driver]) {
+            yield $name => [$config, $connector, $driver];
+        }
+    }
+
+    /**
      * The connector returns the driver's concrete connection class.
      *
      * @param array<string, mixed> $config The connection config.
      * @param ConnectorInterface $connector The connector under test.
      * @param string $driver The human driver label.
      */
-    #[DataProvider('configProvider')]
+    #[DataProvider('connectionProvider')]
     public function testConnectorReturnsSqlConnection(array $config, ConnectorInterface $connector, string $driver): void
     {
         $this->connect($config, $connector, $driver);
@@ -126,7 +141,7 @@ final class SqlServerIntegrationTest extends TestCase
      * @param ConnectorInterface $connector The connector under test.
      * @param string $driver The human driver label.
      */
-    #[DataProvider('configProvider')]
+    #[DataProvider('connectionProvider')]
     public function testCrudCycle(array $config, ConnectorInterface $connector, string $driver): void
     {
         $this->connect($config, $connector, $driver);
@@ -166,7 +181,7 @@ final class SqlServerIntegrationTest extends TestCase
      * @param ConnectorInterface $connector The connector under test.
      * @param string $driver The human driver label.
      */
-    #[DataProvider('configProvider')]
+    #[DataProvider('connectionProvider')]
     public function testTransactions(array $config, ConnectorInterface $connector, string $driver): void
     {
         $this->connect($config, $connector, $driver);
@@ -207,7 +222,7 @@ final class SqlServerIntegrationTest extends TestCase
      * @param ConnectorInterface $connector The connector under test.
      * @param string $driver The human driver label.
      */
-    #[DataProvider('configProvider')]
+    #[DataProvider('connectionProvider')]
     public function testAggregates(array $config, ConnectorInterface $connector, string $driver): void
     {
         $this->connect($config, $connector, $driver);
@@ -235,7 +250,7 @@ final class SqlServerIntegrationTest extends TestCase
      * @param ConnectorInterface $connector The connector under test.
      * @param string $driver The human driver label.
      */
-    #[DataProvider('configProvider')]
+    #[DataProvider('connectionProvider')]
     public function testSchemaAlter(array $config, ConnectorInterface $connector, string $driver): void
     {
         $this->connect($config, $connector, $driver);
