@@ -75,6 +75,30 @@ final class FilterVocabularyTest extends DatabaseTestCase
     }
 
     /**
+     * Static whereEq() — the equality sugar — filters identically to
+     * where($column, '=', $value); orWhereEq() composes at the edges.
+     */
+    public function testStaticWhereEqAndOrWhereEq(): void
+    {
+        $rows = FvUser::whereEq('name', 'alicia')->orderBy('id')->get();
+
+        self::assertCount(1, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertSame('alicia', $rows[0]->name);
+
+        $orRows = FvUser::whereEq('name', 'alicia')
+            ->orWhereEq('name', 'ben')
+            ->orderBy('id')
+            ->get();
+
+        self::assertCount(2, $orRows);
+        self::assertNotNull($orRows[0]);
+        self::assertNotNull($orRows[1]);
+        self::assertSame('alicia', $orRows[0]->name);
+        self::assertSame('ben', $orRows[1]->name);
+    }
+
+    /**
      * Static whereIn() filters to the given values.
      */
     public function testStaticWhereIn(): void
@@ -201,6 +225,23 @@ final class FilterVocabularyTest extends DatabaseTestCase
         self::assertCount(1, $notIn);
         self::assertNotNull($notIn[0]);
         self::assertSame('A2', $notIn[0]->title);
+    }
+
+    /**
+     * The relation's whereEq()/orWhereEq() — the equality sugar composes
+     * with the constructor constraint (AND) and at the edges (OR).
+     */
+    public function testRelationWhereEqAndOrWhereEq(): void
+    {
+        ['user' => $user] = $this->seedFirst();
+
+        $eq = $user->posts()->whereEq('title', 'A1')->getResults();
+        self::assertCount(1, $eq);
+        self::assertNotNull($eq[0]);
+        self::assertSame('A1', $eq[0]->title);
+
+        $orEq = $user->posts()->whereEq('title', 'A1')->orWhereEq('title', 'A2')->getResults();
+        self::assertCount(2, $orEq);
     }
 
     /**

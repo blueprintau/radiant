@@ -44,6 +44,37 @@ trait FiltersStaticQuery
     ): ModelQueryBuilder;
 
     /**
+     * Start a model query with an equality where clause — sugar for
+     * `where($column, '=', $value)`.
+     *
+     * @param  string  $column
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return ModelQueryBuilder<static>
+     */
+    public static function whereEq(
+        string $column,
+        mixed $value,
+        WhereBoolean $boolean = WhereBoolean::And,
+    ): ModelQueryBuilder {
+        return static::where($column, WhereOperator::Eq, $value, $boolean);
+    }
+
+    /**
+     * Start a model query with an OR-connected equality where clause.
+     *
+     * @param  string  $column
+     * @param  mixed  $value
+     * @return ModelQueryBuilder<static>
+     */
+    public static function orWhereEq(
+        string $column,
+        mixed $value,
+    ): ModelQueryBuilder {
+        return static::where($column, WhereOperator::Eq, $value, WhereBoolean::Or);
+    }
+
+    /**
      * Start a model query with a nested where group — the second static
      * sink; the `orWhereNested` default delegates here.
      *

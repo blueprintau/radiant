@@ -66,15 +66,6 @@ final class ModelQueryBuilder extends QueryBuilder
     protected array $partitions = [];
 
     /**
-     * Chunk size for key-list operations ({@see whereKey()} with a list).
-     *
-     * Drivers cap placeholder counts (SQLite's 999 variables, MySQL's
-     * max_allowed_packet), so an oversized key list must not build a
-     * single unbounded statement.
-     */
-    protected const KEY_CHUNK = 500;
-
-    /**
      * The MTI ancestor chain (nearest parent first), each as
      * [class, table]. Empty for non-MTI models.
      *
@@ -1316,30 +1307,41 @@ final class ModelQueryBuilder extends QueryBuilder
         // (a = ? AND b = ?) OR pk = 3`. Flattening would let one key's
         // parts AND against the NEXT key.
         //
-        // The list is CHUNKED at the same 500-key bound eager loading uses:
-        // SQL text and placeholder count grow linearly with key count, and
-        // drivers enforce hard caps (SQLite's 999 variables, MySQL's
-        // max_allowed_packet). An oversized list used to raise a hard
-        // QueryException; it now compiles the same per-key OR-groups, just
-        // produced from bounded chunks of the list — same match-any
-        // semantics, linearly bounded memory during construction.
-        // (Composite keys multiply arity, so the bound stays conservative.)
+        // The whole OR-of-groups lands INSIDE one outer AND-group: the
+        // key set is ONE constraint unit. The constructor auto-applies
+        // trait scopes (e.g. soft-delete `deleted_at IS NULL`) as leading
+        // AND-groups — flat top-level ORs would compile to
+        // `(scope) OR (pk = 1) OR ...` and let a scope-excluded row back
+        // in whenever its key matched. Grouped, the scope ANDs against
+        // the whole set: `(scope) AND ((pk = 1) OR (pk = 2) OR ...)`.
+        //
+        // No chunking: whereKey() returns ONE builder, so every key
+        // compiles into the same statement regardless of how the loop is
+        // sliced — chunking the loop cannot bound the statement. Splitting
+        // the keys across SEPARATE top-level groups would AND the chunks
+        // together (a row would need a key in EVERY chunk to match), so
+        // the only correct shape is one group holding all the keys. An
+        // oversized list therefore hits the driver's own placeholder cap
+        // (SQLite's 999 variables, MySQL's max_allowed_packet) with the
+        // driver's error — the same exposure every whereIn([...]) has.
         if (is_array($id) && array_is_list($id)) {
             if ($id === []) {
                 return $this->whereRaw('1 = 0');
             }
 
-            $builder = $this;
+            return $this->whereNested(
+                function (WhereBuilder $nested) use ($id): WhereBuilder {
+                    $grouped = $nested;
 
-            foreach (array_chunk($id, self::KEY_CHUNK) as $chunk) {
-                foreach ($chunk as $key) {
-                    $builder = $builder->orWhereNested(
-                        fn (WhereBuilder $nested): WhereBuilder => $this->applyWhereKeyOn($nested, $key)
-                    );
+                    foreach ($id as $key) {
+                        $grouped = $grouped->orWhereNested(
+                            fn (WhereBuilder $keyGroup): WhereBuilder => $this->applyWhereKeyOn($keyGroup, $key)
+                        );
+                    }
+
+                    return $grouped;
                 }
-            }
-
-            return $builder;
+            );
         }
 
         // Composite PK → accept an associative array of column => value.

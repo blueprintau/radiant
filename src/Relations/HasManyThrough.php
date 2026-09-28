@@ -325,29 +325,44 @@ class HasManyThrough extends Relation
                 $parentKeys,
             );
         } else {
-            foreach ($parentKeys as $parentKey) {
-                if (!is_array($parentKey)) {
-                    throw new \InvalidArgumentException(
-                        'A composite through-relation key requires column => value key maps '
-                        . 'for eager loading; got ' . get_debug_type($parentKey) . '.'
-                    );
-                }
+            // The OR-of-groups lands INSIDE one outer AND-group: the key
+            // set is ONE constraint unit. The related builder auto-applies
+            // trait scopes (e.g. soft-delete `deleted_at IS NULL`) as
+            // leading AND-groups — flat top-level ORs would compile to
+            // `(scope) OR (fk = ? AND ...) OR ...` and let a scope-excluded
+            // row back in whenever its key matched. Grouped, the scope
+            // ANDs against the whole set.
+            $builder = $builder->whereNested(
+                function (WhereBuilder $nested) use ($throughTable, $firstKeys, $parentKeys): WhereBuilder {
+                    $grouped = $nested;
 
-                $builder = $builder->orWhereNested(
-                    function (WhereBuilder $nested) use ($throughTable, $firstKeys, $parentKey): WhereBuilder {
-                        foreach ($firstKeys as $firstKey) {
-                            $value = $parentKey[$firstKey] ?? null;
-                            $nested = $nested->where(
-                                self::qualify($throughTable, $firstKey),
-                                $value === null ? WhereOperator::Null : WhereOperator::Eq,
-                                $value,
+                    foreach ($parentKeys as $parentKey) {
+                        if (!is_array($parentKey)) {
+                            throw new \InvalidArgumentException(
+                                'A composite through-relation key requires column => value key maps '
+                                . 'for eager loading; got ' . get_debug_type($parentKey) . '.'
                             );
                         }
 
-                        return $nested;
+                        $grouped = $grouped->orWhereNested(
+                            function (WhereBuilder $keyGroup) use ($throughTable, $firstKeys, $parentKey): WhereBuilder {
+                                foreach ($firstKeys as $firstKey) {
+                                    $value = $parentKey[$firstKey] ?? null;
+                                    $keyGroup = $keyGroup->where(
+                                        self::qualify($throughTable, $firstKey),
+                                        $value === null ? WhereOperator::Null : WhereOperator::Eq,
+                                        $value,
+                                    );
+                                }
+
+                                return $keyGroup;
+                            }
+                        );
                     }
-                );
-            }
+
+                    return $grouped;
+                }
+            );
         }
 
         // Columns are plain (qualified) specs with the standard `as`

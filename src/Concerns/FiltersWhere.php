@@ -43,6 +43,37 @@ trait FiltersWhere
     ): static;
 
     /**
+     * Add an equality where clause — sugar for
+     * `where($column, '=', $value)`.
+     *
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  mixed  $value
+     * @param  WhereBoolean  $boolean
+     * @return static
+     */
+    public function whereEq(
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
+        mixed $value,
+        WhereBoolean $boolean = WhereBoolean::And,
+    ): static {
+        return $this->where($column, WhereOperator::Eq, $value, $boolean);
+    }
+
+    /**
+     * Add an OR-connected equality where clause.
+     *
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
+     * @param  mixed  $value
+     * @return static
+     */
+    public function orWhereEq(
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
+        mixed $value,
+    ): static {
+        return $this->where($column, WhereOperator::Eq, $value, WhereBoolean::Or);
+    }
+
+    /**
      * Add a nested where group — the second sink.
      *
      * @param  callable(WhereBuilder): WhereBuilder  $callback

@@ -253,25 +253,38 @@ abstract class Relation
             $foreignKeys = $this->getForeignKeys();
             $localKeys = $this->getLocalKeys();
 
-            foreach ($parentKeys as $parentKey) {
-                if (!is_array($parentKey)) {
-                    throw new \InvalidArgumentException(
-                        'A composite relation key requires column => value key maps for eager loading; '
-                            . 'got ' . get_debug_type($parentKey) . '.'
-                    );
+            // The OR-of-groups lands INSIDE one outer AND-group: the key
+            // set is ONE constraint unit. The related builder auto-applies
+            // trait scopes (e.g. soft-delete `deleted_at IS NULL`) as
+            // leading AND-groups — flat top-level ORs would compile to
+            // `(scope) OR (fk = ? AND ...) OR ...` and let a scope-excluded
+            // row back in whenever its key matched. Grouped, the scope
+            // ANDs against the whole set.
+            return EagerResult::fromCollection($query->whereNested(
+                function (WhereBuilder $nested) use ($foreignKeys, $localKeys, $parentKeys): WhereBuilder {
+                    $grouped = $nested;
+
+                    foreach ($parentKeys as $parentKey) {
+                        if (!is_array($parentKey)) {
+                            throw new \InvalidArgumentException(
+                                'A composite relation key requires column => value key maps for eager loading; '
+                                    . 'got ' . get_debug_type($parentKey) . '.'
+                            );
+                        }
+
+                        $grouped = $grouped->orWhereNested(
+                            fn (WhereBuilder $keyGroup): WhereBuilder => self::applyKeyTuple(
+                                $keyGroup,
+                                $foreignKeys,
+                                $localKeys,
+                                $parentKey,
+                            )
+                        );
+                    }
+
+                    return $grouped;
                 }
-
-                $query = $query->orWhereNested(
-                    fn(WhereBuilder $nested): WhereBuilder => self::applyKeyTuple(
-                        $nested,
-                        $foreignKeys,
-                        $localKeys,
-                        $parentKey,
-                    )
-                );
-            }
-
-            return EagerResult::fromCollection($query->get());
+            )->get());
         }
 
         return EagerResult::fromCollection($query->whereIn($this->getForeignKey(), $parentKeys)->get());

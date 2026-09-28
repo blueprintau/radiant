@@ -57,4 +57,26 @@ class CmpRegion extends Model
     {
         return $this->hasOne(CmpShipment::class, ['region_id', 'country']);
     }
+
+    /**
+     * The region's soft-deleting shipments (composite HasMany onto a
+     * SoftDeletes model — exercises the eager-load scope composition).
+     *
+     * @return \BlueprintAU\Radiant\Relations\HasMany<CmpTrackedShipment>
+     */
+    public function trackedShipments(): \BlueprintAU\Radiant\Relations\HasMany
+    {
+        return $this->hasMany(CmpTrackedShipment::class, ['region_id', 'country']);
+    }
+
+    /**
+     * The region's primary soft-deleting shipment (composite HasOne onto a
+     * SoftDeletes model).
+     *
+     * @return \BlueprintAU\Radiant\Relations\HasOne<CmpTrackedShipment>
+     */
+    public function primaryTrackedShipment(): \BlueprintAU\Radiant\Relations\HasOne
+    {
+        return $this->hasOne(CmpTrackedShipment::class, ['region_id', 'country']);
+    }
 }

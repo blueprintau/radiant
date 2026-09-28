@@ -93,4 +93,15 @@ class RelUser extends Model
     {
         return $this->hasOneThrough(RelTeamPost::class, RelTeam::class, 'owner_id', 'team_id');
     }
+
+    /**
+     * The user's team posts onto a SOFT-DELETING through target —
+     * exercises the through eager-load scope composition.
+     *
+     * @return HasManyThrough<RelTrackedTeamPost>
+     */
+    public function trackedTeamPosts(): HasManyThrough
+    {
+        return $this->hasManyThrough(RelTrackedTeamPost::class, RelTeam::class, 'owner_id', 'team_id');
+    }
 }

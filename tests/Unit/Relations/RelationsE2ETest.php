@@ -11,6 +11,7 @@ use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeam;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeamPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTrackedTeamPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelUser;
 
 /**
@@ -26,7 +27,7 @@ final class RelationsE2ETest extends DatabaseTestCase
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(RelUser::class, RelPost::class, RelTeam::class, RelTeamPost::class);
+        $this->createTables(RelUser::class, RelPost::class, RelTeam::class, RelTeamPost::class, RelTrackedTeamPost::class);
     }
 
     /**
@@ -424,6 +425,44 @@ final class RelationsE2ETest extends DatabaseTestCase
         $loaded = RelUser::with('featuredTeamPost')->find($user->id);
         self::assertNotNull($loaded);
         self::assertInstanceOf(RelTeamPost::class, $loaded->featuredTeamPost()->getResults()->first());
+    }
+
+    /**
+     * Eager through onto a SOFT-DELETING related model: the through
+     * eager query's key filter ANDs with the related model's trait scope,
+     * so a soft-deleted team post stays excluded. (Pre-fix: the key
+     * groups ORed at the TOP level of the related builder and a trashed
+     * row whose key matched leaked back in.)
+     */
+    public function testEagerThroughExcludesTrashedRows(): void
+    {
+        ['user' => $user, 'team' => $team] = $this->seed();
+
+        // Seed the TRACKED table (a separate table from RelTeamPost's):
+        // two team posts, one of which gets soft-deleted.
+        $alpha = new RelTrackedTeamPost();
+        $alpha->teamId = $team->id;
+        $alpha->title = 'Alpha';
+        $alpha->save();
+
+        $beta = new RelTrackedTeamPost();
+        $beta->teamId = $team->id;
+        $beta->title = 'Beta';
+        $beta->save();
+        $beta->delete();
+
+        $loaded = RelUser::with('trackedTeamPosts')->find($user->id);
+        self::assertNotNull($loaded);
+        $posts = $loaded->trackedTeamPosts()->getResults();
+
+        self::assertInstanceOf(Collection::class, $posts);
+        self::assertCount(1, $posts, 'the trashed team post must not leak through the eager through load');
+        self::assertNotNull($posts[0]);
+        self::assertSame('Alpha', $posts[0]->title);
+
+        // The lazy path agrees — the scope composes there too.
+        $lazy = $user->trackedTeamPosts()->getResults();
+        self::assertCount(1, $lazy);
     }
 
     /**

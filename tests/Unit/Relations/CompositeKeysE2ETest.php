@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpShipment;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpTrackedShipment;
 
 /**
  * Live-SQLite E2E for composite-key paths: composite-PK find/save/delete,
@@ -23,7 +24,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(CmpRegion::class, CmpShipment::class);
+        $this->createTables(CmpRegion::class, CmpShipment::class, CmpTrackedShipment::class);
     }
 
     /**
@@ -502,5 +503,96 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         // The unfiltered read rides the cache; the filtered read re-queries.
         self::assertCount(1, $shipment->region()->getResults());
         self::assertCount(0, $shipment->region()->where('name', '=', 'No Such Region')->getResults());
+    }
+
+    /**
+     * Seed one tracked (soft-deleting) shipment per region, soft-delete the
+     * DE one, and return the models.
+     *
+     * @return array{us: CmpTrackedShipment, de: CmpTrackedShipment}
+     */
+    private function seedTracked(): array
+    {
+        $this->seed();
+
+        $us = new CmpTrackedShipment();
+        $us->regionId = 1;
+        $us->country = 'US';
+        $us->title = 'Tracked US';
+        $us->save();
+
+        $de = new CmpTrackedShipment();
+        $de->regionId = 1;
+        $de->country = 'DE';
+        $de->title = 'Tracked DE';
+        $de->save();
+        $de->delete();
+
+        return ['us' => $us, 'de' => $de];
+    }
+
+    /**
+     * Eager composite HasMany onto a SOFT-DELETING related model: the
+     * OR-of-key-groups lands INSIDE one outer AND-group, so the
+     * soft-delete scope ANDs against the whole set and the trashed child
+     * stays excluded. (Pre-fix: the key groups ORed at the TOP level —
+     * `(deleted_at IS NULL) OR (region_id = ? AND country = ?)` — and the
+     * trashed child leaked back in whenever its key matched.)
+     */
+    public function testEagerCompositeHasManyExcludesTrashedChildren(): void
+    {
+        $this->seedTracked();
+
+        $regions = CmpRegion::with('trackedShipments')->orderBy('country')->get();
+
+        self::assertCount(2, $regions);
+        self::assertNotNull($regions[0]);
+        self::assertNotNull($regions[1]);
+        $deShipments = $regions[0]->trackedShipments()->getResults();
+        $usShipments = $regions[1]->trackedShipments()->getResults();
+        self::assertInstanceOf(Collection::class, $deShipments);
+        self::assertInstanceOf(Collection::class, $usShipments);
+        self::assertCount(0, $deShipments, 'the trashed DE child must not leak through the eager load');
+        self::assertCount(1, $usShipments);
+    }
+
+    /**
+     * Eager composite HasOne onto a soft-deleting related model: same
+     * scope composition — the trashed child stays excluded.
+     */
+    public function testEagerCompositeHasOneExcludesTrashedChildren(): void
+    {
+        $this->seedTracked();
+
+        $regions = CmpRegion::with('primaryTrackedShipment')->orderBy('country')->get();
+
+        self::assertCount(2, $regions);
+        self::assertNotNull($regions[0]);
+        self::assertNotNull($regions[1]);
+        self::assertCount(0, $regions[0]->primaryTrackedShipment()->getResults());
+        self::assertCount(1, $regions[1]->primaryTrackedShipment()->getResults());
+    }
+
+    /**
+     * Eager composite BelongsTo FROM a soft-deleting child model: the
+     * related (region) builder has no scope here — but the child's own
+     * scope must not corrupt the eager query that targets the PARENT
+     * table. Both children (one trashed) resolve their region.
+     */
+    public function testEagerCompositeBelongsToFromTrashedChild(): void
+    {
+        $this->seedTracked();
+
+        $shipments = CmpTrackedShipment::newQuery()->withTrashed()->with(['region'])->orderBy('id')->get();
+
+        self::assertCount(2, $shipments);
+        self::assertNotNull($shipments[0]);
+        self::assertNotNull($shipments[1]);
+        $usRegion = $shipments[0]->region()->getResults()->first();
+        $deRegion = $shipments[1]->region()->getResults()->first();
+        self::assertInstanceOf(CmpRegion::class, $usRegion);
+        self::assertInstanceOf(CmpRegion::class, $deRegion);
+        self::assertSame('Alpha', $usRegion->name);
+        self::assertSame('Beta', $deRegion->name);
     }
 }
