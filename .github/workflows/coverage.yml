@@ -1,0 +1,197 @@
+name: Coverage
+
+# Generates a line-coverage HTML report and deploys it to GitHub Pages
+# on master via the official Pages deployment flow (OIDC, no gh-pages
+# branch). Kept separate from tests.yml because the deploy needs
+# `pages: write` + `id-token: write` — tests.yml stays least-privilege
+# at `contents: read`.
+#
+# NOTE: Pages is unavailable while the repo is private (requires a paid
+# plan, and the site would only be visible to members anyway — which
+# also breaks shields.io badge fetching). Until the repo goes public,
+# the deploy step is skipped and PR/push runs still produce the report
+# as a downloadable workflow artifact.
+on:
+    push:
+        branches: [master]
+        paths:
+            - "src/**"
+            - "tests/**"
+            - "phpunit.xml"
+            - "composer.json"
+            - "composer.lock"
+            - ".github/workflows/coverage.yml"
+    pull_request:
+        paths:
+            - "src/**"
+            - "tests/**"
+            - "phpunit.xml"
+            - "composer.json"
+            - "composer.lock"
+            - ".github/workflows/coverage.yml"
+    workflow_dispatch:
+
+# The Pages deploy authenticates via OIDC (id-token) and writes only to
+# the Pages deployment — no repo contents write, no branch pushes.
+permissions:
+    contents: read
+    pages: write
+    id-token: write
+
+concurrency:
+    group: coverage-pages
+    cancel-in-progress: true
+
+jobs:
+    coverage:
+        runs-on: ubuntu-latest
+        environment:
+            # Required by the official deploy-pages action; create the
+            # "github-pages" environment in repo settings when enabling
+            # Pages.
+            name: github-pages
+            url: ${{ steps.deployment.outputs.page_url }}
+        services:
+            mysql:
+                image: mysql:8.4
+                env:
+                    MYSQL_ROOT_PASSWORD: root
+                    MYSQL_DATABASE: radiant
+                ports:
+                    - 3306:3306
+                options: >-
+                    --health-cmd "mysqladmin ping --silent"
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 5
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: postgres
+                    POSTGRES_PASSWORD: postgres
+                    POSTGRES_DB: radiant
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres"
+                    --health-interval 10s
+                    --health-timeout 5s
+                    --health-retries 5
+        env:
+            RADIANT_MYSQL_HOST: 127.0.0.1
+            RADIANT_MYSQL_PORT: "3306"
+            RADIANT_MYSQL_USER: root
+            RADIANT_MYSQL_PASSWORD: root
+            RADIANT_MYSQL_DATABASE: radiant
+            RADIANT_PGSQL_HOST: 127.0.0.1
+            RADIANT_PGSQL_PORT: "5432"
+            RADIANT_PGSQL_USER: postgres
+            RADIANT_PGSQL_PASSWORD: postgres
+            RADIANT_PGSQL_DATABASE: radiant
+        steps:
+            # Actions are SHA-pinned (movable tags can be retargeted by the
+            # action repo's maintainers with no diff in this repo).
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - name: Setup PHP
+              uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+              with:
+                  # Single leg: coverage is a reporting concern, not a
+                  # compatibility matrix — tests.yml already covers 8.4/8.5
+                  # x lowest/highest.
+                  php-version: "8.4"
+                  tools: composer:v2
+                  # pcov over xdebug: same line data, a fraction of the
+                  # runtime overhead on a suite this size.
+                  coverage: pcov
+                  extensions: pdo, pdo_mysql, pdo_pgsql
+
+            - name: Cache Composer packages
+              id: composer-cache
+              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              with:
+                  path: vendor
+                  key: ${{ runner.os }}-php8.4-coverage-${{ hashFiles('composer.lock') }}
+                  restore-keys: |
+                      ${{ runner.os }}-php8.4-coverage-
+
+            - name: Install dependencies
+              # The committed lock: the coverage numbers should describe the
+              # exact reviewed, reproducible dependency tree.
+              run: composer install --no-interaction --prefer-dist
+
+            - name: Run tests with coverage
+              # The default phpunit.xml run excludes the integration-remote-sql
+              # group; these service containers ARE the required servers, so
+              # the group is run explicitly. Skipping it would undercount the
+              # DB-layer code paths that make up most of src/Database/**.
+              run: |
+                  php vendor/bin/phpunit --no-progress \
+                      --coverage-html coverage-report \
+                      --coverage-clover coverage.xml
+                  php vendor/bin/phpunit --no-progress \
+                      --group integration-remote-sql \
+                      --coverage-php coverage-integration.php
+
+            - name: Merge coverage reports
+              run: |
+                  # The integration run contributes its collected data via
+                  # --coverage-php (a PHP file returning a CodeCoverage
+                  # object), merged into the main report and re-rendered.
+                  # Verified against php-code-coverage 10.1: Filter methods
+                  # return void, the HTML facade takes Thresholds, and the
+                  # .php coverage file must be require'd, not read as text.
+                  php -r '
+                      require "vendor/autoload.php";
+                      $filter = new \SebastianBergmann\CodeCoverage\Filter();
+                      $filter->includeDirectory("src");
+                      $coverage = require "coverage-integration.php";
+                      (new \SebastianBergmann\CodeCoverage\Report\Html\Facade(
+                          thresholds: \SebastianBergmann\CodeCoverage\Report\Thresholds::default()
+                      ))->process($coverage, "coverage-report");
+                      (new \SebastianBergmann\CodeCoverage\Report\Clover())
+                          ->process($coverage, "coverage.xml");
+                      # Shields endpoint badge (README links to this file
+                      # served from Pages): {"schemaVersion":1,...}
+                      # Written into coverage-report/ so the Pages deploy
+                      # publishes it next to the HTML report.
+                      $total = $coverage->getReport()->percentageOfExecutedLines();
+                      $pct = $total->asFloat();
+                      file_put_contents("coverage-report/coverage-badge.json", json_encode([
+                          "schemaVersion" => 1,
+                          "label" => "coverage",
+                          "message" => $total->asString(),
+                          "color" => $pct >= 90 ? "brightgreen"
+                              : ($pct >= 75 ? "green"
+                              : ($pct >= 50 ? "yellow" : "red")),
+                      ]));
+                  '
+
+            - name: Upload coverage artifact
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: coverage-report
+                  # The badge JSON rides along (it is generated inside
+                  # coverage-report/) so PR runs can inspect it without a
+                  # Pages deploy.
+                  path: coverage-report
+                  retention-days: 14
+
+            # Official Pages flow: upload the report as a Pages artifact,
+            # then deploy it via the Pages API with OIDC. No gh-pages
+            # branch, no contents:write, no third-party action.
+            - name: Configure Pages
+              if: github.ref == 'refs/heads/master'
+              id: pages
+              uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+            - name: Upload Pages artifact
+              if: github.ref == 'refs/heads/master'
+              uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+              with:
+                  path: coverage-report
+
+            - name: Deploy to GitHub Pages
+              if: github.ref == 'refs/heads/master'
+              id: deployment
+              uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
