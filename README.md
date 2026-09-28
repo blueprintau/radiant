@@ -1,11 +1,7 @@
 # BlueprintAU Radiant
 
 [![PHP Tests](https://github.com/blueprintau/radiant/actions/workflows/tests.yml/badge.svg)](https://github.com/blueprintau/radiant/actions/workflows/tests.yml)
-<!-- Coverage badge: shields.io fetches coverage-badge.json from the Pages
-     deployment, which only exists once the repo is public and Pages is
-     enabled. Until then this renders as "invalid" — re-enable when the
-     repo goes public. -->
-<!-- [![Coverage](https://img.shields.io/endpoint?url=https://blueprintau.github.io/radiant/coverage-badge.json)](https://blueprintau.github.io/radiant/) -->
+[![Coverage](https://img.shields.io/endpoint?url=https://blueprintau.github.io/radiant/coverage-badge.json)](https://blueprintau.github.io/radiant/)
 [![Packagist](https://img.shields.io/packagist/v/blueprintau/radiant.svg)](https://packagist.org/packages/blueprintau/radiant)
 
 A **database + ORM package** for the BlueprintAU ecosystem — a fail-fast,
