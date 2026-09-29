@@ -766,7 +766,7 @@ abstract class Model
             $this->assertAssignedMtiKeyPresent($pkName);
         }
 
-        $connection->transaction(function () use ($connection, $metadata, $pkName, $leafClass): void {
+        $connection->transaction(function () use ($connection, $pkName, $leafClass): void {
             // Walk root-first: each level's own columns go to its own table.
             $chain = [];
 
@@ -793,7 +793,15 @@ abstract class Model
                 $values = [];
 
                 foreach ($levelMetadata->properties as $mapping) {
-                    if ($metadata->tableFor($mapping->columnName) !== $levelTable) {
+                    // Partition by the mapping's OWNER's table — NOT the
+                    // leaf's partition map. The leaf's map routes the shared
+                    // PK to the CHILD table (the derived mapping's owner is
+                    // the child class), so a leaf-side lookup would skip the
+                    // root's own PK mapping here and the root INSERT would
+                    // omit the key entirely.
+                    $ownerTable = MetadataFactory::for($mapping->owner)->tableName;
+
+                    if ($ownerTable === null || $ownerTable !== $levelTable) {
                         continue; // another level's column
                     }
 
@@ -834,14 +842,22 @@ abstract class Model
                 $levelRoot = $generatedId === null;
 
                 if ($levelRoot) {
+                    // Capture the caller-assigned key BEFORE the unset — the
+                    // unset exists so an auto-increment root doesn't INSERT
+                    // a null/placeholder key, but a caller-assigned root's
+                    // key IS the generated id and must survive it.
+                    $assignedKey = $values[$pkName] ?? null;
+
                     unset($values[$pkName]);
 
                     $builder = $connection->table($levelTable);
 
                     if (self::rootAutoIncrement($leafClass)) {
                         $generatedId = $builder->insertIdColumn($pkName, true)->insertGetId($values);
-                    } elseif (isset($values[$pkName])) {
-                        $generatedId = $values[$pkName]; // caller-assigned key
+                    } elseif ($assignedKey !== null) {
+                        $values[$pkName] = $assignedKey; // caller-assigned key
+                        $generatedId = $assignedKey;
+                        $builder->insert($values);
                     } else {
                         $builder->insert($values);
                     }

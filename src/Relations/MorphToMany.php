@@ -224,6 +224,6 @@ class MorphToMany extends BelongsToMany
             return;
         }
 
-        $connection->table($this->pivotTable)->insert($rows);
+        $connection->table($this->pivotTable)->insert(self::padRows($rows));
     }
 }

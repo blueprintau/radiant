@@ -443,7 +443,35 @@ class BelongsToMany extends Relation
             return;
         }
 
-        $connection->table($this->pivotTable)->insert($rows);
+        $connection->table($this->pivotTable)->insert(self::padRows($rows));
+    }
+
+    /**
+     * Pad ragged insert rows to a shared column set.
+     *
+     * A bulk INSERT compiles ONE multi-row VALUES list, so every row must
+     * carry the same columns — a mixed attach map (attributed ids beside
+     * bare ids) would otherwise emit rows of differing arity and the
+     * driver rejects the statement. A column absent from a row becomes
+     * NULL.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    protected static function padRows(array $rows): array
+    {
+        $columns = [];
+
+        foreach ($rows as $row) {
+            foreach ($row as $column => $value) {
+                $columns[$column] = true;
+            }
+        }
+
+        return array_map(
+            static fn (array $row): array => array_replace(array_fill_keys(array_keys($columns), null), $row),
+            $rows,
+        );
     }
 
     /**
