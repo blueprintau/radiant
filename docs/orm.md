@@ -227,9 +227,23 @@ User::newQuery()->insert([
 Post::newQuery()->where('status', '=', 'stale')->update(['archived' => 1]);
 ```
 
-These bypass model events and lifecycle hooks (they are builder writes,
-not `save()` calls) — use them for seeders and batch jobs, `save()` when
-per-row behavior matters.
+**Builder writes bypass the write hooks.** `insert()`/`insertGetId()`/
+`update()` on the builder run no `#[WriteHook]` behaviors and no
+lifecycle listeners — they are raw, validated writes. Concretely:
+
+- **Timestamps does not stamp** — `created_at`/`updated_at` are only
+  written if you include them in the payload.
+- **SoftDeletes does not intercept** — a builder `update()` targets rows
+  regardless of `deleted_at` (the trait's query scope still applies to
+  reads, so trashed rows are invisible to a plain `newQuery()`; use
+  `withTrashed()` to reach them deliberately).
+- **Audit/observer traits see nothing** — their `#[WriteHook]` methods
+  never fire.
+
+`save()` and `delete()` are the hook-honoring paths. Use the builder
+writes for seeders and batch jobs where you control the payload; use
+`save()` when per-row behavior (stamping, soft-delete interception,
+audits) matters.
 
 ## Timestamps
 
