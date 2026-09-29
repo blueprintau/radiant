@@ -351,7 +351,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         // A LIST of scalars is the whereKey batch contract — valid.
         $this->whereKeyUntyped([1, 2]);
-        $this->addToAssertionCount(1);
+        self::assertNotNull(RelUser::where('id', '=', 1)->first());
     }
 
     /**

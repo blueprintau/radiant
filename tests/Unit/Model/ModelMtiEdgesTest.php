@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiGuidChild;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiGuidRoot;
 
 /**
  * The MTI edge paths beyond {@see \BlueprintAU\Radiant\Tests\Unit\Relations\MtiE2ETest}:
@@ -157,41 +155,4 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         self::assertSame(0, $this->connection->table('mti_guid_roots')->count());
         self::assertSame(0, $this->connection->table('mti_guid_children')->count());
     }
-}
-
-/**
- * Fixture: the MTI Guid root — a caller-assigned string PK.
- */
-class MtiGuidRoot extends Model
-{
-    /**
-     * The caller-assigned UUID key (NOT auto-increment).
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 36, primaryKey: true)]
-    public string $uuid;
-
-    /**
-     * The email.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $email;
-}
-
-/**
- * Fixture: the MTI Guid child — own table, derived shared key.
- */
-#[Table(name: 'mti_guid_children')]
-class MtiGuidChild extends MtiGuidRoot
-{
-    /**
-     * The admin level (on the child's own table).
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $level;
 }

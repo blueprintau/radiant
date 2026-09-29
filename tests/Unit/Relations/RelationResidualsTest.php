@@ -386,7 +386,11 @@ final class RelationResidualsTest extends DatabaseTestCase
         self::assertCount(2, $fromCollection->models);
         self::assertNull($fromCollection->parentKeys);
 
-        // A sparse list reindexes to 0-based — the array_values contract.
+        /**
+         * A sparse list reindexes to 0-based — the array_values contract.
+         * 
+         * @var Collection<\BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost> $reindexed
+         */
         $reindexed = EagerResult::listToCollection([5 => $firstPost]);
         self::assertCount(1, $reindexed);
         self::assertNotNull($reindexed->first());
@@ -534,14 +538,30 @@ final class RelationResidualsTest extends DatabaseTestCase
     }
 
     /**
-     * attach() accepts a MIXED map — attributed ids keep their attributes,
-     * bare ids ride along attribute-free.
+     * attach() with a MIXED map (attributed ids beside bare ids) throws —
+     * the rows would be ragged, and a bulk INSERT cannot carry differing
+     * column sets (padding the absent column would silently write NULL).
+     * Give every id the same attribute shape instead.
      */
-    public function testAttachMixedMapNormalizesPerId(): void
+    public function testAttachMixedMapThrows(): void
     {
         ['post2' => $post2] = $this->seedB2m();
 
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('same columns; row 1 differs from row 0');
+
         $post2->tags()->attach([3 => ['position' => 'mixed'], 1]);
+    }
+
+    /**
+     * attach() with a UNIFORM attributed map inserts every row — the
+     * happy path of the per-id attribute form.
+     */
+    public function testAttachUniformAttributedMapInsertsEveryRow(): void
+    {
+        ['post2' => $post2] = $this->seedB2m();
+
+        $post2->tags()->attach([3 => ['position' => 'mixed'], 1 => ['position' => null]]);
 
         $pinned = $this->connection->table('b2m_posts_b2m_tags')
             ->where('b2m_posts_id', '=', 2)

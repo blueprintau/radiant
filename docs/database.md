@@ -156,6 +156,17 @@ $emails   = $db->table('users')->pluck('email'); // Collection
 $one      = $db->table('users')->where('id', '=', 1)->first();
 ```
 
+**Bulk inserts are uniform.** A multi-row `insert()` compiles ONE column
+list and one placeholder group per row, so every row must carry the same
+columns — a row whose column set differs from the first row's throws
+`InvalidArgumentException` before any statement runs. There is no
+implicit padding: an absent column in a multi-row `VALUES` list could
+only be filled with NULL, and silently writing NULL into a column the
+caller never named is a data-corruption hazard, not a convenience. Give
+every row the same keys (use an explicit `null` where you mean NULL), or
+issue one `insert()` per shape. `update()` is unaffected — it writes
+exactly the columns you pass.
+
 Aggregates are typed. The common five have static factories; anything
 server-specific (`group_concat`, `array_agg`, …) takes `new Aggregate(...)`
 — the function is any bare SQL identifier, the column a declared column

@@ -54,6 +54,7 @@ final class ConnectorTest extends TestCase
     /**
      * MySQL connector validates its required fields.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testMySqlValidConfig(): void
     {
         (new MySqlConnector())->validConfig([
@@ -62,7 +63,6 @@ final class ConnectorTest extends TestCase
             'port' => 3306,
             'database' => 'app',
         ]);
-        $this->addToAssertionCount(1);
     }
 
     /**
@@ -78,6 +78,7 @@ final class ConnectorTest extends TestCase
     /**
      * Postgres connector requires its required fields.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testPostgresValidConfig(): void
     {
         (new PostgresConnector())->validConfig([
@@ -85,7 +86,6 @@ final class ConnectorTest extends TestCase
             'host' => 'localhost',
             'database' => 'app',
         ]);
-        $this->addToAssertionCount(1);
     }
 
     /**
@@ -150,6 +150,7 @@ final class ConnectorTest extends TestCase
     /**
      * Postgres accepts a valid integer port.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testPostgresAcceptsIntegerPort(): void
     {
         (new PostgresConnector())->validConfig([
@@ -158,6 +159,5 @@ final class ConnectorTest extends TestCase
             'database' => 'app',
             'port' => 5433,
         ]);
-        $this->addToAssertionCount(1);
     }
 }

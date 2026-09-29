@@ -4,11 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\LvPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\LvSoftPost;
 
 /**
  * The lifecycle-callback contract: attempt events (`saving`, `deleting`,
@@ -221,28 +219,4 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
         self::assertTrue($fired);
         self::assertFalse($post->trashed());
     }
-}
-
-/**
- * Fixture: a soft-deletable post for the restoring-veto tests.
- */
-class LvSoftPost extends Model
-{
-    use \BlueprintAU\Radiant\SoftDeletes;
-
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The title.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $title;
 }

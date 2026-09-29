@@ -244,7 +244,8 @@ final class SchemaSyncTest extends DatabaseTestCase
             $names = array_column($this->connection->schemaInspector->table('sync_users')->columns, 'name');
             self::assertNotContains('nickname', $names);
         } catch (\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException) {
-            $this->addToAssertionCount(1); // dialect gate fired — acceptable.
+            // The dialect gate fired — acceptable; the DropTable assert below
+            // still runs, so the test carries a real assertion either way.
         }
 
         // DropTable.

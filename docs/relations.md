@@ -312,6 +312,24 @@ select: `withPivot('position')` carries the column onto each related
 model, readable through `$tag->pivotValue('position')`;
 `withTimestamps()` is sugar for the `created_at`/`updated_at` pair.
 
+**The pivot table is yours.** Radiant derives its NAME
+(`{parentTable}_{relatedTable}`, overridable) but never creates, migrates,
+or syncs the table itself — `Blueprint::fromMetadata()` folds model
+attributes into blueprints, and a pivot has no model, so it never enters
+the schema-sync desired state. Create it like any other table:
+
+```php
+$conn->create(
+    (new Blueprint('posts_tags'))
+        ->foreignId('posts_id', 'posts.id')
+        ->foreignId('tags_id', 'tags.id')
+        ->string('position', length: 16, nullable: true),
+);
+```
+
+The write API (`attach`/`detach`/`sync`/`toggle`) assumes the columns it
+writes exist — a missing pivot column fails at the database, not silently.
+
 **Reserved prefix.** Column names starting with `radiant_` are reserved —
 the ORM uses that prefix for its internal select aliases
 (`radiant_pivot_{column}`, `radiant_pivot_parent_{table}`,
@@ -335,6 +353,12 @@ $post->tags()->syncWithoutDetaching([3]);
 input applies no attributes, a map input (`[1 => ['position' => 'x'], 2]`)
 attaches/updates per id. Both models must declare a single named primary
 key — pivot keys are scalar-only.
+
+**Uniform attribute maps.** `attach()` compiles its rows into ONE bulk
+INSERT, so every id's attribute map must carry the same keys — a mixed
+map (`[1 => ['position' => 'x'], 2]`) throws. Give bare ids an explicit
+empty-attribute twin with the same keys (`2 => ['position' => null]`), or
+attach them in a separate call.
 
 **Polymorphic many-to-many** shares one pivot across parent classes: the
 pivot's parent side is a `(type, key)` pair.

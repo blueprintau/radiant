@@ -61,14 +61,13 @@ final class MySqlCharsetTest extends TestCase
     /**
      * Known MySQL charsets (any case) pass validation.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testValidConfigAcceptsKnownCharsets(): void
     {
         $connector = new MySqlConnector();
         foreach (['utf8mb4', 'UTF8MB4', 'latin1', 'ascii'] as $charset) {
             $connector->validConfig($this->config($charset));
         }
-        // Reaching here without an exception is the assertion.
-        $this->addToAssertionCount(1);
     }
 
     /**

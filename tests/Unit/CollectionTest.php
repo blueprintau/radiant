@@ -176,7 +176,6 @@ final class CollectionTest extends DatabaseTestCase
         $users = CollUser::all();
 
         $this->assertSame($users, $users->load('posts'));
-        $this->addToAssertionCount(1);
     }
 
     /**
@@ -262,6 +261,5 @@ final class CollectionTest extends DatabaseTestCase
         $users = CollUser::all();
 
         self::assertSame($users, $users->fresh());
-        $this->addToAssertionCount(1);
     }
 }

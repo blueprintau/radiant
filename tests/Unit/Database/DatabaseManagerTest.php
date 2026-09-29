@@ -111,7 +111,6 @@ final class DatabaseManagerTest extends TestCase
         // The connection map still only has sqlite/csv, but the registry is
         // extended — the map validation at construction happened before.
         self::assertFalse($this->manager->hasConnection('sqlite2'));
-        $this->addToAssertionCount(1);
     }
 
     /**

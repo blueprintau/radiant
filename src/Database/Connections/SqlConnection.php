@@ -174,6 +174,13 @@ abstract class SqlConnection implements ConnectionInterface
     #[Override]
     final public function insert(QueryBuilder $query, array $values): int
     {
+        $rows = $this->normalizeInsertRows($values);
+
+        // Fail fast on ragged rows BEFORE any statement runs — the grammar
+        // would reject them at compile, but the binding flattener below
+        // would happily emit a mismatched list first.
+        $this->assertUniformInsertRows($rows);
+
         $sql = $this->grammar->compileInsert($query, $values);
         return $this->affectingStatement($sql, $this->flattenInsertValues($values));
     }

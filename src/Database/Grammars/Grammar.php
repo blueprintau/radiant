@@ -243,6 +243,11 @@ abstract class Grammar
     {
         $rows = $this->normalizeInsertRows($values);
 
+        // Ragged rows cannot compile: the column list comes from row 0 and
+        // each row's placeholder group is sized by its own arity. Fail fast
+        // rather than emit a malformed statement (or silently write NULL).
+        $this->assertUniformInsertRows($rows);
+
         // An EMPTY row (a model with no set properties, a DEFAULTS-only
         // insert) cannot compile to the degenerate `INSERT INTO t () VALUES
         // ()` — invalid SQL on every dialect. The dialect owns the form via

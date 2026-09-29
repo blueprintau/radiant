@@ -224,6 +224,11 @@ final class CsvConnection implements ConnectionInterface
         try {
             $rows = $this->readRowsUnlocked();
             $normalized = $this->normalizeInsertRows($values);
+
+            // Fail fast on ragged rows BEFORE the read-modify-write — a
+            // throw here releases the lock without touching the file.
+            $this->assertUniformInsertRows($normalized);
+
             array_push($rows, ...$normalized);
             $this->writeRows($rows, $lock);
         } catch (\Throwable $e) {

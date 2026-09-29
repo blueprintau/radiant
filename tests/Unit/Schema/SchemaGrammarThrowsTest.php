@@ -98,14 +98,20 @@ final class SchemaGrammarThrowsTest extends TestCase
     }
 
     /**
-     * MySQL caps identifiers at 64 characters — 64 passes, 65 throws.
+     * MySQL accepts an identifier AT the 64-character limit.
      */
-    public function testMySqlIdentifierLimit(): void
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+    public function testMySqlIdentifierAtLimitPasses(): void
+    {
+        (new MySqlSchemaGrammar())->assertValidIdentifier(str_repeat('a', 64));
+    }
+
+    /**
+     * MySQL caps identifiers at 64 characters — 65 throws.
+     */
+    public function testMySqlIdentifierOverLimitThrows(): void
     {
         $grammar = new MySqlSchemaGrammar();
-
-        $grammar->assertValidIdentifier(str_repeat('a', 64));
-        $this->addToAssertionCount(1);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains("exceeds MySQL's 64-character limit");
@@ -114,14 +120,20 @@ final class SchemaGrammarThrowsTest extends TestCase
     }
 
     /**
-     * Postgres caps identifiers at 63 bytes — 63 passes, 64 throws.
+     * Postgres accepts an identifier AT the 63-byte limit.
      */
-    public function testPostgresIdentifierLimit(): void
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+    public function testPostgresIdentifierAtLimitPasses(): void
+    {
+        (new PostgresSchemaGrammar())->assertValidIdentifier(str_repeat('a', 63));
+    }
+
+    /**
+     * Postgres caps identifiers at 63 bytes — 64 throws.
+     */
+    public function testPostgresIdentifierOverLimitThrows(): void
     {
         $grammar = new PostgresSchemaGrammar();
-
-        $grammar->assertValidIdentifier(str_repeat('a', 63));
-        $this->addToAssertionCount(1);
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains("exceeds Postgres's 63-byte limit");
