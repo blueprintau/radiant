@@ -359,6 +359,23 @@ final class BuilderParityTest extends DatabaseTestCase
         self::assertSame(['k' => 'v'], $fresh->meta);
     }
 
+    /**
+     * A list of SCALARS is caller error — never a valid row set. It must
+     * fail fast, not warn-and-skip: the old duplicated foreach loop only
+     * emitted PHP warnings and silently encoded EMPTY rows (a row with
+     * just the column defaults landed in the table, insert() reported 1).
+     * Delegating each entry to encodeRow()'s native `array` parameter
+     * turns the mistake into a TypeError.
+     */
+    public function testBulkInsertRejectsScalarRows(): void
+    {
+        $this->expectException(\TypeError::class);
+
+        $this->runInvalid(function (): void {
+            BpUser::newQuery()->insert(['name', 'age']);
+        });
+    }
+
     // ---- Streaming hydrates ----
 
     /**

@@ -1766,22 +1766,16 @@ final class ModelQueryBuilder extends QueryBuilder
             return $this->encodeRow($values);
         }
 
-        // A list whose first entry is NOT an array is a single associative
-        // row that array_is_list cannot distinguish (PHP list keys are
-        // ints) — but `insert(['name' => 'x'])` is never a list, so a list
-        // of scalars is caller error and `array_map` below throws the
-        // named validation error on its first key.
+        // A list whose entries are NOT arrays is caller error — a list of
+        // scalars (`insert(['name', 'age'])`) is never a valid row set.
+        // Delegating each entry to encodeRow() makes that fail fast: its
+        // native `array` parameter TypeErrors on a scalar, where a
+        // duplicated foreach would only WARN and silently encode empty
+        // rows (PHP 8 foreach-over-string skips the loop).
         $encoded = [];
 
         foreach ($values as $row) {
-            $encodedRow = [];
-
-            foreach ($row as $column => $value) {
-                $name = (string) $column;
-                $encodedRow[$name] = $this->encodeValue($name, $value);
-            }
-
-            $encoded[] = $encodedRow;
+            $encoded[] = $this->encodeRow($row);
         }
 
         return $encoded;
