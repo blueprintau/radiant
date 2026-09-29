@@ -208,6 +208,29 @@ without a re-fetch. Expression defaults (e.g. `CURRENT_TIMESTAMP`) are
 skipped — their DB-computed value is unknowable client-side, and the
 property stays honestly uninitialized.
 
+**Bulk writes on the builder.** `ModelQueryBuilder` exposes the same
+write methods as the plain builder — `insert()`, `insertGetId()`,
+`update()` — but model-aware: column names are validated against the
+model's metadata (an unknown column throws before any statement runs),
+and values are encoded through the column casts (a `Carbon` for a
+datetime column, an enum case, a JSON object, a Unix timestamp for an
+int-timestamp column). Bulk inserts follow the same uniformity rule as
+every bulk insert — every row must carry the same columns (see
+[Writes and aggregates](database.md#writes-and-aggregates)):
+
+```php
+User::newQuery()->insert([
+    ['email' => 'alicia@example.com', 'country' => 'US'],
+    ['email' => 'ben@example.com',    'country' => 'DE'],
+]);
+
+Post::newQuery()->where('status', '=', 'stale')->update(['archived' => 1]);
+```
+
+These bypass model events and lifecycle hooks (they are builder writes,
+not `save()` calls) — use them for seeders and batch jobs, `save()` when
+per-row behavior matters.
+
 ## Timestamps
 
 Opt in by applying the `Timestamps` trait — `save()` then stamps
