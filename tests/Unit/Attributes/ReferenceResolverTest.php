@@ -89,19 +89,21 @@ final class ReferenceResolverTest extends TestCase
     }
 
     /**
-     * The asymmetry the backslash gate implies: a NON-model `::class`
-     * constant (no leading backslash) passes through as a plain table
-     * name — the resolver cannot tell `DateTimeImmutable::class` from a
-     * table literally named `DateTimeImmutable`. Locked so the behavior
-     * is a documented contract, not an accident; callers who need the
-     * strict shape must pass the leading-backslash spelling.
+     * A NON-model `::class` constant (no leading backslash) fails fast —
+     * PHP's `::class` never emits a leading backslash, so without the
+     * class_exists check in the no-backslash branch a global-namespace
+     * class-string would masquerade as a table name and only fail later
+     * with a confusing SQL error.
      */
-    public function testNonModelClassConstantPassesThrough(): void
+    public function testNonModelClassConstantThrows(): void
     {
-        self::assertSame(
-            \DateTimeImmutable::class,
-            ReferenceResolver::resolve(\DateTimeImmutable::class),
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'A foreign key references [DateTimeImmutable], which is a class but not a '
+            . 'Radiant model; a foreign key must reference a table name or a model class-string.',
         );
+
+        ReferenceResolver::resolve(\DateTimeImmutable::class);
     }
 
     /**
