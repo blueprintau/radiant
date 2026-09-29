@@ -39,8 +39,8 @@ final class ReferenceResolver
 
         if (!class_exists($reference)) {
             throw new \InvalidArgumentException(
-                "A foreign key references [{$reference}], which looks like a model "
-                . 'class-string but does not exist.'
+                "A foreign key references [{$reference}], which is neither a table name "
+                . 'nor an existing model class-string.'
             );
         }
 

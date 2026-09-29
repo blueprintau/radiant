@@ -285,6 +285,80 @@ final class BuilderParityTest extends DatabaseTestCase
         self::assertSame(['b' => 2], $rows[1]->meta);
     }
 
+    /**
+     * Bulk insert validates EVERY row's keys — a bad key in the second
+     * row rejects even though the first row is clean.
+     */
+    public function testBulkInsertValidatesEveryRow(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
+
+        $this->runInvalid(function (): void {
+            BpUser::newQuery()->insert([
+                ['name' => 'clean'],
+                ['name' => 'dirty', 'not_a_column' => 1],
+            ]);
+        });
+    }
+
+    /**
+     * Bulk insert encodes DateTime values in EVERY row — not just the
+     * first (the per-row encode loop, not a one-shot cast).
+     */
+    public function testBulkInsertEncodesEveryRow(): void
+    {
+        BpUser::newQuery()->insert([
+            ['name' => 'd1', 'signed_up_at' => \Carbon\Carbon::parse('2026-05-01 01:00:00')],
+            ['name' => 'd2', 'signed_up_at' => \Carbon\Carbon::parse('2026-05-02 02:00:00')],
+        ]);
+
+        $rows = BpUser::newQuery()->whereIn('name', ['d1', 'd2'])->orderBy('name')->get();
+
+        self::assertCount(2, $rows);
+        self::assertNotNull($rows[0]);
+        self::assertNotNull($rows[1]);
+        self::assertNotNull($rows[0]->signedUpAt);
+        self::assertNotNull($rows[1]->signedUpAt);
+        self::assertSame('2026-05-01 01:00:00', $rows[0]->signedUpAt->format('Y-m-d H:i:s'));
+        self::assertSame('2026-05-02 02:00:00', $rows[1]->signedUpAt->format('Y-m-d H:i:s'));
+    }
+
+    /**
+     * insertGetId() validates and encodes like insert() — an unknown
+     * column rejects before any SQL runs.
+     */
+    public function testInsertGetIdRejectsUnknownColumn(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
+
+        $this->runInvalid(function (): void {
+            BpUser::newQuery()->insertGetId(['name' => 'x', 'not_a_column' => 1]);
+        });
+    }
+
+    /**
+     * insertGetId() encodes through the casts and returns the generated
+     * id.
+     */
+    public function testInsertGetIdEncodesThroughCasts(): void
+    {
+        $id = BpUser::newQuery()->insertGetId([
+            'name' => 'gid',
+            'signed_up_at' => \Carbon\Carbon::parse('2026-06-01 03:00:00'),
+            'meta' => ['k' => 'v'],
+        ]);
+
+        self::assertNotNull($id);
+
+        $fresh = BpUser::newQuery()->where('name', '=', 'gid')->first();
+        self::assertNotNull($fresh);
+        self::assertNotNull($fresh->signedUpAt);
+        self::assertSame('2026-06-01 03:00:00', $fresh->signedUpAt->format('Y-m-d H:i:s'));
+        self::assertSame(['k' => 'v'], $fresh->meta);
+    }
+
     // ---- Streaming hydrates ----
 
     /**

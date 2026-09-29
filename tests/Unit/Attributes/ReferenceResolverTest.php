@@ -52,15 +52,16 @@ final class ReferenceResolverTest extends TestCase
     }
 
     /**
-     * A backslash-bearing reference that names no class fails fast with
-     * the "looks like a model class-string" message.
+     * A backslash-bearing reference that names no class fails fast — the
+     * message does NOT claim the input looks like a model (any
+     * backslash-bearing non-class lands here, model-shaped or not).
      */
     public function testNonexistentClassThrows(): void
     {
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
-            'A foreign key references [App\\Does\\Not\\Exist], which looks like a model '
-            . 'class-string but does not exist.',
+            'A foreign key references [App\\Does\\Not\\Exist], which is neither a table '
+            . 'name nor an existing model class-string.',
         );
 
         ReferenceResolver::resolve('App\\Does\\Not\\Exist');
@@ -85,6 +86,22 @@ final class ReferenceResolverTest extends TestCase
         );
 
         ReferenceResolver::resolve('\\' . \DateTimeImmutable::class);
+    }
+
+    /**
+     * The asymmetry the backslash gate implies: a NON-model `::class`
+     * constant (no leading backslash) passes through as a plain table
+     * name — the resolver cannot tell `DateTimeImmutable::class` from a
+     * table literally named `DateTimeImmutable`. Locked so the behavior
+     * is a documented contract, not an accident; callers who need the
+     * strict shape must pass the leading-backslash spelling.
+     */
+    public function testNonModelClassConstantPassesThrough(): void
+    {
+        self::assertSame(
+            \DateTimeImmutable::class,
+            ReferenceResolver::resolve(\DateTimeImmutable::class),
+        );
     }
 
     /**

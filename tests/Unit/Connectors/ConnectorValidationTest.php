@@ -72,15 +72,13 @@ final class ConnectorValidationTest extends TestCase
     /**
      * A well-formed options array passes validation.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testWellFormedOptionsPass(): void
     {
         (new SqliteConnector())->validConfig([
             'database' => ':memory:',
             'options' => [\PDO::ATTR_TIMEOUT => 5],
         ]);
-
-        // No exception is the assertion.
-        $this->addToAssertionCount(1);
     }
 
     /**
@@ -178,6 +176,7 @@ final class ConnectorValidationTest extends TestCase
     /**
      * Every allowlisted sslmode passes validation (case normalized inside).
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testPostgresAllowedSslmodesPass(): void
     {
         foreach (['disable', 'REQUIRE', 'Verify-Full', 'prefer', 'allow', 'verify-ca'] as $sslmode) {
@@ -187,9 +186,6 @@ final class ConnectorValidationTest extends TestCase
                 'sslmode' => $sslmode,
             ]);
         }
-
-        // No exception is the assertion.
-        $this->addToAssertionCount(1);
     }
 
     /**
@@ -326,12 +322,10 @@ final class ConnectorValidationTest extends TestCase
     /**
      * A well-formed readonly flag and path pass validation.
      */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
     public function testCsvValidConfigPasses(): void
     {
         (new CsvConnector())->validConfig(['path' => '/tmp/x.csv', 'readonly' => true]);
-
-        // No exception is the assertion.
-        $this->addToAssertionCount(1);
     }
 
     // ---- ConnectionException wrap (no server needed) ----
