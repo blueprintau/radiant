@@ -24,7 +24,19 @@ concurrency:
     cancel-in-progress: false
 
 jobs:
+    # Gate: run the full test suite against the tagged commit before
+    # releasing. tests.yml is a reusable workflow (workflow_call), so it is
+    # invoked directly here — the release job below only proceeds if every
+    # matrix leg (PHP 8.4/8.5 × lowest/highest) is green on this exact ref.
+    # This matters because a tag can point at any commit, including one that
+    # was never pushed to main, so "tests passed on main" is not sufficient.
+    test:
+        uses: ./.github/workflows/tests.yml
+        permissions:
+            contents: read
+
     release:
+        needs: test
         runs-on: ubuntu-latest
         permissions:
             contents: write
