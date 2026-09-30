@@ -4,7 +4,7 @@ on:
     workflow_dispatch:
         inputs:
             version:
-                description: "Version tag (e.g., v1.0.0)"
+                description: "Version tag (e.g., 1.0.0)"
                 required: true
                 type: string
 
@@ -27,8 +27,11 @@ jobs:
                   # Fail fast on a malformed input before it reaches git: a
                   # flag-like or arbitrary string would misdirect the tag
                   # check or publish a tag at an unintended ref.
-                  if ! echo "$VERSION" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-                      echo "Version '$VERSION' is not a valid semver tag (expected e.g. v1.2.3)."
+                  # Plain semver only (no "v" prefix) so Packagist/Composer
+                  # tags stay consistent and duplicate v-prefixed tags
+                  # (e.g. both 1.2.3 and v1.2.3) can never diverge.
+                  if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+                      echo "Version '$VERSION' is not a valid semver tag (expected e.g. 1.2.3, no 'v' prefix)."
                       exit 1
                   fi
 
