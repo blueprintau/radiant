@@ -1,73 +1,55 @@
 name: Release
 
+# Releases are tag-driven: pushing a plain semver tag (e.g. 1.0.0) creates
+# the GitHub Release. This is safe because the full test suite runs on every
+# push to main, so any commit a tag can point at is already known green.
 on:
-    workflow_dispatch:
-        inputs:
-            version:
-                description: "Version tag (e.g., 1.0.0)"
-                required: true
-                type: string
+    push:
+        tags:
+            # Coarse glob pre-filter only: GitHub tag patterns are globs, not
+            # regexes, so they cannot express "one or more digits" precisely.
+            # These admit anything that plausibly looks like a version; the
+            # strict regex in the job is the authoritative gate. Plain semver
+            # only (no "v" prefix) so Packagist/Composer tags stay consistent
+            # and duplicate v-prefixed tags (e.g. both 1.2.3 and v1.2.3) can
+            # never diverge. Prerelease suffixes allowed.
+            - "[0-9]*.[0-9]*.[0-9]*"
+            - "[0-9]*.[0-9]*.[0-9]*-*"
 
 permissions:
     contents: read
 
+concurrency:
+    group: release
+    cancel-in-progress: false
+
 jobs:
-    check-tag:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  fetch-depth: 0
-
-            - name: Validate version shape
-              env:
-                  VERSION: ${{ inputs.version }}
-              run: |
-                  # Fail fast on a malformed input before it reaches git: a
-                  # flag-like or arbitrary string would misdirect the tag
-                  # check or publish a tag at an unintended ref.
-                  # Plain semver only (no "v" prefix) so Packagist/Composer
-                  # tags stay consistent and duplicate v-prefixed tags
-                  # (e.g. both 1.2.3 and v1.2.3) can never diverge.
-                  if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-                      echo "Version '$VERSION' is not a valid semver tag (expected e.g. 1.2.3, no 'v' prefix)."
-                      exit 1
-                  fi
-
-            - name: Check tag does not already exist
-              env:
-                  VERSION: ${{ inputs.version }}
-              run: |
-                  if git rev-parse "$VERSION" >/dev/null 2>&1; then
-                      echo "Tag $VERSION already exists. Aborting."
-                      exit 1
-                  else
-                      echo "Tag $VERSION does not exist. Continuing."
-                  fi
-
-    test:
-        needs: check-tag
-        permissions:
-            contents: read
-        uses: ./.github/workflows/tests.yml
-
     release:
-        needs: [check-tag, test]
         runs-on: ubuntu-latest
         permissions:
             contents: write
         steps:
-            - name: Checkout code
-              uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  fetch-depth: 0
+            - name: Validate tag shape
+              env:
+                  VERSION: ${{ github.ref_name }}
+              run: |
+                  # Authoritative gate. The push filter is a coarse glob that
+                  # cannot express semver precisely (no "one or more digits"),
+                  # so it admits junk like 1.2.3.4 or ..1.2.3. Reject those
+                  # here: a malformed tag fails the run and the release is
+                  # never created.
+                  if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+                      echo "Tag '$VERSION' is not a valid semver tag (expected e.g. 1.2.3, no 'v' prefix)."
+                      exit 1
+                  fi
 
             - name: Create GitHub Release
               uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
               with:
-                  tag_name: ${{ inputs.version }}
+                  tag_name: ${{ github.ref_name }}
                   generate_release_notes: true
                   draft: false
-                  prerelease: false
-                  make_latest: true
+                  # A tag like 1.0.0-beta.1 must not be published as the
+                  # latest stable release.
+                  prerelease: ${{ contains(github.ref_name, '-') }}
+                  make_latest: ${{ !contains(github.ref_name, '-') }}
