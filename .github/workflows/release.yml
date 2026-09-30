@@ -38,8 +38,15 @@ jobs:
                   # so it admits junk like 1.2.3.4 or ..1.2.3. Reject those
                   # here: a malformed tag fails the run and the release is
                   # never created.
-                  if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
-                      echo "Tag '$VERSION' is not a valid semver tag (expected e.g. 1.2.3, no 'v' prefix)."
+                  #
+                  # The prerelease suffix is restricted to Composer's
+                  # recognized stability keywords (dev/alpha/beta/RC, with
+                  # optional numeric part). Anything else (e.g. 1.0.0-hotfix)
+                  # would be a prerelease on GitHub but resolve as STABLE on
+                  # Packagist — a mismatch that could ship a pre-release as
+                  # the latest stable version to consumers.
+                  if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(dev|alpha|beta|RC)(\.[0-9]+)?)?$'; then
+                      echo "Tag '$VERSION' is not a valid semver tag (expected e.g. 1.2.3 or 1.2.3-beta.1, no 'v' prefix)."
                       exit 1
                   fi
 
