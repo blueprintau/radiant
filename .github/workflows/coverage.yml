@@ -6,11 +6,10 @@ name: Coverage
 # `pages: write` + `id-token: write` — tests.yml stays least-privilege
 # at `contents: read`.
 #
-# NOTE: Pages is unavailable while the repo is private (requires a paid
-# plan, and the site would only be visible to members anyway — which
-# also breaks shields.io badge fetching). Until the repo goes public,
-# the deploy step is skipped and PR/push runs still produce the report
-# as a downloadable workflow artifact.
+# The report is served at https://blueprintau.github.io/radiant/ and
+# the Shields badge in the README reads
+# .../radiant/coverage-badge.json from the same deployment. PR runs
+# still produce the report as a downloadable workflow artifact.
 on:
     push:
         branches: [main]
