@@ -24,7 +24,7 @@
     ],
     "require": {
         "php": "^8.4",
-        "blueprintau/collections": "^1.0@dev",
+        "blueprintau/collections": "^1.0",
         "nesbot/carbon": "^3.13"
     },
     "require-dev": {
