@@ -691,6 +691,12 @@ final class ModelQueryBuilder extends QueryBuilder
 
     // ---- Trait scopes ----
 
+    // The soft-delete query vocabulary lives HERE, not on the SoftDeletes
+    // trait: these methods return a builder (fluent chains) and strip/re-mark
+    // the traitScope where-markers below — query state a model-side trait
+    // method cannot own. The trait keeps the row behavior (scope, delete
+    // hook, restore/trashed).
+
     /**
      * Include soft-deleted rows — strips only the SoftDeletes scope.
      *

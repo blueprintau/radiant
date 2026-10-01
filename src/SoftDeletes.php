@@ -24,6 +24,13 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * — both in the portable subset — so it works on any
  * `ConnectionInterface` (CSV included).
  *
+ * The API boundary is deliberate: this trait owns ROW behavior (the
+ * scope, the delete hook, forceDelete/restore/trashed). The QUERY-side
+ * vocabulary (withTrashed/onlyTrashed/withoutScope) lives on
+ * {@see ModelQueryBuilder} — those methods must return a builder to stay
+ * fluent and manipulate the builder's traitScope where-markers, which a
+ * model-side trait method cannot do.
+ *
  * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait SoftDeletes
