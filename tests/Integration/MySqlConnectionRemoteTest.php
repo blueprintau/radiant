@@ -7,8 +7,6 @@ namespace BlueprintAU\Radiant\Tests\Integration;
 use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Tests\Support\CrudCycleTests;
-use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
 
 /**
@@ -16,10 +14,11 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * transaction savepoints, the `GET_LOCK` advisory lock and the
  * `information_schema` inspector.
  *
- * **Policy: fail, never skip.** These tests require a reachable MySQL
- * server. When no server is up, they FAIL — the caller must exclude the
- * `integration-remote-sql` group explicitly (phpunit.xml excludes it for
- * the default local run; CI runs it where a failure is a real signal).
+ * The dialect-agnostic CRUD/transaction/aggregate/alter cycle comes from
+ * IntegrationTestCase (CrudCycleTests); this class adds the MySQL
+ * connection config and the MySQL-specific tests. Table lifecycle is
+ * handled by DatabaseTestCase — tests declare tables with createTables()
+ * and teardown drops them in reverse creation order.
  *
  * Each test connects *through the connector*, so the DSN construction,
  * option merging and the `SET NAMES` post-connect SQL are all exercised —
@@ -30,18 +29,8 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  *  - RADIANT_MYSQL_{HOST,PORT,USER,PASSWORD,DATABASE} (127.0.0.1:3306 root/"" radiant)
  */
 #[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
-final class MySqlConnectionRemoteTest extends DatabaseTestCase
+final class MySqlConnectionRemoteTest extends IntegrationTestCase
 {
-    use CrudCycleTests;
-
-    /**
-     * Tables created by the running test — dropped in reverse order on
-     * teardown (children before parents, so FKs never block the drop).
-     *
-     * @var list<string>
-     */
-    private array $tables = [];
-
     /**
      * The config for the per-test 'default' connection — the live MySQL
      * server, from env with local defaults.
@@ -62,40 +51,6 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
     }
 
     /**
-     * A second session on the same server — the probe that proves the
-     * advisory lock is held exclusively.
-     *
-     * @return array<string, array<string, mixed>>
-     */
-    #[\Override]
-    protected function additionalConnections(): array
-    {
-        return ['probe' => $this->connectionConfig()];
-    }
-
-    /**
-     * Drop every table the test created, then reset the facade.
-     */
-    #[\Override]
-    protected function tearDown(): void
-    {
-        foreach (array_reverse($this->tables) as $table) {
-            $this->connection->statement("DROP TABLE IF EXISTS {$table}");
-        }
-        parent::tearDown();
-    }
-
-    /**
-     * Track a table for teardown cleanup.
-     *
-     * @param  string  $table
-     */
-    private function track(string $table): void
-    {
-        $this->tables[] = $table;
-    }
-
-    /**
      * The manager builds the default connection through the MySQL
      * connector — the concrete dialect class comes back.
      */
@@ -110,8 +65,7 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
      */
     public function testNestedTransactionRollsBackToSavepoint(): void
     {
-        $this->connection->create((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
-        $this->track('rmt_savepoint');
+        $this->createTables((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
 
         $this->connection->transaction(function (): void {
             $this->connection->table('rmt_savepoint')->insert(['name' => 'outer']);
@@ -136,8 +90,7 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
      */
     public function testNestedTransactionCommitPersistsBothFrames(): void
     {
-        $this->connection->create((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
-        $this->track('rmt_savepoint');
+        $this->createTables((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
 
         $this->connection->transaction(function (): void {
             $this->connection->table('rmt_savepoint')->insert(['name' => 'outer']);
@@ -156,7 +109,7 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
     public function testWithLockHoldsTheLockExclusively(): void
     {
         $result = $this->connection->withLock(function (): string {
-            $probe = $this->manager->sqlConnection('probe');
+            $probe = $this->probe();
             $row = $probe->selectSql("SELECT GET_LOCK('rmt:probe', 0) AS held")->first();
             self::assertNotNull($row);
             self::assertSame(
@@ -183,7 +136,7 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
             }, 'rmt:release');
         }, \RuntimeException::class);
 
-        $probe = $this->manager->sqlConnection('probe');
+        $probe = $this->probe();
         $row = $probe->selectSql("SELECT GET_LOCK('rmt:release', 0) AS acquired")->first();
         self::assertNotNull($row);
         self::assertSame(1, (int) $row->acquired, 'the lock must be released after the callback throws');
@@ -196,15 +149,13 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
      */
     public function testInspectorReadsSchema(): void
     {
-        $this->connection->create((new Blueprint('rmt_ins_parent'))->id()->string('name', 64));
-        $this->connection->create(
+        $this->createTables(
+            (new Blueprint('rmt_ins_parent'))->id()->string('name', 64),
             (new Blueprint('rmt_ins_child'))
                 ->id()
                 ->foreignId('parentId', 'rmt_ins_parent')
                 ->string('label', 32),
         );
-        $this->track('rmt_ins_child');
-        $this->track('rmt_ins_parent');
 
         $inspector = $this->connection->schemaInspector;
 
@@ -229,12 +180,11 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
      */
     public function testInspectorReadsUniqueIndex(): void
     {
-        $this->connection->create(
+        $this->createTables(
             (new Blueprint('rmt_ins_idx'))
                 ->id()
                 ->column(ColumnType::String, 'email', length: 255, unique: true),
         );
-        $this->track('rmt_ins_idx');
 
         $live = $this->connection->schemaInspector->table('rmt_ins_idx');
         $columns = array_map(
@@ -251,14 +201,12 @@ final class MySqlConnectionRemoteTest extends DatabaseTestCase
      */
     public function testInspectorReferencingTables(): void
     {
-        $this->connection->create((new Blueprint('rmt_ref_parent'))->id());
-        $this->connection->create(
+        $this->createTables(
+            (new Blueprint('rmt_ref_parent'))->id(),
             (new Blueprint('rmt_ref_child'))
                 ->id()
                 ->foreignId('parentId', 'rmt_ref_parent'),
         );
-        $this->track('rmt_ref_child');
-        $this->track('rmt_ref_parent');
 
         self::assertSame(
             ['rmt_ref_child'],

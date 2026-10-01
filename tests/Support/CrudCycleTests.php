@@ -15,8 +15,8 @@ use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
  * The tests are dialect-agnostic — they only touch `$this->connection`,
  * which the consuming suite wires through its own connector (so the DSN
  * construction, option merging and post-connect SQL stay exercised).
- * Consuming suites must extend DatabaseTestCase and set up a `users`
- * table shape via the `users` blueprint below.
+ * Consuming suites must extend DatabaseTestCase — the tables are created
+ * through createTables(), so teardown tracks and drops them.
  */
 trait CrudCycleTests
 {
@@ -25,7 +25,7 @@ trait CrudCycleTests
      */
     public function testCrudCycle(): void
     {
-        $this->connection->create((new Blueprint('users'))
+        $this->createTables((new Blueprint('users'))
             ->id()
             ->string('name', 100)
             ->column(ColumnType::Int, 'age'));
@@ -58,7 +58,7 @@ trait CrudCycleTests
      */
     public function testTransactions(): void
     {
-        $this->connection->create((new Blueprint('users'))
+        $this->createTables((new Blueprint('users'))
             ->id()
             ->string('name', 100));
 
@@ -90,7 +90,7 @@ trait CrudCycleTests
      */
     public function testAggregates(): void
     {
-        $this->connection->create((new Blueprint('users'))
+        $this->createTables((new Blueprint('users'))
             ->id()
             ->string('name', 100)
             ->column(ColumnType::Int, 'age'));
@@ -111,7 +111,7 @@ trait CrudCycleTests
      */
     public function testSchemaAlter(): void
     {
-        $this->connection->create((new Blueprint('users'))
+        $this->createTables((new Blueprint('users'))
             ->id()
             ->string('name', 100));
 

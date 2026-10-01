@@ -39,20 +39,11 @@ use PHPUnit\Framework\TestCase;
  * reverse creation order at teardown — best-effort, so a test that left
  * the connection dead still tears down cleanly. The default-on policy
  * keeps a persistent backend (a file-backed sqlite database) from
- * leaking tables between tests; a suite that NEEDS the residue (a
- * persistence/reconnection test) flips DROP_CREATED_TABLES to false,
- * and createTablesUntracked() opts individual tables out.
+ * leaking tables between tests; createTablesUntracked() opts individual
+ * tables out.
  */
 abstract class DatabaseTestCase extends TestCase
 {
-    /**
-     * Whether teardown drops the tables createTables() created.
-     *
-     * Flip to false in a suite that tests persistence across connections
-     * — the residue IS the subject there.
-     */
-    protected const DROP_CREATED_TABLES = true;
-
     /** @var SqlConnection The default SQL connection of the per-test manager. */
     protected SqlConnection $connection;
 
@@ -83,18 +74,21 @@ abstract class DatabaseTestCase extends TestCase
      * Reset the static facade to a fresh empty :memory: manager so the
      * global state of one test class never leaks into the next — after
      * dropping the tables createTables() created (reverse order, so FK
-     * children go before their parents).
+     * children go before their parents). The drops go through the
+     * connection's drop() so each dialect's identifier quoting applies;
+     * a dead connection or an already-missing table is swallowed.
      */
     protected function tearDown(): void
     {
-        if (self::DROP_CREATED_TABLES && $this->createdTables !== []) {
+        if ($this->createdTables !== []) {
             foreach (array_reverse($this->createdTables) as $table) {
                 try {
-                    $this->connection->statement("DROP TABLE IF EXISTS {$table}");
+                    $this->connection->drop($table);
                 } catch (\Throwable) {
                     // Best-effort: the connection may be dead (a
-                    // connection-loss test) — the :memory: database dies
-                    // with it anyway.
+                    // connection-loss test) or the table already gone —
+                    // drop() compiles no IF EXISTS, so this catch is the
+                    // IF EXISTS.
                 }
             }
             $this->createdTables = [];

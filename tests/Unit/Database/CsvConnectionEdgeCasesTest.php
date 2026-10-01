@@ -29,6 +29,15 @@ final class CsvConnectionEdgeCasesTest extends TestCase
     private string $path;
 
     /**
+     * The dedicated directory holding this test's files — created fresh
+     * per test so the permission test can chmod it without touching the
+     * shared temp dir.
+     *
+     * @var string|null
+     */
+    private ?string $dir = null;
+
+    /**
      * Build a CSV connection over the given rows.
      *
      * @param  list<array<string, int|string|null>>  $rows
@@ -54,10 +63,21 @@ final class CsvConnectionEdgeCasesTest extends TestCase
     }
 
     /**
-     * Remove the temp file and any lock/temp residue.
+     * Remove the temp file and any lock/temp residue — including the
+     * dedicated directory the permission test created (its mode is
+     * restored first so the rmdir can succeed).
      */
     protected function tearDown(): void
     {
+        if ($this->dir !== null) {
+            chmod($this->dir, 0700);
+            foreach (glob($this->dir . '/*') ?: [] as $file) {
+                @unlink($file);
+            }
+            @rmdir($this->dir);
+            $this->dir = null;
+        }
+
         if (isset($this->path)) {
             foreach ([$this->path, $this->path . '.lock'] as $file) {
                 if (is_file($file)) {
@@ -403,6 +423,13 @@ final class CsvConnectionEdgeCasesTest extends TestCase
      * A failed write releases the held lock — another handle can take the
      * exclusive lock afterwards, and no temp residue remains.
      *
+     * The CSV lives in a dedicated, freshly created directory so the
+     * read-only chmod is deterministic — chmodding the shared temp dir
+     * would depend on it being user-owned and on mode bits being
+     * enforced at all. The is_writable() guard turns an environment that
+     * ignores mode bits (root, capability-bearing containers) into a
+     * skip instead of a false pass.
+     *
      * The sidecar lock file is pre-created: with the directory read-only,
      * creating it would fail inside acquireLock() BEFORE the write is
      * attempted, and the held-lock release arm would never run.
@@ -413,12 +440,20 @@ final class CsvConnectionEdgeCasesTest extends TestCase
     #[WithoutErrorHandler]
     public function testFailedWriteReleasesLockAndLeavesNoResidue(): void
     {
-        if (getmyuid() === 0) {
-            self::markTestSkipped('running as root — mode bits are ignored');
-        }
+        $dir = sys_get_temp_dir() . '/radiant_csv_ro_' . uniqid();
+        self::assertTrue(mkdir($dir, 0700, true));
+        $this->dir = $dir;
+        $this->path = $dir . '/users.csv';
 
-        $db = $this->seedUsers();
-        $dir = dirname($this->path);
+        $handle = fopen($this->path, 'w');
+        \assert($handle !== false);
+        fputcsv($handle, ['id', 'name', 'email', 'age'], escape: '');
+        fputcsv($handle, [1, 'Alice', 'alice@example.com', 25], escape: '');
+        fputcsv($handle, [2, 'Bob', 'bob@example.org', 40], escape: '');
+        fputcsv($handle, [3, 'Carol', 'carol@example.com', 30], escape: '');
+        fclose($handle);
+
+        $db = new CsvConnection($this->path);
 
         // Pre-create the sidecar so acquireLock() can open (not create) it
         // while the directory is read-only.
@@ -427,6 +462,10 @@ final class CsvConnectionEdgeCasesTest extends TestCase
         fclose($lockHandle);
 
         chmod($dir, 0500);
+        if (is_writable($dir)) {
+            chmod($dir, 0700);
+            self::markTestSkipped('directory mode bits are not enforced in this environment');
+        }
         try {
             Expectation::throwsWithMessage(
                 fn () => $db->table('users')->where('id', WhereOperator::Eq, 1)->update(['name' => 'X']),
@@ -434,7 +473,7 @@ final class CsvConnectionEdgeCasesTest extends TestCase
                 'Could not write CSV file',
             );
         } finally {
-            chmod($dir, 0755);
+            chmod($dir, 0700);
         }
 
         // The lock was released: another handle wins a non-blocking
