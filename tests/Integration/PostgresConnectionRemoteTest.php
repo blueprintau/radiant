@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Integration;
 
+use BlueprintAU\Radiant\Database\Connections\PostgresConnection;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
@@ -30,6 +32,28 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
 final class PostgresConnectionRemoteTest extends IntegrationTestCase
 {
     /**
+     * The concrete connection class the Postgres connector builds.
+     *
+     * @return class-string<SqlConnection>
+     */
+    #[\Override]
+    protected function connectionClass(): string
+    {
+        return PostgresConnection::class;
+    }
+
+    /**
+     * The dialect's name in the inspector's missing-table message.
+     *
+     * @return string
+     */
+    #[\Override]
+    protected function inspectorSchemaName(): string
+    {
+        return 'Postgres';
+    }
+
+    /**
      * The config for the per-test 'default' connection — the live
      * Postgres server, from env with local defaults. `sslmode` rides
      * along so the connector's DSN append is exercised.
@@ -48,6 +72,21 @@ final class PostgresConnectionRemoteTest extends IntegrationTestCase
             'password' => getenv('RADIANT_PGSQL_PASSWORD') ?: 'postgres',
             'sslmode' => 'prefer',
         ];
+    }
+
+    /**
+     * The (liveType, declaredType, length, expected) tuples for Postgres'
+     * udt_name short forms.
+     *
+     * @return iterable<string, array{string, ColumnType, int|null, bool}>
+     */
+    #[\Override]
+    public static function columnTypeMatchesProvider(): iterable
+    {
+        yield 'int4 matches Int' => ['int4', ColumnType::Int, null, true];
+        yield 'varchar matches String(100)' => ['varchar', ColumnType::String, 100, true];
+        yield 'timestamptz matches Timestamp' => ['timestamptz', ColumnType::Timestamp, null, true];
+        yield 'int4 does not match String' => ['int4', ColumnType::String, 100, false];
     }
 
     /**
@@ -114,31 +153,5 @@ final class PostgresConnectionRemoteTest extends IntegrationTestCase
         self::assertNotNull($row);
         self::assertTrue((bool) $row->acquired, 'the lock must be released after the callback throws');
         $probe->statement("SELECT pg_advisory_unlock(hashtext('rmt:release'))");
-    }
-
-    /**
-     * The inspector's content-drift comparison maps Postgres' udt_name
-     * short forms onto the declared logical types.
-     */
-    public function testInspectorColumnTypeMatches(): void
-    {
-        $inspector = $this->connection->schemaInspector;
-
-        self::assertTrue($inspector->columnTypeMatches('int4', ColumnType::Int, null));
-        self::assertTrue($inspector->columnTypeMatches('varchar', ColumnType::String, 100));
-        self::assertTrue($inspector->columnTypeMatches('timestamptz', ColumnType::Timestamp, null));
-        self::assertFalse($inspector->columnTypeMatches('int4', ColumnType::String, 100));
-    }
-
-    /**
-     * Reading a missing table fails fast.
-     */
-    public function testInspectorMissingTableThrows(): void
-    {
-        Expectation::throwsWithMessage(
-            fn () => $this->connection->schemaInspector->table('rmt_missing'),
-            \RuntimeException::class,
-            'does not exist in the Postgres schema',
-        );
     }
 }

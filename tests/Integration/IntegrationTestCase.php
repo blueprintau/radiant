@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Abstract base for the live-server integration suites — the shared
@@ -26,13 +27,29 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * the default local run; CI runs it where a failure is a real signal).
  *
  * Concrete subclasses pick the driver: connectionConfig() returns the
- * live server's config (env-overridable), and the dialect-specific tests
- * (advisory-lock SQL, inspector messages, transactional DDL) live there.
- * Table lifecycle is inherited from DatabaseTestCase — tests declare
- * tables with createTables() and teardown drops them in reverse order.
+ * live server's config (env-overridable), connectionClass() the concrete
+ * connection type, and inspectorSchemaName() the dialect's name in the
+ * inspector's missing-table message. The dialect-specific tests
+ * (advisory-lock SQL, transactional DDL) live there. Table lifecycle is
+ * inherited from DatabaseTestCase — tests declare tables with
+ * createTables() and teardown drops them in reverse order.
  */
 abstract class IntegrationTestCase extends DatabaseTestCase
 {
+    /**
+     * The concrete connection class the driver's connector builds.
+     *
+     * @return class-string<SqlConnection>
+     */
+    abstract protected function connectionClass(): string;
+
+    /**
+     * The dialect's name in the inspector's missing-table message.
+     *
+     * @return string
+     */
+    abstract protected function inspectorSchemaName(): string;
+
     /**
      * Register the probe — a second session on the same server, built
      * from the same config as 'default'.
@@ -53,6 +70,15 @@ abstract class IntegrationTestCase extends DatabaseTestCase
     protected function probe(): SqlConnection
     {
         return $this->manager->sqlConnection('probe');
+    }
+
+    /**
+     * The manager builds the default connection through the driver's
+     * connector — the concrete dialect class comes back.
+     */
+    public function testConnectorReturnsConnection(): void
+    {
+        self::assertInstanceOf($this->connectionClass(), $this->connection);
     }
 
     /**
@@ -280,6 +306,43 @@ abstract class IntegrationTestCase extends DatabaseTestCase
         self::assertSame(
             ['rmt_ref_child'],
             $this->connection->schemaInspector->referencingTables('rmt_ref_parent'),
+        );
+    }
+
+    /**
+     * The inspector's content-drift comparison maps the dialect's native
+     * type text onto the declared logical types.
+     *
+     * @param  string  $liveType  The native type text the inspector reads.
+     * @param  ColumnType  $declaredType  The declared logical type.
+     * @param  int|null  $length  The declared length, if any.
+     * @param  bool  $expected  Whether the pair must match.
+     */
+    #[DataProvider('columnTypeMatchesProvider')]
+    public function testInspectorColumnTypeMatches(string $liveType, ColumnType $declaredType, ?int $length, bool $expected): void
+    {
+        self::assertSame(
+            $expected,
+            $this->connection->schemaInspector->columnTypeMatches($liveType, $declaredType, $length),
+        );
+    }
+
+    /**
+     * The (liveType, declaredType, length, expected) tuples per dialect.
+     *
+     * @return iterable<string, array{string, ColumnType, int|null, bool}>
+     */
+    abstract public static function columnTypeMatchesProvider(): iterable;
+
+    /**
+     * Reading a missing table fails fast with the dialect's message.
+     */
+    public function testInspectorMissingTableThrows(): void
+    {
+        Expectation::throwsWithMessage(
+            fn () => $this->connection->schemaInspector->table('rmt_missing'),
+            \RuntimeException::class,
+            "does not exist in the {$this->inspectorSchemaName()} schema",
         );
     }
 }

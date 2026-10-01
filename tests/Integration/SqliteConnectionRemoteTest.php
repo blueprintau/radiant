@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Integration;
 
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
@@ -30,6 +31,28 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
 #[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
 final class SqliteConnectionRemoteTest extends IntegrationTestCase
 {
+    /**
+     * The concrete connection class the sqlite connector builds.
+     *
+     * @return class-string<SqlConnection>
+     */
+    #[\Override]
+    protected function connectionClass(): string
+    {
+        return SqliteConnection::class;
+    }
+
+    /**
+     * The dialect's name in the inspector's missing-table message.
+     *
+     * @return string
+     */
+    #[\Override]
+    protected function inspectorSchemaName(): string
+    {
+        return 'SQLite';
+    }
+
     /**
      * The directory holding this test's database file — created fresh per
      * test so teardown can remove it deterministically.
@@ -81,12 +104,17 @@ final class SqliteConnectionRemoteTest extends IntegrationTestCase
     }
 
     /**
-     * The manager builds the default connection through the sqlite
-     * connector — the concrete dialect class comes back.
+     * The (liveType, declaredType, length, expected) tuples for sqlite's
+     * native type text.
+     *
+     * @return iterable<string, array{string, ColumnType, int|null, bool}>
      */
-    public function testConnectorReturnsSqliteConnection(): void
+    #[\Override]
+    public static function columnTypeMatchesProvider(): iterable
     {
-        self::assertInstanceOf(SqliteConnection::class, $this->connection);
+        yield 'int matches Int' => ['int', ColumnType::Int, null, true];
+        yield 'varchar(100) matches String(100)' => ['varchar(100)', ColumnType::String, 100, true];
+        yield 'int does not match String' => ['int', ColumnType::String, 100, false];
     }
 
     /**
@@ -151,31 +179,6 @@ final class SqliteConnectionRemoteTest extends IntegrationTestCase
             1,
             $this->connection->table('rmt_lock')->count(),
             'the lock must be released after the callback throws',
-        );
-    }
-
-    /**
-     * The inspector's content-drift comparison maps sqlite's native type
-     * text onto the declared logical types.
-     */
-    public function testInspectorColumnTypeMatches(): void
-    {
-        $inspector = $this->connection->schemaInspector;
-
-        self::assertTrue($inspector->columnTypeMatches('int', ColumnType::Int, null));
-        self::assertTrue($inspector->columnTypeMatches('varchar(100)', ColumnType::String, 100));
-        self::assertFalse($inspector->columnTypeMatches('int', ColumnType::String, 100));
-    }
-
-    /**
-     * Reading a missing table fails fast.
-     */
-    public function testInspectorMissingTableThrows(): void
-    {
-        Expectation::throwsWithMessage(
-            fn () => $this->connection->schemaInspector->table('rmt_missing'),
-            \RuntimeException::class,
-            'does not exist in the SQLite schema',
         );
     }
 }

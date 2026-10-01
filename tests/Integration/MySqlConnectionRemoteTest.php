@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Integration;
 
 use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
+use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
@@ -32,6 +33,28 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
 final class MySqlConnectionRemoteTest extends IntegrationTestCase
 {
     /**
+     * The concrete connection class the MySQL connector builds.
+     *
+     * @return class-string<SqlConnection>
+     */
+    #[\Override]
+    protected function connectionClass(): string
+    {
+        return MySqlConnection::class;
+    }
+
+    /**
+     * The dialect's name in the inspector's missing-table message.
+     *
+     * @return string
+     */
+    #[\Override]
+    protected function inspectorSchemaName(): string
+    {
+        return 'MySQL';
+    }
+
+    /**
      * The config for the per-test 'default' connection — the live MySQL
      * server, from env with local defaults.
      *
@@ -51,12 +74,17 @@ final class MySqlConnectionRemoteTest extends IntegrationTestCase
     }
 
     /**
-     * The manager builds the default connection through the MySQL
-     * connector — the concrete dialect class comes back.
+     * The (liveType, declaredType, length, expected) tuples for MySQL's
+     * native type text.
+     *
+     * @return iterable<string, array{string, ColumnType, int|null, bool}>
      */
-    public function testConnectorReturnsMySqlConnection(): void
+    #[\Override]
+    public static function columnTypeMatchesProvider(): iterable
     {
-        self::assertInstanceOf(MySqlConnection::class, $this->connection);
+        yield 'int matches Int' => ['int', ColumnType::Int, null, true];
+        yield 'varchar(100) matches String(100)' => ['varchar(100)', ColumnType::String, 100, true];
+        yield 'int does not match String' => ['int', ColumnType::String, 100, false];
     }
 
     /**
@@ -114,30 +142,5 @@ final class MySqlConnectionRemoteTest extends IntegrationTestCase
 
         $child = $this->connection->schemaInspector->table('rmt_fk_child');
         self::assertFalse($child->foreignKeys[0]['deferrable'], 'MySQL has no DEFERRABLE');
-    }
-
-    /**
-     * The inspector's content-drift comparison maps MySQL's native type
-     * text onto the declared logical types.
-     */
-    public function testInspectorColumnTypeMatches(): void
-    {
-        $inspector = $this->connection->schemaInspector;
-
-        self::assertTrue($inspector->columnTypeMatches('int', ColumnType::Int, null));
-        self::assertTrue($inspector->columnTypeMatches('varchar(100)', ColumnType::String, 100));
-        self::assertFalse($inspector->columnTypeMatches('int', ColumnType::String, 100));
-    }
-
-    /**
-     * Reading a missing table fails fast.
-     */
-    public function testInspectorMissingTableThrows(): void
-    {
-        Expectation::throwsWithMessage(
-            fn () => $this->connection->schemaInspector->table('rmt_missing'),
-            \RuntimeException::class,
-            'does not exist in the MySQL schema',
-        );
     }
 }
