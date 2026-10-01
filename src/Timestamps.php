@@ -17,6 +17,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * when a resolved column is absent the trait is a silent no-op for that
  * column, so the trait can sit on a shared base model safely.
  *
+ * @mixin \BlueprintAU\Radiant\Model
  * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait Timestamps

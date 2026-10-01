@@ -20,6 +20,7 @@ use BlueprintAU\Radiant\Database\Query\WhereBuilder;
  * forwarding every helper into the {@see FiltersStaticQuery::where()}
  * static sink. Static filters return the builder.
  *
+ * @mixin Model
  * @phpstan-require-extends Model
  *
  * @template TModel of Model

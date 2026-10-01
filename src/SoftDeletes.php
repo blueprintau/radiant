@@ -31,6 +31,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * fluent and manipulate the builder's traitScope where-markers, which a
  * model-side trait method cannot do.
  *
+ * @mixin \BlueprintAU\Radiant\Model
  * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait SoftDeletes
