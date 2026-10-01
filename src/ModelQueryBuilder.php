@@ -638,7 +638,18 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     protected function newNestedBuilder(): QueryBuilder
     {
-        return new self($this->modelClass, $this->connection, nested: true);
+        $nested = new self($this->modelClass, $this->connection, nested: true);
+
+        // A nested where group may reference columns on tables the OUTER
+        // query joins (e.g. a through-relation constraint qualifying the
+        // intermediate table). validateColumn() admits qualified names by
+        // checking the joins list, so the nested builder must see the outer
+        // joins. The copy is validation-only: whereNested() compiles the
+        // group from getWheres() alone — the nested builder's joins are
+        // never compiled, so no double-join is possible.
+        $nested->joins = $this->joins;
+
+        return $nested;
     }
 
     /**

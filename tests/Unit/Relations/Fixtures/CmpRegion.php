@@ -8,6 +8,8 @@ use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Relations\HasMany;
+use BlueprintAU\Radiant\Relations\HasManyThrough;
+use BlueprintAU\Radiant\Relations\HasOneThrough;
 
 /**
  * Fixture: the composite-PK owner — a region identified by id + country.
@@ -78,5 +80,40 @@ class CmpRegion extends Model
     public function primaryTrackedShipment(): \BlueprintAU\Radiant\Relations\HasOne
     {
         return $this->hasOne(CmpTrackedShipment::class, ['region_id', 'country']);
+    }
+
+    /**
+     * The region's legs (composite HasManyThrough): Region → Route → Leg.
+     * firstKey = the route's composite FK back to the region, secondKey =
+     * the leg's composite FK to the route, localKey = the region's own
+     * composite PK.
+     *
+     * @return HasManyThrough<CmpLeg>
+     */
+    public function legs(): HasManyThrough
+    {
+        return $this->hasManyThrough(
+            CmpLeg::class,
+            CmpRoute::class,
+            ['region_id', 'country'],
+            ['route_id', 'route_country'],
+            ['id', 'country'],
+        );
+    }
+
+    /**
+     * The region's first leg (composite HasOneThrough) — same chain, one row.
+     *
+     * @return HasOneThrough<CmpLeg>
+     */
+    public function firstLeg(): HasOneThrough
+    {
+        return $this->hasOneThrough(
+            CmpLeg::class,
+            CmpRoute::class,
+            ['region_id', 'country'],
+            ['route_id', 'route_country'],
+            ['id', 'country'],
+        );
     }
 }

@@ -153,11 +153,16 @@ class HasManyThrough extends Relation
 
         // The tuple lands inside a whereNested GROUP — the parent filter is
         // ONE constraint unit: a caller's later `->orWhere(...)` must OR at
-        // the constraint's EDGES, never against the tuple's PARTS.
+        // the constraint's EDGES, never against the tuple's PARTS. The
+        // values come from the parent's LOCAL key columns (positionally
+        // paired with the first keys) — the first-key names are the THROUGH
+        // table's FK columns and do not exist on the parent.
+        $localKeys = $this->getLocalKeys();
+
         $this->query = $this->query->whereNested(
-            function (WhereBuilder $nested) use ($throughTable, $firstKeys): WhereBuilder {
-                foreach ($firstKeys as $firstKey) {
-                    $value = $this->parent->attribute($firstKey);
+            function (WhereBuilder $nested) use ($throughTable, $firstKeys, $localKeys): WhereBuilder {
+                foreach ($firstKeys as $i => $firstKey) {
+                    $value = $this->parent->attribute($localKeys[$i]);
                     $nested = $nested->where(
                         self::qualify($throughTable, $firstKey),
                         $value === null ? WhereOperator::Null : WhereOperator::Eq,
@@ -295,6 +300,7 @@ class HasManyThrough extends Relation
         $parentFk = self::throughParentAlias($this->related);
 
         $firstKeys = $this->isComposite() ? $this->getForeignKeys() : [$this->getForeignKey()];
+        $localKeys = $this->isComposite() ? $this->getLocalKeys() : [$this->getLocalKey()];
         $secondKeys = $this->secondKeyList();
         $intermediateKeys = $this->intermediateKeys($secondKeys);
 
@@ -333,7 +339,7 @@ class HasManyThrough extends Relation
             // row back in whenever its key matched. Grouped, the scope
             // ANDs against the whole set.
             $builder = $builder->whereNested(
-                function (WhereBuilder $nested) use ($throughTable, $firstKeys, $parentKeys): WhereBuilder {
+                function (WhereBuilder $nested) use ($throughTable, $firstKeys, $localKeys, $parentKeys): WhereBuilder {
                     $grouped = $nested;
 
                     foreach ($parentKeys as $parentKey) {
@@ -345,9 +351,13 @@ class HasManyThrough extends Relation
                         }
 
                         $grouped = $grouped->orWhereNested(
-                            function (WhereBuilder $keyGroup) use ($throughTable, $firstKeys, $parentKey): WhereBuilder {
-                                foreach ($firstKeys as $firstKey) {
-                                    $value = $parentKey[$firstKey] ?? null;
+                            function (WhereBuilder $keyGroup) use ($throughTable, $firstKeys, $localKeys, $parentKey): WhereBuilder {
+                                foreach ($firstKeys as $i => $firstKey) {
+                                    // The key map is keyed by the parent's
+                                    // LOCAL key columns (what the loader
+                                    // collects); the constraint targets the
+                                    // THROUGH table's first-key columns.
+                                    $value = $parentKey[$localKeys[$i]] ?? null;
                                     $keyGroup = $keyGroup->where(
                                         self::qualify($throughTable, $firstKey),
                                         $value === null ? WhereOperator::Null : WhereOperator::Eq,

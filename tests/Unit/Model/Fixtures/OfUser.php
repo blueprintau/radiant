@@ -48,4 +48,26 @@ class OfUser extends Model
     {
         return $this->hasOne(OfPost::class, 'author_id');
     }
+
+    /**
+     * A NON-public relation — the resolveRelation visibility probe.
+     *
+     * @return \BlueprintAU\Radiant\Relations\HasMany<OfPost>
+     */
+    protected function hiddenPosts(): \BlueprintAU\Radiant\Relations\HasMany
+    {
+        return $this->hasMany(OfPost::class, 'author_id');
+    }
+
+    /**
+     * A public method that does NOT return a Relation — the
+     * resolveRelation return-type probe. Returns a literal so it is
+     * safe to invoke on a constructor-less prototype.
+     *
+     * @return string
+     */
+    public function name(): string
+    {
+        return 'probe';
+    }
 }
