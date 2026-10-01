@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiGuidChild;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiGuidRoot;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiStampedChild;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiChild;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiUser;
 
 /**
  * The MTI edge paths beyond {@see \BlueprintAU\Radiant\Tests\Unit\Relations\MtiE2ETest}:
@@ -18,11 +22,12 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
 {
     /**
      * Create the MTI fixture tables — the Guid pair uses a caller-assigned
-     * string key (no auto-increment anywhere in the chain).
+     * string key (no auto-increment anywhere in the chain); the User/Admin
+     * pair uses an auto-increment root.
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(MtiGuidRoot::class, MtiGuidChild::class);
+        $this->createTables(MtiGuidRoot::class, MtiGuidChild::class, MtiUser::class, MtiChild::class, MtiStampedChild::class);
     }
 
     /**
@@ -154,5 +159,72 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
 
         self::assertSame(0, $this->connection->table('mti_guid_roots')->count());
         self::assertSame(0, $this->connection->table('mti_guid_children')->count());
+    }
+
+    /**
+     * An AUTO-INCREMENT MTI root generates its id at insert — the root
+     * partition omits the key, the descendant copies the generated id,
+     * and the leaf instance is stamped with it.
+     */
+    public function testAutoIncrementRootGeneratesAndPropagatesId(): void
+    {
+        $admin = new MtiChild();
+        $admin->email = 'auto@example.com';
+        $admin->level = 'lead';
+
+        self::assertTrue($admin->save());
+        self::assertGreaterThan(0, $admin->id, 'the generated id must be stamped back onto the leaf');
+
+        $rootRow = $this->connection->table('mti_users')->where('id', '=', $admin->id)->first();
+        $childRow = $this->connection->table('mti_admins')->where('id', '=', $admin->id)->first();
+
+        self::assertNotNull($rootRow, 'the root partition must carry the generated id');
+        self::assertNotNull($childRow, 'the child partition must link on the generated id');
+        self::assertSame('auto@example.com', $rootRow->email);
+        self::assertSame('lead', $childRow->level);
+    }
+
+    /**
+     * A synthetic column (Timestamps' auto-declared stamps carry no PHP
+     * property) rides the MTI insert through syntheticValues — the
+     * property-less branch of the payload build.
+     */
+    public function testSyntheticColumnRidesMtiInsert(): void
+    {
+        $admin = new MtiStampedChild();
+        $admin->email = 'synthetic@example.com';
+        $admin->level = 'junior';
+
+        self::assertTrue($admin->save());
+
+        // email lives on the ROOT table; the stamps live on the child's.
+        $rootRow = $this->connection->table('mti_users')->where('email', '=', 'synthetic@example.com')->first();
+        self::assertNotNull($rootRow);
+
+        $childRow = $this->connection->table('mti_stamped_children')->where('id', '=', $rootRow->id)->first();
+        self::assertNotNull($childRow);
+        self::assertNotNull($childRow->created_at, 'the synthetic created_at stamp must ride the insert');
+    }
+
+    /**
+     * An MTI write on a NON-SQL connection fails fast — the insert splits
+     * across tables in one transaction, which only SQL can do.
+     */
+    public function testMtiInsertOnNonSqlConnectionThrows(): void
+    {
+        $this->manager->setConnectionConfig('default', [
+            'driver' => 'csv',
+            'path' => sys_get_temp_dir() . '/radiant_mti_' . uniqid() . '.csv',
+        ]);
+
+        $admin = new MtiChild();
+        $admin->email = 'csv@example.com';
+        $admin->level = 'junior';
+
+        Expectation::throwsWithMessage(
+            fn () => $admin->save(),
+            \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class,
+            'Multi-table inheritance writes require a SQL connection',
+        );
     }
 }
