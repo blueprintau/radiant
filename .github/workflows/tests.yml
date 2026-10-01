@@ -105,15 +105,14 @@ jobs:
                   composer dump-autoload
 
             - name: Run tests
-              run: composer test
-
-            # The integration-remote-sql group (live MySQL/Postgres) is
-            # excluded from phpunit.xml's default run — these service
-            # containers ARE the required servers, so run it explicitly
-            # here. A failure is a real signal: these tests fail, never
-            # skip.
-            - name: Run integration tests
-              run: composer test:integration
+              # test:all = default group + integration-remote-sql (repeated
+              # --group flags, NOT comma-separated — a comma value is treated
+              # as one group name and matches nothing). The service
+              # containers above ARE the required servers, so the live
+              # MySQL/Postgres suites run here; a failure is a real signal
+              # (they fail, never skip). The sqlite integration suite needs
+              # no server and rides the default group.
+              run: composer test:all
 
             - name: Run static analysis
               run: composer analyse

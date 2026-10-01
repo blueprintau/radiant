@@ -15,6 +15,10 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * serve: persistence across connections, the `BEGIN IMMEDIATE` write lock
  * and the `sqlite_master` inspector.
  *
+ * Unlike the MySQL/Postgres suites this needs NO server — a file-backed
+ * sqlite database — so it is NOT in the `integration-remote-sql` group:
+ * it runs in the default suite locally and in CI alike.
+ *
  * The dialect-agnostic CRUD/transaction/aggregate/alter cycle comes from
  * IntegrationTestCase; this class adds the file-backed sqlite connection
  * config and the sqlite-specific tests. Table lifecycle is handled by
@@ -28,7 +32,6 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * The file lives in a dedicated directory so teardown can remove it
  * without touching the shared temp dir.
  */
-#[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
 final class SqliteConnectionRemoteTest extends IntegrationTestCase
 {
     /**
