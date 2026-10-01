@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Attributes;
 
+use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\ReferenceResolver;
 use BlueprintAU\Radiant\Database;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefRole;
@@ -117,5 +118,44 @@ final class ReferenceResolverTest extends TestCase
         );
 
         ReferenceResolver::resolve(RefTableless::class);
+    }
+
+    /**
+     * A model-class reference WITHOUT explicit columns derives them from
+     * the target's primary keys — the is_a guard narrows the reference to
+     * class-string<Model> and the metadata call maps the PK names.
+     */
+    public function testModelReferenceDerivesPrimaryKeyColumns(): void
+    {
+        $foreignKey = new ForeignKey(columns: ['roleId'], references: RefRole::class);
+
+        self::assertSame('ref_roles', $foreignKey->resolvedReferences());
+        self::assertSame(['id'], $foreignKey->resolvedReferencesColumns());
+    }
+
+    /**
+     * A model-class reference WITH explicit columns returns them verbatim
+     * — the derivation arm is skipped.
+     */
+    public function testModelReferenceWithExplicitColumnsPassesThrough(): void
+    {
+        $foreignKey = new ForeignKey(
+            columns: ['roleId'],
+            references: RefRole::class,
+            referencesColumns: ['pk'],
+        );
+
+        self::assertSame(['pk'], $foreignKey->resolvedReferencesColumns());
+    }
+
+    /**
+     * A plain-table reference without columns falls back to the `id` PK
+     * convention.
+     */
+    public function testPlainTableReferenceDefaultsToIdColumn(): void
+    {
+        $foreignKey = new ForeignKey(columns: ['roleId'], references: 'roles');
+
+        self::assertSame(['id'], $foreignKey->resolvedReferencesColumns());
     }
 }

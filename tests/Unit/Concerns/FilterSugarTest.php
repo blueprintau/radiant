@@ -72,6 +72,49 @@ final class FilterSugarTest extends DatabaseTestCase
     // ---- Static side: LIKE family ----
 
     /**
+     * Static orWhereEq() called STATICALLY (not chained off a builder) —
+     * the trait's own forwarder into the where() sink with the OR boolean.
+     */
+    public function testStaticOrWhereEq(): void
+    {
+        $rows = FvUser::orWhereEq('name', 'ben')->orderBy('id')->get();
+
+        self::assertSame(['ben'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
+     * Static orWhere() called STATICALLY — the generic OR forwarder.
+     */
+    public function testStaticOrWhere(): void
+    {
+        $rows = FvUser::orWhere('age', '>', 35)->orderBy('id')->get();
+
+        self::assertSame(['ben'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
+     * Static orWhereNested() called STATICALLY — the OR group alias.
+     */
+    public function testStaticOrWhereNestedAlias(): void
+    {
+        $rows = FvUser::orWhereNested(function (WhereBuilder $nested): WhereBuilder {
+            return $nested->whereEq('name', 'ben')->whereNotNull('age');
+        })->orderBy('id')->get();
+
+        self::assertSame(['ben'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
+     * Static orWhereLike() called STATICALLY — the OR LIKE alias.
+     */
+    public function testStaticOrWhereLikeAlias(): void
+    {
+        $rows = FvUser::orWhereLike('name', '%ra')->orderBy('id')->get();
+
+        self::assertSame(['cara'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
      * Static whereLike() matches the bound pattern; the pattern is a
      * binding, not spliced SQL.
      */

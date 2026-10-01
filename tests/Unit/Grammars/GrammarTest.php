@@ -782,6 +782,26 @@ final class GrammarTest extends TestCase
             SqlFeature::usedBy($this->builder()->groupBy('status')),
         );
 
+        // A having over an Aggregate flags Aggregates (the aggregate arm,
+        // distinct from the having-Expression RawSql arm above).
+        self::assertContains(
+            SqlFeature::Aggregates,
+            SqlFeature::usedBy($this->builder()->having(Aggregate::count(), WhereOperator::Gt, 1)),
+        );
+
+        // Row locks, DISTINCT and SubqueryFrom each flag their feature.
+        self::assertContains(
+            SqlFeature::RowLocks,
+            SqlFeature::usedBy($this->builder()->lockForUpdate()),
+        );
+        self::assertContains(
+            SqlFeature::Distinct,
+            SqlFeature::usedBy($this->builder()->distinct()),
+        );
+        self::assertContains(
+            SqlFeature::SubqueryFrom,
+            SqlFeature::usedBy($this->builder()->fromSub($this->builder(), 'sub')),
+        );
         // Raw-SQL detection covers every Expression position: where, select,
         // order by — and having. A having-Expression must flag RawSql so a
         // feature-gated connection (CSV) fails fast instead of compiling

@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\SchemaDiffer;
 use BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 
 /**
  * End-to-end migration features on live SQLite: declared renames
@@ -465,6 +466,51 @@ final class MigrationSyncTest extends DatabaseTestCase
         $applied = $synchronizer->sync([], confirm: fn (): bool => true);
         self::assertCount(1, $applied);
         self::assertFalse($this->connection->schemaInspector->hasTable('temp_data'));
+    }
+
+    /**
+     * Transactional sync applies atomically — on sqlite (savepoint-backed
+     * transactions) the changes commit together.
+     */
+    public function testTransactionalSyncAppliesAtomically(): void
+    {
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        $applied = $synchronizer->sync([
+            (new Blueprint('tx_sync_a'))->id()->string('name', 50),
+            (new Blueprint('tx_sync_b'))->id()->string('name', 50),
+        ], transactional: true);
+
+        self::assertCount(2, $applied);
+        self::assertTrue($this->connection->schemaInspector->hasTable('tx_sync_a'));
+        self::assertTrue($this->connection->schemaInspector->hasTable('tx_sync_b'));
+        self::assertSame(0, $this->connection->transactionLevel(), 'the transaction must be closed after sync');
+    }
+
+    /**
+     * A failed transactional sync rolls back EVERY change — the schema is
+     * untouched.
+     */
+    public function testTransactionalSyncRollsBackOnFailure(): void
+    {
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        // A blueprint with an invalid column type makes the second apply
+        // fail mid-loop; the first CREATE TABLE must roll back with it.
+        $bad = new Blueprint('tx_sync_bad');
+        $bad->id()->column(ColumnType::String, 'name', length: 50);
+
+        Expectation::throws(function () use ($synchronizer, $bad): void {
+            $synchronizer->sync([
+                (new Blueprint('tx_sync_ok'))->id(),
+                $bad,
+            ], transactional: true);
+        }, \Throwable::class);
+
+        self::assertFalse(
+            $this->connection->schemaInspector->hasTable('tx_sync_ok'),
+            'the first CREATE TABLE must roll back with the failed transaction',
+        );
     }
 
     /**
