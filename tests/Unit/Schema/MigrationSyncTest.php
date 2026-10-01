@@ -535,33 +535,57 @@ final class MigrationSyncTest extends DatabaseTestCase
                 return false;
             }
 
+            /**
+             * @return \BlueprintAU\Radiant\Database\Grammars\Grammar
+             */
             #[\Override]
             protected function getDefaultQueryGrammar(): \BlueprintAU\Radiant\Database\Grammars\Grammar
             {
                 return new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar();
             }
 
+            /**
+             * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+             */
             #[\Override]
             protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
             {
                 return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
             }
 
+            /**
+             * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+             */
             #[\Override]
             protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
             {
                 return new \BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector($this->pdo);
             }
 
+            /**
+             * @param  string  $name
+             * @return void
+             */
             #[\Override]
             protected function createSavepoint(string $name): void {}
 
+            /**
+             * @param  string  $name
+             * @return void
+             */
             #[\Override]
             protected function releaseSavepoint(string $name): void {}
 
+            /**
+             * @param  string  $name
+             * @return void
+             */
             #[\Override]
             protected function rollbackToSavepoint(string $name): void {}
 
+            /**
+             * @return bool
+             */
             #[\Override]
             protected function supportsSavepoints(): bool
             {
