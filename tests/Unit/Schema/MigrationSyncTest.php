@@ -514,6 +514,71 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * Transactional sync on a dialect WITHOUT transactional DDL fails
+     * fast — the apply would silently commit change-by-change while
+     * appearing atomic. The stub flips the base class's false default
+     * back (sqlite's override returns true, so the anonymous subclass
+     * restores the base behavior).
+     */
+    public function testTransactionalSyncOnNonTransactionalDdlThrows(): void
+    {
+        $pdo = new \PDO('sqlite::memory:');
+        $connection = new /** non-transactional-DDL dialect */ class ($pdo) extends \BlueprintAU\Radiant\Database\Connections\SqlConnection {
+            /**
+             * The base default — sqlite's true override is undone.
+             *
+             * @return bool
+             */
+            #[\Override]
+            public function supportsTransactionalDdl(): bool
+            {
+                return false;
+            }
+
+            #[\Override]
+            protected function getDefaultQueryGrammar(): \BlueprintAU\Radiant\Database\Grammars\Grammar
+            {
+                return new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar();
+            }
+
+            #[\Override]
+            protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
+            }
+
+            #[\Override]
+            protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector($this->pdo);
+            }
+
+            #[\Override]
+            protected function createSavepoint(string $name): void {}
+
+            #[\Override]
+            protected function releaseSavepoint(string $name): void {}
+
+            #[\Override]
+            protected function rollbackToSavepoint(string $name): void {}
+
+            #[\Override]
+            protected function supportsSavepoints(): bool
+            {
+                return false;
+            }
+        };
+
+        $synchronizer = new SchemaSynchronizer($connection);
+
+        Expectation::throwsWithMessage(
+            fn () => $synchronizer->sync([(new Blueprint('tx_refused'))->id()], transactional: true),
+            \LogicException::class,
+            'does not support transactional DDL',
+        );
+    }
+
+    /**
      * The rebuild's integrity gate: FK-violating child data fails
      * foreign_key_check and rolls back — the table is untouched.
      */
