@@ -113,8 +113,23 @@ final class SqliteConnectionRemoteTest extends IntegrationTestCase
     public static function columnTypeMatchesProvider(): iterable
     {
         yield 'int matches Int' => ['int', ColumnType::Int, null, true];
+        yield 'integer matches BigInt' => ['integer', ColumnType::BigInt, null, true];
         yield 'varchar(100) matches String(100)' => ['varchar(100)', ColumnType::String, 100, true];
+        yield 'char(36) matches Char(36)' => ['char(36)', ColumnType::Char, 36, true];
+        yield 'text matches Text' => ['text', ColumnType::Text, null, true];
+        yield 'text matches Json' => ['text', ColumnType::Json, null, true];
+        yield 'text matches Uuid' => ['text', ColumnType::Uuid, null, true];
+        yield 'text matches Date' => ['text', ColumnType::Date, null, true];
+        yield 'datetime matches DateTime' => ['datetime', ColumnType::DateTime, null, true];
+        yield 'timestamp matches Timestamp' => ['timestamp', ColumnType::Timestamp, null, true];
+        yield 'tinyint(1) matches Boolean' => ['tinyint(1)', ColumnType::Boolean, null, true];
+        yield 'numeric matches Decimal' => ['numeric', ColumnType::Decimal, null, true];
+        yield 'double matches Float' => ['double', ColumnType::Float, null, true];
+        yield 'blob matches Binary' => ['blob', ColumnType::Binary, null, true];
         yield 'int does not match String' => ['int', ColumnType::String, 100, false];
+        yield 'varchar(100) does not match String(50)' => ['varchar(100)', ColumnType::String, 50, false];
+        yield 'int does not match BigInt' => ['int', ColumnType::BigInt, null, false];
+        yield 'date does not match Date' => ['date', ColumnType::Date, null, false];
     }
 
     /**

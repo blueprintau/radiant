@@ -84,9 +84,24 @@ final class PostgresConnectionRemoteTest extends IntegrationTestCase
     public static function columnTypeMatchesProvider(): iterable
     {
         yield 'int4 matches Int' => ['int4', ColumnType::Int, null, true];
+        yield 'int8 matches BigInt' => ['int8', ColumnType::BigInt, null, true];
         yield 'varchar matches String(100)' => ['varchar', ColumnType::String, 100, true];
+        yield 'char(36) matches Char(36)' => ['char(36)', ColumnType::Char, 36, true];
+        yield 'text matches Text' => ['text', ColumnType::Text, null, true];
+        yield 'jsonb matches Json' => ['jsonb', ColumnType::Json, null, true];
+        yield 'json matches Json' => ['json', ColumnType::Json, null, true];
+        yield 'date matches Date' => ['date', ColumnType::Date, null, true];
         yield 'timestamptz matches Timestamp' => ['timestamptz', ColumnType::Timestamp, null, true];
+        yield 'timestamp matches DateTime' => ['timestamp', ColumnType::DateTime, null, true];
+        yield 'bool matches Boolean' => ['bool', ColumnType::Boolean, null, true];
+        yield 'numeric matches Decimal' => ['numeric', ColumnType::Decimal, null, true];
+        yield 'float8 matches Float' => ['float8', ColumnType::Float, null, true];
+        yield 'bytea matches Binary' => ['bytea', ColumnType::Binary, null, true];
+        yield 'uuid matches Uuid' => ['uuid', ColumnType::Uuid, null, true];
         yield 'int4 does not match String' => ['int4', ColumnType::String, 100, false];
+        yield 'varchar does not match String(50)' => ['varchar', ColumnType::String, 50, false];
+        yield 'int4 does not match BigInt' => ['int4', ColumnType::BigInt, null, false];
+        yield 'text does not match Json' => ['text', ColumnType::Json, null, false];
     }
 
     /**
