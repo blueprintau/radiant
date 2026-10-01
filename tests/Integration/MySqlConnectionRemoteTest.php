@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Integration;
 use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Tests\Support\CrudCycleTests;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
 
@@ -31,6 +32,8 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
 #[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
 final class MySqlConnectionRemoteTest extends DatabaseTestCase
 {
+    use CrudCycleTests;
+
     /**
      * Tables created by the running test — dropped in reverse order on
      * teardown (children before parents, so FKs never block the drop).

@@ -34,14 +34,33 @@ use PHPUnit\Framework\TestCase;
  * class: not every attribute path runs on SQLite (deferrable foreign
  * keys, some partial-index predicates throw UnsupportedFeatureException),
  * so schema creation stays opt-in per test.
+ *
+ * Tables created through createTables() are tracked and dropped in
+ * reverse creation order at teardown — best-effort, so a test that left
+ * the connection dead still tears down cleanly. The default-on policy
+ * keeps a persistent backend (a file-backed sqlite database) from
+ * leaking tables between tests; a suite that NEEDS the residue (a
+ * persistence/reconnection test) flips DROP_CREATED_TABLES to false,
+ * and createTablesUntracked() opts individual tables out.
  */
 abstract class DatabaseTestCase extends TestCase
 {
+    /**
+     * Whether teardown drops the tables createTables() created.
+     *
+     * Flip to false in a suite that tests persistence across connections
+     * — the residue IS the subject there.
+     */
+    protected const DROP_CREATED_TABLES = true;
+
     /** @var SqlConnection The default SQL connection of the per-test manager. */
     protected SqlConnection $connection;
 
     /** @var DatabaseManager The per-test manager installed on the static facade. */
     protected DatabaseManager $manager;
+
+    /** @var list<string> Tables created via createTables(), in creation order. */
+    private array $createdTables = [];
 
     /**
      * Build the per-test manager — connectionConfig() plus any named
@@ -62,10 +81,25 @@ abstract class DatabaseTestCase extends TestCase
 
     /**
      * Reset the static facade to a fresh empty :memory: manager so the
-     * global state of one test class never leaks into the next.
+     * global state of one test class never leaks into the next — after
+     * dropping the tables createTables() created (reverse order, so FK
+     * children go before their parents).
      */
     protected function tearDown(): void
     {
+        if (self::DROP_CREATED_TABLES && $this->createdTables !== []) {
+            foreach (array_reverse($this->createdTables) as $table) {
+                try {
+                    $this->connection->statement("DROP TABLE IF EXISTS {$table}");
+                } catch (\Throwable) {
+                    // Best-effort: the connection may be dead (a
+                    // connection-loss test) — the :memory: database dies
+                    // with it anyway.
+                }
+            }
+            $this->createdTables = [];
+        }
+
         Database::setManager(new DatabaseManager([
             'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
         ]));
@@ -110,18 +144,60 @@ abstract class DatabaseTestCase extends TestCase
 
     /**
      * Create one or more tables from hand-built blueprints and/or model
-     * class-strings, in declaration order.
+     * class-strings, in declaration order — tracked for teardown.
      *
-     * @param Blueprint|class-string<\BlueprintAU\Radiant\Model> ...$sources The tables to create — a
+     * Created tables are dropped in reverse creation order at teardown
+     * (see the class docblock). For a table the test manages its own
+     * lifecycle for, use {@see createTablesUntracked()}.
+     *
+     * @param  Blueprint|class-string<\BlueprintAU\Radiant\Model>  ...$sources  The tables to create — a
      *        Blueprint is created verbatim; a model class-string is folded
      *        into a blueprint via Blueprint::fromMetadata().
      */
     final protected function createTables(Blueprint|string ...$sources): void
     {
+        $this->createSources($sources);
+        $this->trackSources($sources);
+    }
+
+    /**
+     * Create one or more tables WITHOUT tracking them for teardown —
+     * the test manages the table's lifecycle itself (e.g. a table that
+     * must survive teardown, or one the test drops explicitly).
+     *
+     * @param  Blueprint|class-string<\BlueprintAU\Radiant\Model>  ...$sources  The tables to create.
+     */
+    final protected function createTablesUntracked(Blueprint|string ...$sources): void
+    {
+        $this->createSources($sources);
+    }
+
+    /**
+     * Create the sources in declaration order — the shared body of both
+     * createTables variants.
+     *
+     * @param  array<int|string, Blueprint|class-string<\BlueprintAU\Radiant\Model>>  $sources
+     */
+    private function createSources(array $sources): void
+    {
         foreach ($sources as $source) {
             $this->connection->create(
                 $source instanceof Blueprint ? $source : Blueprint::fromMetadata($source),
             );
+        }
+    }
+
+    /**
+     * Record the sources' table names for teardown, in creation order.
+     *
+     * @param  array<int|string, Blueprint|class-string<\BlueprintAU\Radiant\Model>>  $sources
+     */
+    private function trackSources(array $sources): void
+    {
+        foreach ($sources as $source) {
+            $this->createdTables[] = $source instanceof Blueprint
+                ? $source->getTable()
+                : Blueprint::fromMetadata($source)->getTable();
         }
     }
 }
