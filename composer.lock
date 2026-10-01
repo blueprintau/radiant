@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "067817ccf30ff42f870c15af1a3a7ac8",
+    "content-hash": "287dda6e70229626751aa008782cac4a",
     "packages": [
         {
             "name": "blueprintau/collections",
@@ -2613,7 +2613,8 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": "^8.4"
+        "php": "^8.4",
+        "ext-pdo": "*"
     },
     "platform-dev": {},
     "plugin-api-version": "2.9.0"

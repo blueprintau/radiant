@@ -25,7 +25,13 @@
     "require": {
         "php": "^8.4",
         "blueprintau/collections": "^1.0",
+        "ext-pdo": "*",
         "nesbot/carbon": "^3.13"
+    },
+    "suggest": {
+        "ext-pdo_mysql": "Required to connect to MySQL databases.",
+        "ext-pdo_pgsql": "Required to connect to PostgreSQL databases.",
+        "ext-pdo_sqlite": "Required to connect to SQLite databases."
     },
     "require-dev": {
         "nikic/php-parser": "^5.6",
