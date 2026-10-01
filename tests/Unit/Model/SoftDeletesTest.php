@@ -6,9 +6,11 @@ namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiSoftChild;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdRenamedPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdUndeclaredOverridePost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiUser;
 
 /**
  * Dedicated coverage for the {@see SoftDeletes} trait beyond the lifecycle
@@ -26,7 +28,7 @@ final class SoftDeletesTest extends DatabaseTestCase
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(SdPost::class, SdRenamedPost::class);
+        $this->createTables(MtiUser::class, MtiSoftChild::class, SdPost::class, SdRenamedPost::class);
     }
 
     /**
@@ -477,5 +479,38 @@ final class SoftDeletesTest extends DatabaseTestCase
             @unlink($path . '.lock');
             @unlink($path . '.radiant-tmp');
         }
+    }
+
+    /**
+     * On an MTI child the trait's scope column qualifies to its owning
+     * table — the synthetic deleted_at lives on the child's partition,
+     * and the scope compiles with the qualified name.
+     */
+    public function testScopeQualifiesPartitionedColumn(): void
+    {
+        $child = new MtiSoftChild();
+        $child->email = 'soft@example.com';
+        $child->level = 'lead';
+        $child->save();
+
+        // The default scope compiles the qualified column — the query
+        // runs (no ambiguous-column error) and finds the live row.
+        self::assertCount(1, MtiSoftChild::newQuery()->get());
+    }
+
+    /**
+     * onlyTrashed() on an MTI child qualifies the partitioned column the
+     * same way — the toggle round-trips across the join.
+     */
+    public function testOnlyTrashedQualifiesPartitionedColumn(): void
+    {
+        $child = new MtiSoftChild();
+        $child->email = 'soft@example.com';
+        $child->level = 'lead';
+        $child->save();
+        $child->delete();
+
+        self::assertCount(1, MtiSoftChild::newQuery()->onlyTrashed()->get());
+        self::assertCount(0, MtiSoftChild::newQuery()->get());
     }
 }

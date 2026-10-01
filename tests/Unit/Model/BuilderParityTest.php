@@ -4,9 +4,20 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
+use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
+use BlueprintAU\Radiant\ModelQueryBuilder;
+use BlueprintAU\Radiant\Tests\Support\ArrayRowConnection;
+use BlueprintAU\Radiant\Tests\Support\ArrayRowConnector;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\BpUser;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CollPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CollUser;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfUser;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiChild;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiUser;
 
 /**
  * The ModelQueryBuilder parity contract: every builder helper behaves
@@ -21,7 +32,7 @@ final class BuilderParityTest extends DatabaseTestCase
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(BpUser::class);
+        $this->createTables(BpUser::class, OfUser::class, OfPost::class, CollUser::class, CollPost::class, MtiUser::class, MtiChild::class);
 
         $user = new BpUser();
         $user->name = 'ada';
@@ -100,6 +111,36 @@ final class BuilderParityTest extends DatabaseTestCase
                 ->join('bp_users as other', 'bp_users.id', '=', 'other.id')
                 ->on('bp_users.name', '=', 'not_a_column');
         });
+    }
+
+    /**
+     * orOn() validates both columns the same way — the OR-connector twin.
+     */
+    public function testOrOnRejectsUnknownColumn(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [not_a_column]');
+
+        $this->runInvalid(function (): void {
+            BpUser::newQuery()
+                ->join('bp_users as other', 'bp_users.id', '=', 'other.id')
+                ->orOn('bp_users.name', '=', 'not_a_column');
+        });
+    }
+
+    /**
+     * A valid orOn() renders an OR-connected ON condition end to end.
+     */
+    public function testOrOnAcceptsDeclaredColumns(): void
+    {
+        $rows = BpUser::newQuery()
+            ->join('bp_users as other', 'bp_users.id', '=', 'other.id')
+            ->on('bp_users.id', '=', 'other.id')
+            ->orOn('bp_users.name', '=', 'other.name')
+            ->orderBy('id')
+            ->get();
+
+        self::assertCount(2, $rows);
     }
 
     // ---- Scalar reads decode through the casts ----
@@ -432,5 +473,200 @@ final class BuilderParityTest extends DatabaseTestCase
     private function runInvalid(callable $callback): void
     {
         $callback();
+    }
+
+    /**
+     * A mixed-typed value — the boundary for the PHPDoc-only KeyValue
+     * contract.
+     *
+     * @return mixed
+     */
+    private function mixedValue(): mixed
+    {
+        return new \stdClass();
+    }
+
+    // ---- Hydration guards ----
+
+    /**
+     * sole() fails fast when the connection returns a NON-stdClass row —
+     * the malformed-shape guard before hydration.
+     */
+    public function testSoleRejectsNonStdClassRow(): void
+    {
+        ArrayRowConnector::install($this->manager);
+        $this->manager->flush('default'); // evict the cached sqlite connection
+        ArrayRowConnection::$rows = [['id' => 1, 'name' => 'ada']];
+
+        $this->expectException(ModelNotFoundException::class);
+
+        // The setUp seed put 2 rows in the sqlite table, but the swapped
+        // connection returns exactly ONE canned (array) row — the count
+        // passes, the shape guard fires.
+        BpUser::newQuery()->sole();
+    }
+
+    // ---- clearRelationCache ----
+
+    /**
+     * clearRelationCache(null) empties the whole static cache — a
+     * subsequent resolveRelation() repopulates it from scratch.
+     */
+    public function testClearRelationCacheNullClearsEverything(): void
+    {
+        // Populate the cache for two classes.
+        OfUser::newQuery()->with(['posts']);
+        CollUser::newQuery()->with(['posts']);
+
+        ModelQueryBuilder::clearRelationCache();
+
+        // Repopulate one class and verify the cache serves it again.
+        OfUser::newQuery()->with(['posts']);
+        $rows = OfUser::newQuery()->with(['posts'])->get();
+        self::assertCount(0, $rows);
+    }
+
+    /**
+     * clearRelationCache(Class) removes only that class's entries —
+     * other classes' cached relations survive.
+     */
+    public function testClearRelationCacheClassClearsOnlyThatClass(): void
+    {
+        // Populate the cache for two classes.
+        OfUser::newQuery()->with(['posts']);
+        CollUser::newQuery()->with(['posts']);
+
+        ModelQueryBuilder::clearRelationCache(OfUser::class);
+
+        // The cleared class re-resolves fine; the untouched class's cache
+        // entry is still present (no error, no re-resolution needed).
+        OfUser::newQuery()->with(['posts']);
+        CollUser::newQuery()->with(['posts']);
+        self::assertCount(0, OfUser::newQuery()->with(['posts'])->get());
+    }
+
+    // ---- sole() ----
+
+    /**
+     * sole() throws ModelNotFoundException on zero rows — the empty arm.
+     */
+    public function testSoleThrowsOnEmptyResult(): void
+    {
+        $this->expectException(ModelNotFoundException::class);
+
+        OfUser::newQuery()->where('name', '=', 'nobody')->sole();
+    }
+
+    // ---- whereKey on a composite PK ----
+
+    /**
+     * whereKey() with a scalar on a composite-PK model throws — the
+     * composite PK needs an array of column => value.
+     */
+    public function testWhereKeyScalarOnCompositePkThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('has a composite PK; pass an array of column => value');
+
+        $this->runInvalid(function (): void {
+            CmpRegion::newQuery()->whereKey(5);
+        });
+    }
+
+    /**
+     * whereKey() with a list containing a scalar on a composite-PK model
+     * throws — the list path validates each element against the PK shape.
+     */
+    public function testWhereKeyListScalarOnCompositePkThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('has a composite PK; pass an array of column => value');
+
+        $this->runInvalid(function (): void {
+            CmpRegion::newQuery()->whereKey([5, 6]);
+        });
+    }
+
+    /**
+     * whereKey() with a list containing a NON-scalar element throws —
+     * the runtime boundary behind the PHPDoc-only KeyValue contract.
+     */
+    public function testWhereKeyListElementBadTypeThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('A single primary-key value must be int, string or null; got stdClass');
+
+        $this->runInvalid(function (): void {
+            $bad = $this->mixedValue();
+            BpUser::newQuery()->whereKey([1, $bad]);
+        });
+    }
+
+    /**
+     * whereKey() with a LIST on an MTI model qualifies the PK — the
+     * shared key exists on every joined table.
+     */
+    public function testWhereKeyListOnMtiQualifiesPk(): void
+    {
+        $first = new MtiChild();
+        $first->email = 'a@example.com';
+        $first->level = 'lead';
+        $first->save();
+
+        $second = new MtiChild();
+        $second->email = 'b@example.com';
+        $second->level = 'senior';
+        $second->save();
+
+        $rows = MtiChild::newQuery()->whereKey([$first->id, $second->id])->orderBy('id')->get();
+
+        self::assertCount(2, $rows);
+    }
+
+    /**
+     * whereKey() with a composite MAP on an MTI model qualifies each PK
+     * column — the tuple lands in one nested group.
+     */
+    public function testWhereKeyCompositeMapOnMtiQualifiesColumns(): void
+    {
+        $root = new MtiUser();
+        $root->email = 'a@example.com';
+        $root->save();
+
+        $child = new MtiChild();
+        $child->email = 'b@example.com';
+        $child->level = 'lead';
+        $child->save();
+
+        $rows = MtiChild::newQuery()->whereKey(['id' => $child->id])->get();
+
+        self::assertCount(1, $rows);
+        $row = $rows->first();
+        self::assertNotNull($row);
+        self::assertSame('lead', $row->level);
+    }
+
+    // ---- Nested eager loads ----
+
+    /**
+     * sole() applies eager loads to the single model — the same tail as
+     * first().
+     */
+    public function testSoleAppliesEagerLoads(): void
+    {
+        $user = new OfUser();
+        $user->name = 'ada';
+        $user->save();
+
+        $post = new OfPost();
+        $post->authorId = $user->id;
+        $post->title = 'first';
+        $post->save();
+
+        $user = OfUser::newQuery()->where('name', '=', 'ada')->with(['posts'])->sole();
+
+        $posts = $user->cachedRelation('posts');
+        self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $posts);
+        self::assertCount(1, $posts);
     }
 }

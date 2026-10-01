@@ -733,4 +733,26 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         self::assertCount(2, $relation->getResults());
     }
+
+    /**
+     * A nested eager path recurses onto the loaded children — the
+     * Collection arm of the recursion (the first segment is a HasMany,
+     * so the parents' cached values are Collections).
+     */
+    public function testNestedEagerLoadRecursesOntoCollections(): void
+    {
+        ['user' => $user] = $this->seed();
+
+        $users = RelUser::newQuery()->whereKey([$user->id])->with(['posts.author'])->get();
+
+        self::assertCount(1, $users);
+        $first = $users->first();
+        self::assertNotNull($first);
+        $posts = $first->cachedRelation('posts');
+        self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $posts);
+        self::assertCount(2, $posts);
+        $firstPost = $posts->first();
+        self::assertNotNull($firstPost);
+        self::assertNotNull($firstPost->cachedRelation('author'));
+    }
 }

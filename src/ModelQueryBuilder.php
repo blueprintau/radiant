@@ -231,6 +231,11 @@ final class ModelQueryBuilder extends QueryBuilder
             );
             $scoped->markLastWhereTraitScope($scopeTrait);
             $this->wheres = $scoped->getWheres();
+            // The group's VALUE bindings ride the clone whereNested()
+            // returned — copy them back alongside the wheres, or a scope
+            // condition with a value (e.g. `status = 'published'`) compiles
+            // to an unbound `= ?` and matches nothing.
+            $this->bindings = $scoped->bindings;
         }
     }
 
@@ -1710,8 +1715,20 @@ final class ModelQueryBuilder extends QueryBuilder
         if (str_contains($source, '.')) {
             [$table, $rest] = explode('.', $source, 2);
 
+            // A join spec may carry an alias (`bp_users as other`): the
+            // alias, the source table, and the verbatim spec all address
+            // the joined table in ON conditions.
+            $joinTables = [];
+            foreach ($this->joins as $join) {
+                $joinTables[] = $join['table'];
+                if (preg_match('/^(.*?)\s+as\s+(\S+)$/i', $join['table'], $m) === 1) {
+                    $joinTables[] = trim($m[1]);
+                    $joinTables[] = $m[2];
+                }
+            }
+
             if (($this->partitions !== [] && ($this->partitions[$rest] ?? null) === $table)
-                || in_array($table, array_column($this->joins, 'table'), true)
+                || in_array($table, $joinTables, true)
             ) {
                 return;
             }

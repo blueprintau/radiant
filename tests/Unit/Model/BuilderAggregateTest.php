@@ -10,7 +10,9 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfPost;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfSoftPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfUser;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\TwoStatePost;
 
 /**
  * Exercise the ModelQueryBuilder edge arms — the aggregate family, scope
@@ -23,7 +25,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
      */
     protected function setUpDatabase(): void
     {
-        $this->createTables(OfUser::class, OfPost::class);
+        $this->createTables(OfUser::class, OfPost::class, OfSoftPost::class, TwoStatePost::class);
     }
 
     /**
@@ -105,7 +107,266 @@ final class BuilderAggregateTest extends DatabaseTestCase
         self::assertSame(3, $row->top);
     }
 
+    /**
+     * value() with an Aggregate whose column is an Expression passes the
+     * computed value through undecoded.
+     */
+    public function testValueWithExpressionAggregatePassesThrough(): void
+    {
+        $this->seed();
+
+        $value = OfPost::newQuery()->value(new Aggregate('max', new Expression('id'), 'radiant_scalar'));
+
+        self::assertSame(3, $value);
+    }
+
+    /**
+     * value() with an Aggregate on a declared column decodes through the
+     * column's cast.
+     */
+    public function testValueWithAggregateDecodesColumn(): void
+    {
+        $this->seed();
+
+        $value = OfPost::newQuery()->value(Aggregate::max('id'));
+
+        self::assertSame(3, $value);
+    }
+
+    /**
+     * value() with an Aggregate on an empty match returns null.
+     */
+    public function testValueWithAggregateOnEmptyMatchReturnsNull(): void
+    {
+        $this->seed();
+
+        $value = OfPost::newQuery()->where('title', '=', 'missing')->value(Aggregate::max('id'));
+
+        self::assertNull($value);
+    }
+
+    /**
+     * having() with a plain string column validates it — the non-aggregate,
+     * non-Expression arm.
+     */
+    public function testHavingWithPlainColumnValidates(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [ghost] on model [' . OfPost::class . ']');
+
+        OfPost::newQuery()->groupBy('title')->having('ghost', '=', 1);
+    }
+
+    /**
+     * having() with an Expression passes through unvalidated — raw SQL by
+     * contract.
+     */
+    public function testHavingWithExpressionPassesThrough(): void
+    {
+        $this->seed();
+
+        $rows = OfPost::newQuery()
+            ->groupBy('title')
+            ->having(new Expression('count(*)'), '>', 1)
+            ->get();
+
+        self::assertCount(0, $rows); // every title is unique.
+    }
+
+    /**
+     * select() with a `column as alias` spec validates the SOURCE column —
+     * the alias-only arm of validateColumn.
+     */
+    public function testSelectAliasValidatesSourceColumn(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [ghost as label] on model [' . OfPost::class . ']');
+
+        OfPost::newQuery()->select('ghost as label');
+    }
+
+    /**
+     * select() with a `declared as alias` spec PASSES validation — the
+     * alias arm admits a declared source column.
+     */
+    public function testSelectAliasOnDeclaredColumnPasses(): void
+    {
+        $this->seed();
+
+        $rows = OfPost::newQuery()->select('title as label')->orderBy('id')->getRaw();
+
+        self::assertCount(3, $rows);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame('P1', $first->label);
+    }
+
+    /**
+     * select() with a QUALIFIED spec is caller-owned — no forced-key merge,
+     * and the spec passes through to the parent builder.
+     */
+    public function testSelectQualifiedSpecIsCallerOwnedPassthrough(): void
+    {
+        $this->seed();
+
+        $rows = OfPost::newQuery()
+            ->select('of_posts.id', 'of_posts.title')
+            ->orderBy('id')
+            ->get();
+
+        self::assertCount(3, $rows);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame(1, $first->id);
+    }
+
+    /**
+     * whereKey() with a QUALIFIED select that omits the PK still throws —
+     * the qualified form is checked against the PK names too.
+     */
+    public function testWhereKeyQualifiedSelectWithoutPkThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('whereKey() requires the primary key in the select list');
+
+        OfPost::newQuery()->select('of_posts.title')->whereKey(1);
+    }
+
+    /**
+     * whereKey() with a select naming the PK QUALIFIED passes the guard —
+     * the MTI builder's own default select shape.
+     */
+    public function testWhereKeyQualifiedSelectWithPkPasses(): void
+    {
+        $this->seed();
+
+        $post = OfPost::newQuery()->select('of_posts.id')->whereKey(1)->first();
+
+        self::assertNotNull($post);
+        self::assertSame(1, $post->id);
+    }
+
+    /**
+     * whereKey() with a select containing an Expression AND the PK passes
+     * the guard — the Expression entry is skipped, the PK entry matches.
+     */
+    public function testWhereKeySelectWithExpressionSkipsGuard(): void
+    {
+        $this->seed();
+
+        $post = OfPost::newQuery()
+            ->select(new Expression('id'), 'id')
+            ->whereKey(1)
+            ->first();
+
+        self::assertNotNull($post);
+    }
+
+    /**
+     * whereKey() with a select containing an Aggregate AND the PK passes
+     * the guard — the Aggregate entry is skipped, the PK entry matches.
+     */
+    public function testWhereKeySelectWithAggregateSkipsGuard(): void
+    {
+        $this->seed();
+
+        $post = OfPost::newQuery()
+            ->select(Aggregate::count('*', 'total'), 'id')
+            ->whereKey(1)
+            ->first();
+
+        self::assertNotNull($post);
+    }
+
+    /**
+     * whereKey() with a `table.*` select passes the guard — the star
+     * expands to every column including the PK.
+     */
+    public function testWhereKeySelectTableStarPassesGuard(): void
+    {
+        $this->seed();
+
+        $post = OfPost::newQuery()
+            ->select('of_posts.*')
+            ->whereKey(1)
+            ->first();
+
+        self::assertNotNull($post);
+        self::assertSame(1, $post->id);
+    }
+
+    /**
+     * select() with an Aggregate validates the aggregate's inner column —
+     * the same allowlist as a plain column.
+     */
+    public function testSelectAggregateValidatesInnerColumn(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [ghost] on model [' . OfPost::class . ']');
+
+        OfPost::newQuery()->select(Aggregate::count('ghost', 'total'));
+    }
+
+    /**
+     * select() with an Aggregate whose column is `*` skips validation —
+     * COUNT(*) has no column to check. An Aggregate entry makes the
+     * select caller-owned, so it passes through to the parent builder
+     * untouched and the row carries the computed value.
+     */
+    public function testSelectAggregateStarSkipsValidation(): void
+    {
+        $this->seed();
+
+        $rows = OfPost::newQuery()->select(Aggregate::count('*', 'total'))->getRaw();
+
+        // Caller-owned passthrough — one raw row holding the computed
+        // count, keyed by the explicit alias.
+        self::assertCount(1, $rows);
+        $row = $rows->first();
+        self::assertNotNull($row);
+        self::assertSame(3, (int) $row->total);
+    }
+
     // ---- Scope stripping ----
+
+    /**
+     * withoutScopes() on a builder WITH trait scopes strips them — the
+     * clone path (a new builder is returned, the original is untouched).
+     */
+    public function testWithoutScopesStripsTraitScopes(): void
+    {
+        $this->seed();
+
+        $post = new OfSoftPost();
+        $post->title = 'gone';
+        $post->save();
+        $post->delete();
+
+        // The default scope hides the trashed post...
+        self::assertCount(0, OfSoftPost::newQuery()->get());
+
+        // ...withoutScopes() strips it — the clone path fires.
+        $stripped = OfSoftPost::newQuery()->withoutScopes();
+        self::assertNotSame(OfSoftPost::newQuery(), $stripped);
+        self::assertCount(1, $stripped->get());
+    }
+
+    /**
+     * withoutScope() for a PRESENT trait strips only that trait's scope —
+     * the clone path.
+     */
+    public function testWithoutScopeStripsPresentTrait(): void
+    {
+        $this->seed();
+
+        $post = new OfSoftPost();
+        $post->title = 'gone';
+        $post->save();
+        $post->delete();
+
+        $stripped = OfSoftPost::newQuery()->withoutScope(\BlueprintAU\Radiant\SoftDeletes::class);
+        self::assertCount(1, $stripped->get());
+    }
 
     /**
      * withoutScopes() on a builder with no trait scopes reuses the same
@@ -332,5 +593,38 @@ final class BuilderAggregateTest extends DatabaseTestCase
         $first = $users->first();
         self::assertNotNull($first);
         self::assertNotNull($first->cachedRelation('posts'));
+    }
+
+    // ---- Multi-condition trait scopes ----
+
+    /**
+     * A trait scope with TWO conditions joins them with the declared
+     * boolean — the second condition's where carries it.
+     */
+    public function testMultiConditionScopeJoinsWithDeclaredBoolean(): void
+    {
+        $published = new TwoStatePost();
+        $published->status = 'published';
+        $published->save();
+
+        $archived = new TwoStatePost();
+        $archived->status = 'archived';
+        $archived->save();
+
+        $draft = new TwoStatePost();
+        $draft->status = 'draft';
+        $draft->save();
+
+        // The scope is (status = 'published' OR status = 'archived') —
+        // the draft row is excluded.
+        $rows = TwoStatePost::newQuery()->get();
+
+        self::assertCount(2, $rows);
+        $first = $rows->first();
+        self::assertNotNull($first);
+        self::assertSame('published', $first->status);
+        $second = $rows->skip(1)->first();
+        self::assertNotNull($second);
+        self::assertSame('archived', $second->status);
     }
 }
