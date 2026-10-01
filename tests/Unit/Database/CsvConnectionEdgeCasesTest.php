@@ -430,6 +430,12 @@ final class CsvConnectionEdgeCasesTest extends TestCase
             $db->table('users')->where('id', WhereOperator::Eq, 1)->update(['name' => 'X']);
             self::fail('The write into the read-only directory must fail.');
         } catch (\RuntimeException $e) {
+            // self::fail() throws AssertionFailedError which EXTENDS
+            // RuntimeException — rethrow it so a non-throwing write fails
+            // the test instead of being swallowed and mis-asserted here.
+            if ($e instanceof \PHPUnit\Framework\AssertionFailedError) {
+                throw $e;
+            }
             self::assertStringContainsString('Could not write CSV file', $e->getMessage());
         } finally {
             chmod($dir, 0755);
