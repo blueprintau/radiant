@@ -56,17 +56,16 @@ final class ConnectionResilienceTest extends TestCase
         // error, exactly as a dropped server would.
         $this->breakPdo($connection, 'server closed the connection unexpectedly');
 
-        try {
+        // The ORIGINAL exception must propagate — not the PDOException from
+        // rollBack(). A rollback failure would surface as PDOException, so
+        // expecting DomainException here discriminates the two.
+        $exception = Expectation::throws(function () use ($connection): void {
             $connection->transaction(function (): void {
                 throw new \DomainException('the real error');
             });
-            self::fail('Expected the original exception to propagate.');
-        } catch (\DomainException $e) {
-            // The ORIGINAL exception, not the PDOException from rollBack().
-            self::assertSame('the real error', $e->getMessage());
-        } catch (\PDOException) {
-            self::fail('Rollback failure must not replace the original exception.');
-        }
+        }, \DomainException::class);
+
+        self::assertSame('the real error', $exception->getMessage());
 
         // Despite the failed rollback, the level is not stuck.
         self::assertSame(0, $connection->transactionLevel());
@@ -127,12 +126,7 @@ final class ConnectionResilienceTest extends TestCase
         // prepare() throws with an 08xxx SQLSTATE.
         $this->breakPdo($connection, 'server closed the connection unexpectedly');
 
-        try {
-            $connection->selectSql('SELECT 1');
-            self::fail('Expected a QueryException.');
-        } catch (QueryException) {
-            // expected
-        }
+        Expectation::throws(fn () => $connection->selectSql('SELECT 1'), QueryException::class);
 
         self::assertTrue($connection->isStale(), 'A connection-loss PDOException must mark the connection stale.');
 

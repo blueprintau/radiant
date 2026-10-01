@@ -56,35 +56,6 @@ final class OrFailTest extends DatabaseTestCase
         $soloPost->save();
     }
 
-    /**
-     * A mixed-typed helper so exception assertions can route through it
-     * without PHPStan narrowing the expectation away.
-     *
-     * @param callable(): mixed $callback The call expected to throw.
-     * @return ModelNotFoundException The thrown exception.
-     */
-    private function runNotFound(callable $callback): ModelNotFoundException
-    {
-        /** @var ModelNotFoundException $exception */
-        $exception = Expectation::throws($callback, ModelNotFoundException::class);
-
-        return $exception;
-    }
-
-    /**
-     * A mixed-typed helper for the multiple-rows exception.
-     *
-     * @param callable(): mixed $callback The call expected to throw.
-     * @return MultipleRecordsFoundException The thrown exception.
-     */
-    private function runMultiple(callable $callback): MultipleRecordsFoundException
-    {
-        /** @var MultipleRecordsFoundException $exception */
-        $exception = Expectation::throws($callback, MultipleRecordsFoundException::class);
-
-        return $exception;
-    }
-
     // ---- Builder firstOrFail ----
 
     /**
@@ -103,7 +74,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     public function testFirstOrFailThrowsOnEmpty(): void
     {
-        $exception = $this->runNotFound(fn () => OfUser::newQuery()->where('name', '=', 'nobody')->firstOrFail());
+        $exception = Expectation::throws(
+            fn () => OfUser::newQuery()->where('name', '=', 'nobody')->firstOrFail(),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(OfUser::class, $exception->model);
         self::assertNull($exception->key);
@@ -131,7 +105,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     public function testFindOrFailThrowsWithKey(): void
     {
-        $exception = $this->runNotFound(fn () => OfUser::newQuery()->findOrFail(999));
+        $exception = Expectation::throws(
+            fn () => OfUser::newQuery()->findOrFail(999),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(999, $exception->key);
         self::assertSame(
@@ -148,7 +125,10 @@ final class OrFailTest extends DatabaseTestCase
         // A composite whereKey against a single-PK model fails validation
         // before the fetch — use a raw composite-shaped probe on the same
         // single-PK builder via two wheres and read the exception shape.
-        $exception = $this->runNotFound(fn () => OfUser::newQuery()->findOrFail(['id' => 5]));
+        $exception = Expectation::throws(
+            fn () => OfUser::newQuery()->findOrFail(['id' => 5]),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(['id' => 5], $exception->key);
         self::assertSame(
@@ -175,7 +155,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     public function testSoleThrowsOnZeroRows(): void
     {
-        $exception = $this->runNotFound(fn () => OfUser::newQuery()->where('name', '=', 'nobody')->sole());
+        $exception = Expectation::throws(
+            fn () => OfUser::newQuery()->where('name', '=', 'nobody')->sole(),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(OfUser::class, $exception->model);
     }
@@ -186,7 +169,10 @@ final class OrFailTest extends DatabaseTestCase
     public function testSoleThrowsOnMultipleRows(): void
     {
         // Two posts share author 1.
-        $exception = $this->runMultiple(fn () => OfPost::newQuery()->where('author_id', '=', 1)->sole());
+        $exception = Expectation::throws(
+            fn () => OfPost::newQuery()->where('author_id', '=', 1)->sole(),
+            MultipleRecordsFoundException::class,
+        );
 
         self::assertSame(2, $exception->count);
         self::assertSame(
@@ -211,7 +197,7 @@ final class OrFailTest extends DatabaseTestCase
         // sole() THROWS on the multi-row table — but a mutating sole()
         // would have already applied limit(2) to the SHARED builder before
         // throwing, so this line is part of the regression probe too.
-        $this->runMultiple(fn () => $builder->sole());
+        Expectation::throws(fn () => $builder->sole(), MultipleRecordsFoundException::class);
 
         // A mutated builder would carry limit(2)/limit(1) or findOrFail's
         // added key wheres — all three users must still come back.
@@ -234,7 +220,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     public function testStaticFindOrFailThrows(): void
     {
-        $exception = $this->runNotFound(fn () => OfUser::findOrFail(4242));
+        $exception = Expectation::throws(
+            fn () => OfUser::findOrFail(4242),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(OfUser::class, $exception->model);
         self::assertSame(4242, $exception->key);
@@ -272,7 +261,10 @@ final class OrFailTest extends DatabaseTestCase
     {
         $orphan = OfUser::newQuery()->where('name', '=', 'orphan')->firstOrFail();
 
-        $exception = $this->runNotFound(fn () => $orphan->featuredPost()->firstOrFail());
+        $exception = Expectation::throws(
+            fn () => $orphan->featuredPost()->firstOrFail(),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(OfPost::class, $exception->model);
     }
@@ -297,7 +289,10 @@ final class OrFailTest extends DatabaseTestCase
     {
         $ada = OfUser::newQuery()->where('name', '=', 'ada')->firstOrFail();
 
-        $exception = $this->runMultiple(fn () => $ada->posts()->sole());
+        $exception = Expectation::throws(
+            fn () => $ada->posts()->sole(),
+            MultipleRecordsFoundException::class,
+        );
 
         self::assertSame(2, $exception->count);
     }
@@ -326,7 +321,10 @@ final class OrFailTest extends DatabaseTestCase
     {
         $orphan = OfUser::newQuery()->where('name', '=', 'orphan')->firstOrFail();
 
-        $exception = $this->runNotFound(fn () => $orphan->featuredPost()->sole());
+        $exception = Expectation::throws(
+            fn () => $orphan->featuredPost()->sole(),
+            ModelNotFoundException::class,
+        );
 
         self::assertSame(OfPost::class, $exception->model);
         self::assertNull($exception->key);
@@ -345,7 +343,10 @@ final class OrFailTest extends DatabaseTestCase
         $post->save();
         $post->delete();
 
-        $this->runNotFound(fn () => OfSoftPost::newQuery()->where('title', '=', 'gone')->firstOrFail());
+        Expectation::throws(
+            fn () => OfSoftPost::newQuery()->where('title', '=', 'gone')->firstOrFail(),
+            ModelNotFoundException::class,
+        );
 
         $restored = OfSoftPost::newQuery()->onlyTrashed()->where('title', '=', 'gone')->firstOrFail();
 
