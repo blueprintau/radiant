@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 
 /**
  * Compile-surface tests for the migration features: renames, content
@@ -366,12 +367,11 @@ final class MigrationFeaturesTest extends DatabaseTestCase
                 fn() => $this->sqlite->compileDropCheck('users', 'users_age_check'),
             ] as $compile
         ) {
-            try {
-                $compile();
-                self::fail('Expected UnsupportedFeatureException.');
-            } catch (\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException $exception) {
-                self::assertStringContainsString('table rebuild', $exception->getMessage());
-            }
+            Expectation::throwsWithMessage(
+                $compile,
+                \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class,
+                'table rebuild',
+            );
         }
     }
 

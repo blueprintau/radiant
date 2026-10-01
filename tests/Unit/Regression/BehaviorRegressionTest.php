@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Regression;
 use BlueprintAU\Radiant\Database\Connections\CsvConnection;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
 use BlueprintAU\Radiant\Database\Grammars\Grammar;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -82,16 +83,14 @@ final class BehaviorRegressionTest extends TestCase
     {
         $connection = $this->makeCsv([['id' => '1', 'name' => 'Ana']]);
 
-        try {
-            $connection->table('users')->insert([
+        Expectation::throws(
+            fn () => $connection->table('users')->insert([
                 ['id' => '2', 'name' => 'Bo'],
                 // A stdClass in a value slot unwinds the write mid-cycle.
                 ['id' => '3', 'name' => new \stdClass()],
-            ]);
-            self::fail('Expected the write to fail.');
-        } catch (\Throwable) {
-            // expected
-        }
+            ]),
+            \Throwable::class,
+        );
 
         self::assertSame([], glob($this->path . '.radiant-tmp') ?: [], 'No fixed temp path may exist.');
         self::assertSame([], glob($this->path . '.radiant-*.tmp') ?: [], 'No unique temp file may be orphaned.');
@@ -249,19 +248,19 @@ final class BehaviorRegressionTest extends TestCase
         $connection->statement('CREATE TABLE t (id integer)');
         $connection->statement('INSERT INTO t VALUES (1)');
 
-        try {
-            $connection->selectSql('SELECT * FROM missing_table WHERE id = ?', [42]);
-            self::fail('Expected a QueryException.');
-        } catch (QueryException $e) {
-            $message = $e->getMessage();
-            self::assertStringNotContainsString('missing_table', $message, 'The SQL text must not surface in the message.');
-            self::assertStringNotContainsString('42', $message, 'A bound value must not surface in the message.');
+        $exception = Expectation::throws(
+            fn () => $connection->selectSql('SELECT * FROM missing_table WHERE id = ?', [42]),
+            QueryException::class,
+        );
 
-            // Opt-in debuggability is preserved.
-            self::assertStringContainsString('missing_table', $e->sql);
-            self::assertSame([42], $e->getBindings());
-            self::assertStringContainsString('missing_table', $e->toContextString());
-        }
+        $message = $exception->getMessage();
+        self::assertStringNotContainsString('missing_table', $message, 'The SQL text must not surface in the message.');
+        self::assertStringNotContainsString('42', $message, 'A bound value must not surface in the message.');
+
+        // Opt-in debuggability is preserved.
+        self::assertStringContainsString('missing_table', $exception->sql);
+        self::assertSame([42], $exception->getBindings());
+        self::assertStringContainsString('missing_table', $exception->toContextString());
     }
 
     // ---- DSN field validation ----
@@ -273,29 +272,27 @@ final class BehaviorRegressionTest extends TestCase
     {
         $connector = new \BlueprintAU\Radiant\Database\Connectors\MySqlConnector();
 
-        try {
-            $connector->validConfig([
+        Expectation::throwsWithMessage(
+            fn () => $connector->validConfig([
                 'driver' => 'mysql',
                 'host' => 'localhost',
                 'port' => 3306,
                 'database' => 'db;unix_socket=/tmp/x',
-            ]);
-            self::fail('Expected the metacharacter database to be rejected.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('must not contain semicolons', $e->getMessage());
-        }
+            ]),
+            \InvalidArgumentException::class,
+            'must not contain semicolons',
+        );
 
         $postgres = new \BlueprintAU\Radiant\Database\Connectors\PostgresConnector();
-        try {
-            $postgres->validConfig([
+        Expectation::throwsWithMessage(
+            fn () => $postgres->validConfig([
                 'driver' => 'pgsql',
                 'host' => 'db;sslmode=disable',
                 'database' => 'app',
-            ]);
-            self::fail('Expected the metacharacter host to be rejected.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('must not contain semicolons', $e->getMessage());
-        }
+            ]),
+            \InvalidArgumentException::class,
+            'must not contain semicolons',
+        );
     }
 
     // ---- Forced server-side prepares ----
@@ -383,20 +380,18 @@ final class BehaviorRegressionTest extends TestCase
      */
     public function testAggregateConstructorFailsClosed(): void
     {
-        try {
-            new \BlueprintAU\Radiant\Database\Query\Aggregate('sum', 'coalesce(x, 0)');
-            self::fail('Expected a fail-closed exception for a nested aggregate argument.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('identifier path', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => new \BlueprintAU\Radiant\Database\Query\Aggregate('sum', 'coalesce(x, 0)'),
+            \InvalidArgumentException::class,
+            'identifier path',
+        );
 
         // A hostile function name is rejected as a bare-identifier violation.
-        try {
-            new \BlueprintAU\Radiant\Database\Query\Aggregate('sum("price)', '*');
-            self::fail('Expected a fail-closed exception for a non-identifier function.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('bare SQL identifier', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => new \BlueprintAU\Radiant\Database\Query\Aggregate('sum("price)', '*'),
+            \InvalidArgumentException::class,
+            'bare SQL identifier',
+        );
 
         // Custom server aggregates (open function set) are accepted.
         $custom = new \BlueprintAU\Radiant\Database\Query\Aggregate('group_concat', 'name', 'names');

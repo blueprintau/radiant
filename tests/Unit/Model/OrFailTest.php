@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Model;
 use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfSoftPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfUser;
@@ -64,13 +65,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     private function runNotFound(callable $callback): ModelNotFoundException
     {
-        try {
-            $callback();
-        } catch (ModelNotFoundException $exception) {
-            return $exception;
-        }
+        /** @var ModelNotFoundException $exception */
+        $exception = Expectation::throws($callback, ModelNotFoundException::class);
 
-        self::fail('Expected ModelNotFoundException was not thrown.');
+        return $exception;
     }
 
     /**
@@ -81,13 +79,10 @@ final class OrFailTest extends DatabaseTestCase
      */
     private function runMultiple(callable $callback): MultipleRecordsFoundException
     {
-        try {
-            $callback();
-        } catch (MultipleRecordsFoundException $exception) {
-            return $exception;
-        }
+        /** @var MultipleRecordsFoundException $exception */
+        $exception = Expectation::throws($callback, MultipleRecordsFoundException::class);
 
-        self::fail('Expected MultipleRecordsFoundException was not thrown.');
+        return $exception;
     }
 
     // ---- Builder firstOrFail ----

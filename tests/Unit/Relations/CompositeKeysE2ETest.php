@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpShipment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpTrackedShipment;
@@ -87,12 +88,11 @@ class CompositeKeysE2ETest extends DatabaseTestCase
     {
         $this->seed();
 
-        try {
-            $this->findUntyped(CmpRegion::class, ['id' => 1, 'region' => 'US']);
-            self::fail('Expected an InvalidArgumentException for a non-PK key column.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('is not a primary key of model', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->findUntyped(CmpRegion::class, ['id' => 1, 'region' => 'US']),
+            \InvalidArgumentException::class,
+            'is not a primary key of model',
+        );
     }
 
     /**

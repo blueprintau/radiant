@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Database;
 
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -178,21 +179,17 @@ final class SqliteConnectionRebuildTest extends TestCase
         $this->connection->statement('INSERT INTO orders (user_id, note) VALUES (99, \'orphan\')');
         $this->connection->statement('PRAGMA foreign_keys = ON');
 
-        try {
-            $this->connection->modifyColumn(
+        Expectation::throwsWithMessage(
+            fn () => $this->connection->modifyColumn(
                 (new Blueprint('orders'))
                     ->id()
                     ->column(\BlueprintAU\Radiant\Database\Schema\Enums\ColumnType::BigInt, 'user_id', nullable: true)
                     ->string('note', 255)
                     ->foreignKey(['user_id'], 'users', ['id']),
-            );
-            self::fail('The rebuild must refuse to produce orphaned rows.');
-        } catch (\LogicException $e) {
-            self::assertStringContainsString(
-                'Rebuilding [orders] would violate foreign keys: 1 row(s) reference missing parents.',
-                $e->getMessage(),
-            );
-        }
+            ),
+            \LogicException::class,
+            'Rebuilding [orders] would violate foreign keys: 1 row(s) reference missing parents.',
+        );
 
         // The rollback restored the ORIGINAL table — orphan row included.
         $rows = $this->connection->selectSql('SELECT note FROM orders');

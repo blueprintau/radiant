@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\DatabaseManager;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -87,12 +88,7 @@ final class ConnectionResilienceTest extends TestCase
         // Break the PDO so commit()'s $pdo->commit() throws.
         $this->breakPdo($connection, 'server closed the connection unexpectedly');
 
-        try {
-            $connection->commit();
-            self::fail('Expected commit to throw.');
-        } catch (\PDOException) {
-            // expected — the underlying commit failed
-        }
+        Expectation::throws(fn () => $connection->commit(), \PDOException::class);
 
         self::assertSame(0, $connection->transactionLevel(), 'Failed commit must not leave the level stuck.');
     }

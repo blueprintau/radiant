@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Connections;
 
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -50,15 +51,15 @@ final class SqlConnectionTransactionTest extends TestCase
      */
     public function testTransactionRollsBackOnThrow(): void
     {
-        try {
-            $this->connection->transaction(function () {
+        $exception = Expectation::throws(
+            fn () => $this->connection->transaction(function () {
                 $this->connection->table('users')->insert(['name' => 'Alice']);
                 throw new \RuntimeException('boom');
-            });
-            self::fail('Expected an exception.');
-        } catch (\RuntimeException $e) {
-            self::assertSame('boom', $e->getMessage());
-        }
+            }),
+            \RuntimeException::class,
+        );
+
+        self::assertSame('boom', $exception->getMessage());
 
         self::assertSame(0, $this->connection->table('users')->count());
         self::assertSame(0, $this->connection->transactionLevel());
@@ -153,29 +154,26 @@ final class SqlConnectionTransactionTest extends TestCase
         $fiber->start();
         self::assertSame(1, $this->connection->transactionLevel());
 
-        try {
-            $this->connection->commit();
-            self::fail('Expected a LogicException for a cross-coroutine commit.');
-        } catch (\LogicException $e) {
-            self::assertStringContainsString('different coroutine', $e->getMessage());
-        }
+        $exception = Expectation::throwsWithMessage(
+            fn () => $this->connection->commit(),
+            \LogicException::class,
+            'different coroutine',
+        );
 
         // rollBack() is guarded the same way.
-        try {
-            $this->connection->rollBack();
-            self::fail('Expected a LogicException for a cross-coroutine rollback.');
-        } catch (\LogicException $e) {
-            self::assertStringContainsString('different coroutine', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->connection->rollBack(),
+            \LogicException::class,
+            'different coroutine',
+        );
 
         // beginTransaction() from another coroutine is guarded too — a
         // nested savepoint opened by the wrong frame would cross-commit.
-        try {
-            $this->connection->beginTransaction();
-            self::fail('Expected a LogicException for a cross-coroutine begin.');
-        } catch (\LogicException $e) {
-            self::assertStringContainsString('different coroutine', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->connection->beginTransaction(),
+            \LogicException::class,
+            'different coroutine',
+        );
 
         // The guarded attempts changed nothing: level 1, row present but
         // uncommitted.

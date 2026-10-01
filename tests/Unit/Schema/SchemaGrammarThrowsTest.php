@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Database\Schema\Grammars\PostgresSchemaGrammar;
 use PHPUnit\Framework\TestCase;
 
@@ -150,12 +151,11 @@ final class SchemaGrammarThrowsTest extends TestCase
     {
         $blueprint = new Blueprint('users');
 
-        try {
-            $blueprint->renameColumn('', 'other');
-            self::fail('Expected an InvalidArgumentException for an empty source name.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('requires non-empty column names', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $blueprint->renameColumn('', 'other'),
+            \InvalidArgumentException::class,
+            'requires non-empty column names',
+        );
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('requires non-empty column names');

@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Tests\Support\NullConnection;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -562,12 +563,10 @@ final class SqlConnectionEdgeCasesTest extends TestCase
 
         self::assertFalse($this->connection->isStale());
 
-        try {
-            $this->connection->chunkSql('SELECT * FROM users', [], 2, static fn (): bool => true);
-            self::fail('The broken PDO must surface a QueryException.');
-        } catch (QueryException) {
-            // Expected — the assertion below is the point of the test.
-        }
+        Expectation::throws(
+            fn () => $this->connection->chunkSql('SELECT * FROM users', [], 2, static fn (): bool => true),
+            QueryException::class,
+        );
 
         self::assertTrue($this->connection->isStale(), 'the connection-loss shape must mark the connection stale');
     }

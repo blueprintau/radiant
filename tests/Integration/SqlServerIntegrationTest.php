@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Database\Connectors\ConnectorInterface;
 use BlueprintAU\Radiant\Database\Connectors\MySqlConnector;
 use BlueprintAU\Radiant\Database\Connectors\PostgresConnector;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -198,15 +199,13 @@ final class SqlServerIntegrationTest extends TestCase
         });
         self::assertSame(2, $this->connection->table('users')->count());
 
-        try {
-            $this->connection->transaction(function () {
+        Expectation::throws(
+            fn () => $this->connection->transaction(function () {
                 $this->connection->table('users')->insert(['name' => 'Carol']);
                 throw new \RuntimeException('boom');
-            });
-            self::fail('Expected an exception.');
-        } catch (\RuntimeException) {
-            // swallowed — the write should have rolled back.
-        }
+            }),
+            \RuntimeException::class,
+        );
 
         // The count is the assertion's subject — phpstan 2.2.16's
         // alreadyNarrowedType check misreads the literal-vs-count comparison

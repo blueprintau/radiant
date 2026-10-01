@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Grammars;
 
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Database\Grammars\MySqlGrammar;
 use BlueprintAU\Radiant\Database\Grammars\PostgresGrammar;
 use BlueprintAU\Radiant\Database\Grammars\SqliteGrammar;
@@ -758,13 +759,12 @@ final class GrammarTest extends TestCase
 
         // ...and every feature OUTSIDE a narrow supported set is rejected
         // at once (the missed set entries cannot sneak features through).
-        try {
-            $heavy->assertSupports(SqlFeature::RawSql);
-            self::fail('Expected UnsupportedFeatureException for unsupported features.');
-        } catch (UnsupportedFeatureException $e) {
-            self::assertStringContainsString('joins', $e->getMessage());
-            self::assertStringContainsString('unions', $e->getMessage());
-        }
+        $exception = Expectation::throws(
+            fn () => $heavy->assertSupports(SqlFeature::RawSql),
+            UnsupportedFeatureException::class,
+        );
+        self::assertStringContainsString('joins', $exception->getMessage());
+        self::assertStringContainsString('unions', $exception->getMessage());
 
         // Naming the FULL set the query uses passes.
         self::assertSame(

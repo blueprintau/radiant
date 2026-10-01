@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 use BlueprintAU\Radiant\Database\Locks\MySqlLock;
 use BlueprintAU\Radiant\Database\Locks\NoopLock;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Database\Locks\PostgresLock;
 use BlueprintAU\Radiant\Database\Locks\SqlLock;
 use BlueprintAU\Radiant\Database\Locks\SqliteLock;
@@ -97,10 +98,11 @@ final class LocksTest extends TestCase
         $this->connection->beginTransaction();
 
         try {
-            $lock->withLock(fn (): null => null, 'test:domain');
-            self::fail('SqliteLock must refuse an already-open transaction.');
-        } catch (ConnectionException $e) {
-            self::assertStringContainsString('transaction-free connection', $e->getMessage());
+            Expectation::throwsWithMessage(
+                fn () => $lock->withLock(fn (): null => null, 'test:domain'),
+                ConnectionException::class,
+                'transaction-free connection',
+            );
         } finally {
             $this->connection->rollBack();
         }

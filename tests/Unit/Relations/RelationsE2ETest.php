@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeam;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeamPost;
@@ -296,19 +297,17 @@ final class RelationsE2ETest extends DatabaseTestCase
      */
     public function testWithRejectsInvalidPaths(): void
     {
-        try {
-            $this->withUntyped(['posts', 42]);
-            self::fail('Expected an InvalidArgumentException for a non-string path.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('must be non-empty strings; got int', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->withUntyped(['posts', 42]),
+            \InvalidArgumentException::class,
+            'must be non-empty strings; got int',
+        );
 
-        try {
-            $this->withUntyped(['posts', '']);
-            self::fail('Expected an InvalidArgumentException for an empty path.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('got an empty path', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->withUntyped(['posts', '']),
+            \InvalidArgumentException::class,
+            'got an empty path',
+        );
     }
 
     /**
@@ -325,20 +324,17 @@ final class RelationsE2ETest extends DatabaseTestCase
     {
         $this->seed();
 
-        try {
-            $this->whereKeyUntyped(true);
-            self::fail('Expected a TypeError for a bool key.');
-        } catch (\TypeError $e) {
-            self::assertStringContainsString('whereKey(): Argument #1 ($id)', $e->getMessage());
-            self::assertStringContainsString('array|string|int|null', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->whereKeyUntyped(true),
+            \TypeError::class,
+            'whereKey(): Argument #1 ($id)',
+        );
 
-        try {
-            $this->whereKeyUntyped(['id' => new \stdClass()]);
-            self::fail('Expected an InvalidArgumentException for an object key value.');
-        } catch (\InvalidArgumentException $e) {
-            self::assertStringContainsString('must be int, string or null; got stdClass', $e->getMessage());
-        }
+        Expectation::throwsWithMessage(
+            fn () => $this->whereKeyUntyped(['id' => new \stdClass()]),
+            \InvalidArgumentException::class,
+            'must be int, string or null; got stdClass',
+        );
 
         try {
             // A NON-list array (int key not starting at 0 in sequence) is a

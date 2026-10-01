@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use PHPUnit\Framework\Attributes\DoesNotPerformAssertions;
 use PHPUnit\Framework\Attributes\WithoutErrorHandler;
 use PHPUnit\Framework\TestCase;
@@ -427,16 +428,11 @@ final class CsvConnectionEdgeCasesTest extends TestCase
 
         chmod($dir, 0500);
         try {
-            $db->table('users')->where('id', WhereOperator::Eq, 1)->update(['name' => 'X']);
-            self::fail('The write into the read-only directory must fail.');
-        } catch (\RuntimeException $e) {
-            // self::fail() throws AssertionFailedError which EXTENDS
-            // RuntimeException — rethrow it so a non-throwing write fails
-            // the test instead of being swallowed and mis-asserted here.
-            if ($e instanceof \PHPUnit\Framework\AssertionFailedError) {
-                throw $e;
-            }
-            self::assertStringContainsString('Could not write CSV file', $e->getMessage());
+            Expectation::throwsWithMessage(
+                fn () => $db->table('users')->where('id', WhereOperator::Eq, 1)->update(['name' => 'X']),
+                \RuntimeException::class,
+                'Could not write CSV file',
+            );
         } finally {
             chmod($dir, 0755);
         }
