@@ -14,10 +14,10 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * lock and the `pg_catalog`/`information_schema` inspector.
  *
  * The dialect-agnostic CRUD/transaction/aggregate/alter cycle comes from
- * IntegrationTestCase (CrudCycleTests); this class adds the Postgres
- * connection config and the Postgres-specific tests. Table lifecycle is
- * handled by DatabaseTestCase — tests declare tables with createTables()
- * and teardown drops them in reverse creation order.
+ * IntegrationTestCase; this class adds the Postgres connection config
+ * and the Postgres-specific tests. Table lifecycle is handled by
+ * DatabaseTestCase — tests declare tables with createTables() and
+ * teardown drops them in reverse creation order.
  *
  * The connection is built by the manager through the connector — with
  * `sslmode`, so the DSN append is exercised — and a second named

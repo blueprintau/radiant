@@ -15,10 +15,10 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * and the `sqlite_master` inspector.
  *
  * The dialect-agnostic CRUD/transaction/aggregate/alter cycle comes from
- * IntegrationTestCase (CrudCycleTests); this class adds the file-backed
- * sqlite connection config and the sqlite-specific tests. Table lifecycle
- * is handled by DatabaseTestCase — tests declare tables with
- * createTables() and teardown drops them in reverse creation order.
+ * IntegrationTestCase; this class adds the file-backed sqlite connection
+ * config and the sqlite-specific tests. Table lifecycle is handled by
+ * DatabaseTestCase — tests declare tables with createTables() and
+ * teardown drops them in reverse creation order.
  *
  * The connection is built by the manager through the connector, so the
  * file-backed DSN path is exercised. A second named connection ('probe')

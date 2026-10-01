@@ -15,10 +15,10 @@ use BlueprintAU\Radiant\Tests\Support\Expectation;
  * `information_schema` inspector.
  *
  * The dialect-agnostic CRUD/transaction/aggregate/alter cycle comes from
- * IntegrationTestCase (CrudCycleTests); this class adds the MySQL
- * connection config and the MySQL-specific tests. Table lifecycle is
- * handled by DatabaseTestCase — tests declare tables with createTables()
- * and teardown drops them in reverse creation order.
+ * IntegrationTestCase; this class adds the MySQL connection config and
+ * the MySQL-specific tests. Table lifecycle is handled by
+ * DatabaseTestCase — tests declare tables with createTables() and
+ * teardown drops them in reverse creation order.
  *
  * Each test connects *through the connector*, so the DSN construction,
  * option merging and the `SET NAMES` post-connect SQL are all exercised —
