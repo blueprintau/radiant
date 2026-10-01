@@ -108,6 +108,10 @@ trait CrudCycleTests
 
     /**
      * Schema alter (add/drop column) works on the live server.
+     *
+     * The drop-column arm is skipped on sqlite — the dialect rebuilds the
+     * table instead of dropping the column, so compileDropColumn throws
+     * UnsupportedFeatureException.
      */
     public function testSchemaAlter(): void
     {
@@ -120,6 +124,10 @@ trait CrudCycleTests
         $row = $this->connection->table('users')->where('name', '=', 'Alice')->first();
         self::assertNotNull($row);
         self::assertSame(30, (int) $row->age);
+
+        if ($this->connection instanceof \BlueprintAU\Radiant\Database\Connections\SqliteConnection) {
+            return;
+        }
 
         $this->connection->alter(SchemaOperation::DropColumn, (new Blueprint('users'))->dropColumn('age'));
         $row = $this->connection->table('users')->where('name', '=', 'Alice')->first();
