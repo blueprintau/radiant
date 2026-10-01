@@ -125,6 +125,10 @@ final class MySqlSchemaInspector extends SchemaInspector
 
         /** @var array<string, mixed> $row */
         foreach ($statement->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            // Native prepares (EMULATE_PREPARES=false) report information_
+            // schema bare-column metadata in UPPERCASE — normalize so the
+            // lowercase reads below work on every driver.
+            $row = array_change_key_case($row, CASE_LOWER);
             $default = $row['column_default'];
 
             $columns[] = [
@@ -163,6 +167,8 @@ final class MySqlSchemaInspector extends SchemaInspector
         $groups = [];
 
         foreach ($rows as $row) {
+            // Native prepares report information_schema keys in UPPERCASE.
+            $row = array_change_key_case($row, CASE_LOWER);
             $indexName = (string) $row['index_name'];
 
             // PRIMARY rides the columns' primaryKey flag, not the index list.
@@ -218,6 +224,8 @@ final class MySqlSchemaInspector extends SchemaInspector
         $groups = [];
 
         foreach ($rows as $row) {
+            // Native prepares report information_schema keys in UPPERCASE.
+            $row = array_change_key_case($row, CASE_LOWER);
             $constraintName = (string) $row['constraint_name'];
             $groups[$constraintName]['columns'][] = (string) $row['column_name'];
             $groups[$constraintName]['referencesTable'] = (string) $row['referenced_table_name'];

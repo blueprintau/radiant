@@ -34,8 +34,17 @@ final class PostgresSchemaInspector extends SchemaInspector
      */
     public function columnTypeMatches(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $declaredType, int|null $declaredLength, int|null $declaredPrecision = null, int|null $declaredScale = null): bool
     {
-        // information_schema's udt_name short forms → the grammar's text.
-        $normalized = match (strtolower($liveType)) {
+        // Split a size suffix off, normalize the udt base ('int4' →
+        // 'integer', 'bpchar' → 'char', …), then re-attach the size so the
+        // composed text compares against the grammar's rendering verbatim.
+        $base = strtolower($liveType);
+        $suffix = '';
+        if (preg_match('/^(.+?)\((\d+(?:,\d+)?)\)$/', $base, $matches) === 1) {
+            $base = $matches[1];
+            $suffix = '(' . $matches[2] . ')';
+        }
+
+        $normalized = match ($base) {
             'int4' => 'integer',
             'int8' => 'bigint',
             'float8' => 'double precision',
@@ -45,10 +54,37 @@ final class PostgresSchemaInspector extends SchemaInspector
             'json' => 'jsonb',
             'bytea' => 'bytea',
             'uuid' => 'uuid',
-            default => strtolower($liveType),
+            'bpchar' => 'char',
+            default => $base,
         };
 
-        return $normalized === strtolower($this->schemaGrammar->type($declaredType, $declaredLength, $declaredPrecision, $declaredScale));
+        return $normalized . $suffix === strtolower($this->schemaGrammar->type($declaredType, $declaredLength, $declaredPrecision, $declaredScale));
+    }
+
+    /**
+     * Compose a column's type text from its udt name plus its information_
+     * schema size — the udt name alone never carries one.
+     *
+     * Only the types whose grammar rendering includes a size get one:
+     * character types from character_maximum_length, numeric from its
+     * precision/scale (absent when the numeric is unconstrained).
+     *
+     * @param  array<string, mixed>  $row
+     * @return string
+     */
+    private function composeType(array $row): string
+    {
+        $type = strtolower((string) $row['udt_name']);
+
+        if (in_array($type, ['varchar', 'bpchar'], true) && $row['character_maximum_length'] !== null) {
+            return $type . '(' . (int) $row['character_maximum_length'] . ')';
+        }
+
+        if ($type === 'numeric' && $row['numeric_precision'] !== null) {
+            return $type . '(' . (int) $row['numeric_precision'] . ',' . (int) $row['numeric_scale'] . ')';
+        }
+
+        return $type;
     }
 
     /**
@@ -131,7 +167,8 @@ final class PostgresSchemaInspector extends SchemaInspector
     private function columns(string $name): array
     {
         $statement = $this->pdo->prepare(
-            'SELECT c.column_name, c.data_type, c.udt_name, c.is_nullable, c.column_default, '
+            'SELECT c.column_name, c.udt_name, c.character_maximum_length, '
+            . 'c.numeric_precision, c.numeric_scale, c.is_nullable, c.column_default, '
             . 'EXISTS ('
             . '  SELECT 1 FROM information_schema.table_constraints tc '
             . '  JOIN information_schema.key_column_usage kcu '
@@ -154,10 +191,12 @@ final class PostgresSchemaInspector extends SchemaInspector
         foreach ($statement->fetchAll(\PDO::FETCH_ASSOC) as $row) {
             $columns[] = [
                 'name' => (string) $row['column_name'],
-                // Prefer the udt name ('int4', 'timestamptz') over the verbose
-                // data_type ('integer', 'timestamp with time zone') — stable
-                // and comparable across Postgres versions.
-                'type' => strtolower((string) $row['udt_name']),
+                // The udt name ('int4', 'timestamptz') is stable and
+                // comparable across Postgres versions, but it never carries
+                // a size — compose one from information_schema so the text
+                // matches the grammar's rendering ('varchar(100)',
+                // 'numeric(8,2)') and length drift stays detectable.
+                'type' => $this->composeType($row),
                 'nullable' => strtoupper((string) $row['is_nullable']) === 'YES',
                 // Serial/identity columns report nextval(...) — keep the
                 // text; the differ normalizes auto-increment separately.
@@ -279,7 +318,7 @@ final class PostgresSchemaInspector extends SchemaInspector
             . ' AND ccu.table_schema = tc.table_schema '
             . 'JOIN information_schema.referential_constraints rc '
             . '  ON rc.constraint_name = tc.constraint_name '
-            . ' AND rc.table_schema = tc.table_schema '
+            . ' AND rc.constraint_schema = tc.constraint_schema '
             . 'JOIN pg_catalog.pg_constraint pc '
             . '  ON pc.conname = tc.constraint_name '
             . ' AND pc.connamespace = (SELECT oid FROM pg_catalog.pg_namespace '
