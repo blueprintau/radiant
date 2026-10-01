@@ -47,14 +47,21 @@ final class SchemaDifferEdgeCasesTest extends TestCase
      * @param  string  $table
      * @param  list<string>  $columns
      * @param  list<string>  $pk
+     * @param  list<string>  $checks  Inline CHECK constraints rendered into
+     *         the CREATE TABLE — ALTER TABLE ... ADD CONSTRAINT is only
+     *         supported by SQLite 3.53+, so CI's older bundled SQLite
+     *         rejects it.
      */
-    private function createLive(string $table, array $columns, array $pk = ['id']): void
+    private function createLive(string $table, array $columns, array $pk = ['id'], array $checks = []): void
     {
         $defs = [];
         foreach ($columns as $column) {
             $defs[] = in_array($column, $pk, true)
                 ? "\"{$column}\" INTEGER PRIMARY KEY"
                 : "\"{$column}\" TEXT";
+        }
+        foreach ($checks as $check) {
+            $defs[] = $check;
         }
         $this->pdo->exec('CREATE TABLE "' . $table . '" (' . implode(', ', $defs) . ')');
     }
@@ -140,10 +147,9 @@ final class SchemaDifferEdgeCasesTest extends TestCase
      */
     public function testCheckExpressionDriftProducesAdvisory(): void
     {
-        $this->createLive('users', ['id', 'name']);
-        $this->pdo->exec(
-            "ALTER TABLE users ADD CONSTRAINT users_name_check CHECK (length(name) > 5)",
-        );
+        $this->createLive('users', ['id', 'name'], checks: [
+            'CONSTRAINT users_name_check CHECK (length("name") > 5)',
+        ]);
 
         $changes = $this->differ->diff([
             (new Blueprint('users'))->id()->string('name', 64)
@@ -163,10 +169,9 @@ final class SchemaDifferEdgeCasesTest extends TestCase
      */
     public function testUndeclaredLiveCheckProducesAdvisory(): void
     {
-        $this->createLive('users', ['id', 'name']);
-        $this->pdo->exec(
-            "ALTER TABLE users ADD CONSTRAINT users_name_check CHECK (length(name) > 5)",
-        );
+        $this->createLive('users', ['id', 'name'], checks: [
+            'CONSTRAINT users_name_check CHECK (length("name") > 5)',
+        ]);
 
         $changes = $this->differ->diff([
             (new Blueprint('users'))->id()->string('name', 64),
