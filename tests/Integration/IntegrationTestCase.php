@@ -169,4 +169,117 @@ abstract class IntegrationTestCase extends DatabaseTestCase
         self::assertNotNull($row);
         self::assertObjectNotHasProperty('age', $row);
     }
+
+    /**
+     * A nested transaction that throws rolls back to its savepoint — the
+     * outer transaction's writes survive and the inner ones do not.
+     */
+    public function testNestedTransactionRollsBackToSavepoint(): void
+    {
+        $this->createTables((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
+
+        $this->connection->transaction(function (): void {
+            $this->connection->table('rmt_savepoint')->insert(['name' => 'outer']);
+
+            try {
+                $this->connection->transaction(function (): void {
+                    $this->connection->table('rmt_savepoint')->insert(['name' => 'inner']);
+                    throw new \RuntimeException('boom');
+                });
+            } catch (\RuntimeException) {
+                // The inner rollback is the subject; the outer continues.
+            }
+        });
+
+        $names = $this->connection->table('rmt_savepoint')->pluck('name')->all();
+        self::assertSame(['outer'], $names, 'the inner savepoint must roll back, the outer commit must hold');
+    }
+
+    /**
+     * A nested transaction that succeeds releases its savepoint and the
+     * outer commit persists both frames' writes.
+     */
+    public function testNestedTransactionCommitPersistsBothFrames(): void
+    {
+        $this->createTables((new Blueprint('rmt_savepoint'))->id()->string('name', 64));
+
+        $this->connection->transaction(function (): void {
+            $this->connection->table('rmt_savepoint')->insert(['name' => 'outer']);
+            $this->connection->transaction(function (): void {
+                $this->connection->table('rmt_savepoint')->insert(['name' => 'inner']);
+            });
+        });
+
+        self::assertSame(2, $this->connection->table('rmt_savepoint')->count());
+    }
+
+    /**
+     * The inspector reads tables, columns, primary keys and foreign keys
+     * back from the live schema.
+     */
+    public function testInspectorReadsSchema(): void
+    {
+        $this->createTables(
+            (new Blueprint('rmt_ins_parent'))->id()->string('name', 64),
+            (new Blueprint('rmt_ins_child'))
+                ->id()
+                ->foreignId('parentId', 'rmt_ins_parent')
+                ->string('label', 32),
+        );
+
+        $inspector = $this->connection->schemaInspector;
+
+        self::assertContains('rmt_ins_parent', $inspector->tables());
+        self::assertTrue($inspector->hasTable('rmt_ins_parent'));
+
+        $parent = $inspector->table('rmt_ins_parent');
+        self::assertSame(['id', 'name'], array_column($parent->columns, 'name'));
+        self::assertTrue($parent->columns[0]['primaryKey']);
+        self::assertFalse($parent->columns[1]['nullable']);
+
+        $child = $inspector->table('rmt_ins_child');
+        self::assertCount(1, $child->foreignKeys);
+        self::assertSame(['parentId'], $child->foreignKeys[0]['columns']);
+        self::assertSame('rmt_ins_parent', $child->foreignKeys[0]['referencesTable']);
+        self::assertSame(['id'], $child->foreignKeys[0]['referencesColumns']);
+    }
+
+    /**
+     * The inspector reads a declared unique index back.
+     */
+    public function testInspectorReadsUniqueIndex(): void
+    {
+        $this->createTables(
+            (new Blueprint('rmt_ins_idx'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255, unique: true),
+        );
+
+        $live = $this->connection->schemaInspector->table('rmt_ins_idx');
+        $columns = array_map(
+            fn (array $index) => $index['columns'],
+            array_values(array_filter($live->indexes, fn (array $index) => $index['unique'])),
+        );
+
+        self::assertContains(['email'], $columns);
+    }
+
+    /**
+     * The inspector lists the tables that declare a foreign key into a
+     * given table.
+     */
+    public function testInspectorReferencingTables(): void
+    {
+        $this->createTables(
+            (new Blueprint('rmt_ref_parent'))->id(),
+            (new Blueprint('rmt_ref_child'))
+                ->id()
+                ->foreignId('parentId', 'rmt_ref_parent'),
+        );
+
+        self::assertSame(
+            ['rmt_ref_child'],
+            $this->connection->schemaInspector->referencingTables('rmt_ref_parent'),
+        );
+    }
 }
