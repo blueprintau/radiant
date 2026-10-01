@@ -8,6 +8,10 @@ use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecKind;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecProbe;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecStatus;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\EmptyEnumForCodec;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -414,56 +418,4 @@ final class ColumnCodecTest extends TestCase
 
         $column->decode(['x'], CodecKind::class);
     }
-}
-
-/**
- * A probe class with typed properties for the direct guard calls.
- */
-final class CodecProbe extends Model
-{
-    /**
-     * A string property.
-     *
-     * @var string
-     */
-    public string $name = 'x';
-
-    /**
-     * An int property.
-     *
-     * @var int
-     */
-    public int $count = 0;
-
-    /**
-     * An untyped property — the untyped-throw trigger.
-     *
-     * @var mixed
-     */
-    public $untyped;
-}
-
-/**
- * A case-less enum — the empty-enum throw trigger.
- */
-enum EmptyEnumForCodec
-{
-}
-
-/**
- * A string-backed enum for the mapping and decode arms.
- */
-enum CodecStatus: string
-{
-    case Draft = 'draft';
-    case Published = 'published';
-}
-
-/**
- * A unit enum for the name-mapping and decode arms.
- */
-enum CodecKind
-{
-    case Small;
-    case Large;
 }

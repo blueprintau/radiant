@@ -5,11 +5,9 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Attributes;
 
 use BlueprintAU\Radiant\Attributes\ReferenceResolver;
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefRole;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefTableless;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -120,34 +118,4 @@ final class ReferenceResolverTest extends TestCase
 
         ReferenceResolver::resolve(RefTableless::class);
     }
-}
-
-/**
- * Fixture: a table-owning model referenced by class-string.
- */
-#[Table(name: 'ref_roles')]
-class RefRole extends Model
-{
-    /**
-     * The auto-increment primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The role's label.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 32)]
-    public string $label;
-}
-
-/**
- * Fixture: a behavior-only model with no columns — owns no table.
- */
-class RefTableless extends Model
-{
 }

@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
 use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Attributes\Index;
 use BlueprintAU\Radiant\Attributes\Table;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\ForeignKeyAction;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
-use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\MtiChildFixture;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\MtiUniqueChildFixture;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -250,59 +250,4 @@ final class BlueprintDropConstraintsTest extends TestCase
         // The unique over the inherited email column rides the parent.
         self::assertSame([], $blueprint->getIndexes());
     }
-}
-
-/**
- * An MTI parent fixture.
- */
-#[Table(name: 'mti_parent_fixtures')]
-class MtiParentFixture extends Model
-{
-    /**
-     * The shared primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * An inherited column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255, unique: true)]
-    public string $email;
-}
-
-/**
- * An MTI child fixture — owns one column of its own.
- */
-#[Table(name: 'mti_child_fixtures')]
-class MtiChildFixture extends MtiParentFixture
-{
-    /**
-     * A child-only column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $label;
-}
-
-/**
- * An MTI child fixture whose class-level index covers an inherited
- * column — the constraint belongs to the parent table.
- */
-#[Table(name: 'mti_unique_child_fixtures')]
-#[Index(columns: ['email'])]
-class MtiUniqueChildFixture extends MtiParentFixture
-{
-    /**
-     * A child-only column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 64)]
-    public string $label;
 }
