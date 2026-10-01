@@ -328,6 +328,87 @@ final class ConnectorValidationTest extends TestCase
         (new CsvConnector())->validConfig(['path' => '/tmp/x.csv', 'readonly' => true]);
     }
 
+    // ---- MySQL charset validation ----
+
+    /**
+     * A charset outside the allowlist rejects at config time.
+     */
+    public function testMySqlUnknownCharsetThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('MySQL "charset" must be one of:');
+
+        (new MySqlConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'database' => 'radiant',
+            'charset' => 'latin9',
+        ]);
+    }
+
+    /**
+     * A non-string charset rejects with the type in the message.
+     */
+    public function testMySqlNonStringCharsetThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('MySQL "charset" must be one of:');
+
+        (new MySqlConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'database' => 'radiant',
+            'charset' => 42,
+        ]);
+    }
+
+    /**
+     * An allowed charset (any case) passes validation — the connector
+     * lowercases it.
+     */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+    public function testMySqlAllowedCharsetPasses(): void
+    {
+        (new MySqlConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'database' => 'radiant',
+            'charset' => 'UTF8MB4',
+        ]);
+    }
+
+    /**
+     * A MySQL database with DSN metacharacters rejects.
+     */
+    public function testMySqlDatabaseWithMetacharactersThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('must not contain semicolons');
+
+        (new MySqlConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 3306,
+            'database' => 'rad;iant',
+        ]);
+    }
+
+    // ---- Postgres sslmode normalization ----
+
+    /**
+     * An allowed sslmode in ANY case passes — the connector lowercases it
+     * before it reaches the DSN.
+     */
+    #[\PHPUnit\Framework\Attributes\DoesNotPerformAssertions]
+    public function testPostgresSslmodeAnyCasePasses(): void
+    {
+        (new PostgresConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 5432,
+            'database' => 'radiant',
+            'sslmode' => 'PREFER',
+        ]);
+    }
+
     // ---- ConnectionException wrap (no server needed) ----
 
     /**
