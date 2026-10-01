@@ -4,12 +4,10 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Integration;
 
-use BlueprintAU\Radiant\Database\Connections\PostgresConnection;
-use BlueprintAU\Radiant\Database\Connectors\PostgresConnector;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Live Postgres tests for the paths no in-memory engine can serve:
@@ -21,23 +19,16 @@ use PHPUnit\Framework\TestCase;
  * `integration-remote-sql` group explicitly (phpunit.xml excludes it for
  * the default local run; CI runs it where a failure is a real signal).
  *
- * Each test connects *through the connector*, so the DSN construction
- * (including the `sslmode` append) and option merging are all exercised —
- * not just the PDO handshake.
+ * The connection is built by the manager through the connector — with
+ * `sslmode`, so the DSN append is exercised — and a second named
+ * connection ('probe') backs the lock-exclusivity tests.
  *
  * Env overrides (with local defaults):
  *  - RADIANT_PGSQL_{HOST,PORT,USER,PASSWORD,DATABASE} (127.0.0.1:5432 postgres/postgres radiant)
  */
 #[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
-final class PostgresConnectionRemoteTest extends TestCase
+final class PostgresConnectionRemoteTest extends DatabaseTestCase
 {
-    /**
-     * The live connection, built by the connector.
-     *
-     * @var PostgresConnection
-     */
-    private PostgresConnection $connection;
-
     /**
      * Tables created by the running test — dropped in reverse order on
      * teardown (children before parents, so FKs never block the drop).
@@ -47,33 +38,14 @@ final class PostgresConnectionRemoteTest extends TestCase
     private array $tables = [];
 
     /**
-     * Connect through the connector — with sslmode, so the DSN append is
-     * exercised.
-     */
-    protected function setUp(): void
-    {
-        $connection = (new PostgresConnector())->connect([...self::config(), 'sslmode' => 'prefer']);
-        self::assertInstanceOf(PostgresConnection::class, $connection);
-        $this->connection = $connection;
-    }
-
-    /**
-     * Drop every table the test created.
-     */
-    protected function tearDown(): void
-    {
-        foreach (array_reverse($this->tables) as $table) {
-            $this->connection->statement("DROP TABLE IF EXISTS {$table}");
-        }
-        parent::tearDown();
-    }
-
-    /**
-     * The live-server config, from env with local defaults.
+     * The config for the per-test 'default' connection — the live
+     * Postgres server, from env with local defaults. `sslmode` rides
+     * along so the connector's DSN append is exercised.
      *
      * @return array<string, mixed>
      */
-    private static function config(): array
+    #[\Override]
+    protected function connectionConfig(): array
     {
         return [
             'driver' => 'pgsql',
@@ -82,7 +54,32 @@ final class PostgresConnectionRemoteTest extends TestCase
             'database' => getenv('RADIANT_PGSQL_DATABASE') ?: 'radiant',
             'username' => getenv('RADIANT_PGSQL_USER') ?: 'postgres',
             'password' => getenv('RADIANT_PGSQL_PASSWORD') ?: 'postgres',
+            'sslmode' => 'prefer',
         ];
+    }
+
+    /**
+     * A second session on the same server — the probe that proves the
+     * advisory lock is held exclusively.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    #[\Override]
+    protected function additionalConnections(): array
+    {
+        return ['probe' => $this->connectionConfig()];
+    }
+
+    /**
+     * Drop every table the test created, then reset the facade.
+     */
+    #[\Override]
+    protected function tearDown(): void
+    {
+        foreach (array_reverse($this->tables) as $table) {
+            $this->connection->statement("DROP TABLE IF EXISTS {$table}");
+        }
+        parent::tearDown();
     }
 
     /**
@@ -168,7 +165,7 @@ final class PostgresConnectionRemoteTest extends TestCase
     public function testWithLockHoldsTheLockExclusively(): void
     {
         $result = $this->connection->withLock(function (): string {
-            $probe = (new PostgresConnector())->connect(self::config());
+            $probe = $this->manager->sqlConnection('probe');
             $row = $probe->selectSql(
                 "SELECT (pg_try_advisory_lock(hashtext('rmt:probe'))) AS held",
             )->first();
@@ -197,7 +194,7 @@ final class PostgresConnectionRemoteTest extends TestCase
             }, 'rmt:release');
         }, \RuntimeException::class);
 
-        $probe = (new PostgresConnector())->connect(self::config());
+        $probe = $this->manager->sqlConnection('probe');
         $row = $probe->selectSql(
             "SELECT (pg_try_advisory_lock(hashtext('rmt:release'))) AS acquired",
         )->first();

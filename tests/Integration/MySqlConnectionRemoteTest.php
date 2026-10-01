@@ -5,11 +5,10 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Integration;
 
 use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
-use BlueprintAU\Radiant\Database\Connectors\MySqlConnector;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Live MySQL tests for the paths no in-memory engine can serve: nested
@@ -23,21 +22,15 @@ use PHPUnit\Framework\TestCase;
  *
  * Each test connects *through the connector*, so the DSN construction,
  * option merging and the `SET NAMES` post-connect SQL are all exercised —
- * not just the PDO handshake.
+ * not just the PDO handshake. A second named connection ('probe') backs
+ * the lock-exclusivity tests.
  *
  * Env overrides (with local defaults):
  *  - RADIANT_MYSQL_{HOST,PORT,USER,PASSWORD,DATABASE} (127.0.0.1:3306 root/"" radiant)
  */
 #[\PHPUnit\Framework\Attributes\Group('integration-remote-sql')]
-final class MySqlConnectionRemoteTest extends TestCase
+final class MySqlConnectionRemoteTest extends DatabaseTestCase
 {
-    /**
-     * The live connection, built by the connector.
-     *
-     * @var MySqlConnection
-     */
-    private MySqlConnection $connection;
-
     /**
      * Tables created by the running test — dropped in reverse order on
      * teardown (children before parents, so FKs never block the drop).
@@ -47,32 +40,13 @@ final class MySqlConnectionRemoteTest extends TestCase
     private array $tables = [];
 
     /**
-     * Connect through the connector.
-     */
-    protected function setUp(): void
-    {
-        $connection = (new MySqlConnector())->connect(self::config());
-        self::assertInstanceOf(MySqlConnection::class, $connection);
-        $this->connection = $connection;
-    }
-
-    /**
-     * Drop every table the test created.
-     */
-    protected function tearDown(): void
-    {
-        foreach (array_reverse($this->tables) as $table) {
-            $this->connection->statement("DROP TABLE IF EXISTS {$table}");
-        }
-        parent::tearDown();
-    }
-
-    /**
-     * The live-server config, from env with local defaults.
+     * The config for the per-test 'default' connection — the live MySQL
+     * server, from env with local defaults.
      *
      * @return array<string, mixed>
      */
-    private static function config(): array
+    #[\Override]
+    protected function connectionConfig(): array
     {
         return [
             'driver' => 'mysql',
@@ -85,6 +59,30 @@ final class MySqlConnectionRemoteTest extends TestCase
     }
 
     /**
+     * A second session on the same server — the probe that proves the
+     * advisory lock is held exclusively.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    #[\Override]
+    protected function additionalConnections(): array
+    {
+        return ['probe' => $this->connectionConfig()];
+    }
+
+    /**
+     * Drop every table the test created, then reset the facade.
+     */
+    #[\Override]
+    protected function tearDown(): void
+    {
+        foreach (array_reverse($this->tables) as $table) {
+            $this->connection->statement("DROP TABLE IF EXISTS {$table}");
+        }
+        parent::tearDown();
+    }
+
+    /**
      * Track a table for teardown cleanup.
      *
      * @param  string  $table
@@ -92,6 +90,15 @@ final class MySqlConnectionRemoteTest extends TestCase
     private function track(string $table): void
     {
         $this->tables[] = $table;
+    }
+
+    /**
+     * The manager builds the default connection through the MySQL
+     * connector — the concrete dialect class comes back.
+     */
+    public function testConnectorReturnsMySqlConnection(): void
+    {
+        self::assertInstanceOf(MySqlConnection::class, $this->connection);
     }
 
     /**
@@ -146,7 +153,7 @@ final class MySqlConnectionRemoteTest extends TestCase
     public function testWithLockHoldsTheLockExclusively(): void
     {
         $result = $this->connection->withLock(function (): string {
-            $probe = (new MySqlConnector())->connect(self::config());
+            $probe = $this->manager->sqlConnection('probe');
             $row = $probe->selectSql("SELECT GET_LOCK('rmt:probe', 0) AS held")->first();
             self::assertNotNull($row);
             self::assertSame(
@@ -173,7 +180,7 @@ final class MySqlConnectionRemoteTest extends TestCase
             }, 'rmt:release');
         }, \RuntimeException::class);
 
-        $probe = (new MySqlConnector())->connect(self::config());
+        $probe = $this->manager->sqlConnection('probe');
         $row = $probe->selectSql("SELECT GET_LOCK('rmt:release', 0) AS acquired")->first();
         self::assertNotNull($row);
         self::assertSame(1, (int) $row->acquired, 'the lock must be released after the callback throws');
