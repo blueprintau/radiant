@@ -292,6 +292,59 @@ caller holds the `'radiant:schema'` lock across the whole flow, which is
 also what guarantees no drift between the shown and applied plan.
 `sync()` remains the one-shot form (plan + apply under its own lock).
 
+### Protected tables
+
+Both `plan()` and `diff()` accept a `protected` list — tables the host
+forbids the plan from ever touching:
+
+```php
+$plan = $synchronizer->plan($desired, protected: ['legacy_archive']);
+```
+
+Protection lives in the diff, not in a post-plan filter: a protected
+table never receives a `DropTable`, and it never participates in the
+rename tie — a create with heavy column overlap over a protected table
+stays a **plain create** with no `renameOf` link and no "possible
+rename" advisory, so a confirm flow can never be invited to rename a
+table that must keep its name. A drop-cycle among the *unprotected*
+tables orders normally.
+
+Protection is not a freeze: a protected table the desired state
+*declares* still diffs its columns, indexes, and constraints —
+declaring the table is an explicit statement about its shape, and
+protection only forbids removing it or renaming it by inference.
+
+### Additive-only plans
+
+`dropTables: false` widens protection to *every* undeclared live table:
+
+```php
+$plan = $synchronizer->plan($desired, dropTables: false);
+```
+
+The default is `dropTables: true` — plans converge: applying them
+leaves the schema fully in sync, so a forgotten table is *surfaced*
+(as a gated drop) rather than silently lingering. Safety lives at the
+apply layer — destructive changes throw unless a `confirm` callback
+approves them — not in hiding the plan's content. Choose
+`dropTables: false` when additive-only *is* the deployment posture.
+
+An additive-only plan emits creates, renames, and alters — never a
+`DropTable`. With no drop list the rename tie has nothing to pair
+against, so every create stays a plain create; combining
+`dropTables: false` with `protected:` is legal but redundant. Column,
+index, and foreign-key drops inside alters are untouched shape
+correction and still flow (they remain gated by `confirm`), and a
+declared `renamedFrom()` rename still applies — a rename is a
+decision, not a drop.
+
+An additive-only plan is deliberately **out of sync**: tables the
+desired state no longer declares are left in place, not forgotten —
+a later `plan()` with drops enabled will surface them again. Use it
+for the "create what's missing, touch nothing I didn't declare"
+deployment posture; run a full plan when you actually want the
+convergence check.
+
 ### Remaining limits
 
 A declared index absent from the live table is a deployment gap the

@@ -425,4 +425,206 @@ final class SchemaDifferEdgeCasesTest extends TestCase
         self::assertCount(2, $drops);
         self::assertSame(['a', 'b'], array_map(fn (SchemaChange $c) => $c->table, $drops));
     }
+
+    /**
+     * A protected table with a 100%-overlapping create is invisible to
+     * the plan: no DropTable, no renameOf, no POSSIBLE RENAME on either
+     * side — the create stays a plain create.
+     */
+    public function testProtectedTableIsNeverDroppedOrPairedAsRename(): void
+    {
+        $this->createLive('test_user_twos', ['id', 'email', 'password_hash', 'full_name']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('test_users'))
+                ->id()
+                ->string('email', 255)
+                ->string('password_hash', 255)
+                ->string('full_name', 100),
+        ], protected: ['test_user_twos']);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertSame(['create'], $ops, 'only the plain create may appear in the plan');
+
+        $create = $changes[0];
+        self::assertSame('test_users', $create->table);
+        self::assertNull($create->renameOf, 'a protected table must never be a rename target');
+        self::assertFalse($create->possibleRename);
+        self::assertStringNotContainsString('POSSIBLE RENAME', $create->description);
+    }
+
+    /**
+     * Protection does not touch the below-threshold arm: with a create
+     * whose overlap with the live table is under half its own columns,
+     * the protected plan is the UNGUARDED plan minus the drop — the
+     * create is identical, unlinked either way.
+     */
+    public function testBelowThresholdPairIsUnchangedByProtection(): void
+    {
+        $this->createLive('events', ['id', 'a', 'b', 'c', 'd']);
+
+        $desired = [
+            (new Blueprint('logs'))->id()->string('x', 64)->string('y', 64)->string('z', 64),
+        ];
+
+        $guarded = $this->differ->diff($desired, protected: ['events']);
+        $unguarded = $this->differ->diff($desired);
+
+        // One shared column of three (33%) — below the rename threshold.
+        $guardOps = array_map(fn (SchemaChange $c) => $c->operation->value, $guarded);
+        self::assertSame(['create'], $guardOps, 'protection suppresses the drop; below threshold there is nothing else');
+
+        $guardOps = array_map(fn (SchemaChange $c) => $c->operation->value, $unguarded);
+        self::assertContains('drop_table', $guardOps, 'the unguarded plan still drops events');
+        self::assertSame(
+            [],
+            array_filter($unguarded, fn (SchemaChange $c) => $c->renameOf !== null),
+            'no pairing may be linked below the threshold',
+        );
+        self::assertEquals($guarded[0], $unguarded[0], 'the create is byte-identical with and without protection');
+    }
+
+    /**
+     * protected: [] is the default — the paired plan is IDENTICAL to the
+     * unguarded diff, renameOf links and POSSIBLE RENAME annotations on
+     * both sides (back-compat).
+     */
+    public function testEmptyProtectedListKeepsRenamePairing(): void
+    {
+        $this->createLive('test_user_twos', ['id', 'email', 'password_hash', 'full_name']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('test_users'))
+                ->id()
+                ->string('email', 255)
+                ->string('password_hash', 255)
+                ->string('full_name', 100),
+        ]);
+
+        $create = $changes[0];
+        self::assertSame('test_users', $create->table);
+        self::assertSame('test_user_twos', $create->renameOf, 'the unguarded diff still pairs the rename');
+        self::assertStringContainsString('POSSIBLE RENAME', $create->description);
+
+        $drop = $changes[1];
+        self::assertSame(SchemaOperation::DropTable, $drop->operation);
+        self::assertSame('test_user_twos', $drop->table);
+        self::assertSame('test_users', $drop->renameOf);
+        self::assertStringContainsString('POSSIBLE RENAME', $drop->description);
+    }
+
+    /**
+     * Protection means no drops and no pairing — NOT a frozen table: a
+     * protected table the desired state declares still gets its normal
+     * alters.
+     */
+    public function testProtectedTableStillReceivesAlters(): void
+    {
+        $this->createLive('legacy_users', ['id', 'email']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('legacy_users'))
+                ->id()
+                ->string('email', 255)
+                ->string('full_name', 100),
+        ], protected: ['legacy_users']);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('add', $ops, 'the protected table must still diff its shape');
+        self::assertNotContains('drop_table', $ops);
+    }
+
+    /**
+     * dropTables: false is additive-only — undeclared live tables are
+     * left untouched (no DropTable) and the creates stay PLAIN: with no
+     * drop list the rename tie has nothing to pair against.
+     */
+    public function testDropTablesFalseIsAdditiveOnly(): void
+    {
+        $this->createLive('test_user_twos', ['id', 'email', 'password_hash', 'full_name']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('test_users'))
+                ->id()
+                ->string('email', 255)
+                ->string('password_hash', 255)
+                ->string('full_name', 100),
+        ], dropTables: false);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertSame(['create'], $ops, 'the undeclared live table must not appear in the plan');
+
+        $create = $changes[0];
+        self::assertNull($create->renameOf, 'no drops means no pairing — the create stays plain');
+        self::assertStringNotContainsString('POSSIBLE RENAME', $create->description);
+    }
+
+    /**
+     * dropTables: false is not a freeze: an EXISTING declared table
+     * still diffs its shape — including destructive column drops,
+     * which remain the confirm gate's business.
+     */
+    public function testDropTablesFalseStillAltersDeclaredTables(): void
+    {
+        $this->createLive('users', ['id', 'email', 'old_field']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('users'))->id()->string('email', 255)->string('full_name', 100),
+        ], dropTables: false);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        // A mixed add+drop alter classifies as DropColumn (drops
+        // dominate; the additions ride inside the same change).
+        self::assertContains('drop', $ops, 'the declared table must still diff its shape');
+        self::assertStringContainsString(
+            'add column(s) [full_name]',
+            $changes[0]->description,
+            'the addition must ride inside the alter',
+        );
+        self::assertNotContains('drop_table', $ops, 'column drops are shape correction, not table drops');
+    }
+
+    /**
+     * dropTables: true (the default) is today's behavior — the drop is
+     * emitted, and a heavy-overlap create pairs with it.
+     */
+    public function testDropTablesTrueKeepsDropsAndPairing(): void
+    {
+        $this->createLive('test_user_twos', ['id', 'email', 'password_hash', 'full_name']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('test_users'))
+                ->id()
+                ->string('email', 255)
+                ->string('password_hash', 255)
+                ->string('full_name', 100),
+        ], dropTables: true);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('create', $ops);
+        self::assertContains('drop_table', $ops);
+        self::assertSame(
+            'test_user_twos',
+            $changes[0]->renameOf,
+            'the default must keep the rename pairing',
+        );
+    }
+
+    /**
+     * dropTables: false leaves a renamed-away table un-dropped too: the
+     * declared rename still applies, and the plan simply stops after
+     * the rename + its follow-up alters.
+     */
+    public function testDropTablesFalseWithDeclaredRename(): void
+    {
+        $this->createLive('old_users', ['id', 'name']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('users'))->id()->string('name', 64)->renamedFrom('old_users'),
+        ], dropTables: false);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('rename_table', $ops, 'a declared rename is a decision, not a drop — it still applies');
+        self::assertNotContains('drop_table', $ops);
+    }
 }

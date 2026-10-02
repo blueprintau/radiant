@@ -31,10 +31,12 @@ final class SchemaDiffer
      * Diff the desired state against the live schema.
      *
      * @param  list<Blueprint>  $desired
+     * @param  list<string>  $protected  Tables that must never be dropped or offered as a rename target.
+     * @param  bool  $dropTables  Whether undeclared live tables are emitted as DropTable changes.
      * @return list<SchemaChange>
      * @throws \LogicException
      */
-    public function diff(array $desired): array
+    public function diff(array $desired, array $protected = [], bool $dropTables = true): array
     {
         $creates = [];
         $renames = [];
@@ -144,20 +146,33 @@ final class SchemaDiffer
 
         // A live table the desired state no longer declares is a drop —
         // destructive, and always last (reverse-dependency ordered). A
-        // table RENAMED AWAY by a declared rename is not a drop.
-        foreach ($liveTables as $table) {
-            if (in_array($table, $renamedAway, true)) {
-                continue;
-            }
+        // table RENAMED AWAY by a declared rename is not a drop, and a
+        // PROTECTED table is never dropped — protection must not be
+        // defeatable by the host filtering the drop after the fact, so
+        // it is enforced here, before the changes are ever linked.
+        // With $dropTables off the plan is ADDITIVE-ONLY: undeclared
+        // tables are left untouched (not synced), and with no drop list
+        // the rename tie has nothing to pair against — creates stay
+        // plain creates.
+        if ($dropTables) {
+            foreach ($liveTables as $table) {
+                if (in_array($table, $renamedAway, true)) {
+                    continue;
+                }
 
-            if (!in_array($table, $desiredTables, true)) {
-                $drops[] = new SchemaChange(
-                    $table,
-                    SchemaOperation::DropTable,
-                    new Blueprint($table),
-                    true,
-                    "drop table [{$table}] — DESTRUCTIVE: data loss",
-                );
+                if (in_array($table, $protected, true)) {
+                    continue;
+                }
+
+                if (!in_array($table, $desiredTables, true)) {
+                    $drops[] = new SchemaChange(
+                        $table,
+                        SchemaOperation::DropTable,
+                        new Blueprint($table),
+                        true,
+                        "drop table [{$table}] — DESTRUCTIVE: data loss",
+                    );
+                }
             }
         }
 

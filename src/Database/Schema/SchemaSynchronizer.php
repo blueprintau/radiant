@@ -33,12 +33,14 @@ final class SchemaSynchronizer
      * exactly what gets applied.
      *
      * @param  list<Blueprint>  $desired
+     * @param  list<string>  $protected  Tables that must never be dropped or offered as a rename target.
+     * @param  bool  $dropTables  Whether undeclared live tables are emitted as DropTable changes.
      * @return list<SchemaChange>
      * @throws \LogicException
      */
-    public function plan(array $desired): array
+    public function plan(array $desired, array $protected = [], bool $dropTables = true): array
     {
-        return (new SchemaDiffer($this->connection->schemaInspector))->diff($desired);
+        return (new SchemaDiffer($this->connection->schemaInspector))->diff($desired, $protected, $dropTables);
     }
 
     /**
