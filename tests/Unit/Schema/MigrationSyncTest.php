@@ -94,6 +94,204 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * A declared table rename WITH column drift emits the rename AND the
+     * column changes in one plan — the rename first, then the follow-up
+     * alters against the new name.
+     */
+    public function testDeclaredTableRenameWithColumnDriftEmitsOnePlan(): void
+    {
+        $this->createSimpleTable('legacy_users');
+        $this->connection->statement("INSERT INTO legacy_users (name) VALUES ('Alice'), ('Bob')");
+
+        // Drift: add email, widen name — on top of the rename.
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120)
+            ->column(ColumnType::String, 'email', length: 255, nullable: true);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame(
+            [SchemaOperation::RenameTable, SchemaOperation::AddColumn, SchemaOperation::ModifyColumn],
+            $operations,
+        );
+        // Every follow-up change targets the NEW table name.
+        self::assertSame('users', $changes[1]->table);
+        self::assertSame('users', $changes[2]->table);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The data travelled; the new column is live; the widen applied.
+        $rows = $this->connection->selectSql('SELECT name FROM users ORDER BY id')->all();
+        self::assertCount(2, $rows);
+        self::assertSame('Alice', $rows[0]->name);
+
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertContains('email', array_column($live->columns, 'name'));
+
+        // A fresh blueprint (no declaration) converges — the schema is in sync.
+        $converged = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120)
+            ->column(ColumnType::String, 'email', length: 255, nullable: true);
+        self::assertSame([], $differ->diff([$converged]));
+    }
+
+    /**
+     * A declared rename with ADD-ONLY drift emits rename + AddColumn.
+     */
+    public function testDeclaredTableRenameWithAddOnlyDrift(): void
+    {
+        $this->createSimpleTable('legacy_users');
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'email', length: 255, nullable: true);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::RenameTable, SchemaOperation::AddColumn], $operations);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        $converged = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'email', length: 255, nullable: true);
+        self::assertSame([], $differ->diff([$converged]));
+    }
+
+    /**
+     * A declared rename with MODIFY-ONLY drift emits rename + ModifyColumn
+     * (the SQLite rebuild path — data survives).
+     */
+    public function testDeclaredTableRenameWithModifyOnlyDrift(): void
+    {
+        $this->createSimpleTable('legacy_users');
+        $this->connection->statement("INSERT INTO legacy_users (name) VALUES ('Alice')");
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::RenameTable, SchemaOperation::ModifyColumn], $operations);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The rebuild preserved the row and widened the column.
+        $rows = $this->connection->selectSql('SELECT name FROM users')->all();
+        self::assertSame('Alice', $rows[0]->name);
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertStringContainsString('120', $live->columns[1]['type']);
+
+        $converged = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120);
+        self::assertSame([], $differ->diff([$converged]));
+    }
+
+    /**
+     * A declared rename with ADD + MODIFY + DROP drift emits the rename,
+     * the add/drop alter, and the modify — all targeting the new name.
+     */
+    public function testDeclaredTableRenameWithAddModifyDropDrift(): void
+    {
+        $blueprint = (new Blueprint('legacy_users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'legacy_flag', length: 10);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO legacy_users (name, legacy_flag) VALUES ('Alice', 'y')");
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'name', length: 120)            // modify
+            ->column(ColumnType::String, 'email', length: 255, nullable: true)  // add
+            ->dropColumn('legacy_flag');                                  // drop
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame(
+            [SchemaOperation::RenameTable, SchemaOperation::DropColumn, SchemaOperation::ModifyColumn],
+            $operations,
+        );
+        // The add+drop alter is destructive (the drop loses data).
+        self::assertTrue($changes[1]->destructive);
+
+        // The rename and the modify (via the rebuild) apply; the in-place
+        // column DROP is unsupported on SQLite and fails fast by design.
+        $this->connection->apply($changes[0]);
+        $this->connection->apply($changes[2]);
+
+        $live = $this->connection->schemaInspector->table('users');
+        $names = array_column($live->columns, 'name');
+        self::assertContains('email', $names);
+        self::assertStringContainsString('120', $live->columns[1]['type']);
+
+        // The drop itself is refused on this dialect.
+        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
+        $this->connection->apply($changes[1]);
+    }
+
+    /**
+     * A declared table rename composed with a declared column rename AND
+     * a shape change sequences rename-table → rename-column → modify.
+     */
+    public function testDeclaredTableRenameComposesWithColumnRename(): void
+    {
+        $this->createSimpleTable('legacy_users');
+        $this->connection->statement("INSERT INTO legacy_users (name) VALUES ('Alice')");
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('legacy_users')
+            ->id()
+            ->column(ColumnType::String, 'full_name', length: 120)
+            ->renameColumn('name', 'full_name');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame(
+            [SchemaOperation::RenameTable, SchemaOperation::RenameColumn, SchemaOperation::ModifyColumn],
+            $operations,
+        );
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        $rows = $this->connection->selectSql('SELECT full_name FROM users')->all();
+        self::assertSame('Alice', $rows[0]->full_name);
+
+        $converged = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'full_name', length: 120);
+        self::assertSame([], $differ->diff([$converged]));
+    }
+
+    /**
      * A declared column rename emits an executable RenameColumn change,
      * suppresses the add+drop advisory, and preserves the data.
      */

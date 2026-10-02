@@ -189,6 +189,15 @@ not match reality falls through to the usual create/drop handling with
 the rename reported as a suggestion. A column rename plus a shape change
 sequences two changes: `RenameColumn` first, then `ModifyColumn`.
 
+A declared **table** rename is the starting point of the table's diff,
+not the end of it: the columns the rename carries over (the old table's
+live shape) are diffed against the desired shape, so any column drift —
+adds, modifies, drops — is emitted in the **same plan**, after the
+rename and targeting the new table name. Applying the plan leaves the
+schema fully in sync; a second `plan()` with a fresh blueprint is empty.
+Table and column renames compose too: `renamedFrom()` + `renameColumn()`
++ a shape change sequences `RenameTable` → `RenameColumn` → `ModifyColumn`.
+
 ### Content drift: ModifyColumn
 
 A column present on both sides with a changed type, nullability, or

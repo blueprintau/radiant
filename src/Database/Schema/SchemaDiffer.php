@@ -95,6 +95,23 @@ final class SchemaDiffer
                 // The old table is RENAMED AWAY, not dropped — the drop
                 // loop must not emit a DropTable for it.
                 $renamedAway[] = $renamedFrom;
+
+                // The rename is the STARTING point, not the terminal one:
+                // the columns the rename carries over (the old table's live
+                // shape) are diffed against the desired shape, so the follow-up
+                // column/index/constraint changes land in the SAME plan. The
+                // changes target the NEW name — the rename applies first
+                // (renames precede alters in the final ordering).
+                foreach ([
+                    ...$this->diffTable($table, $blueprint, $renamedFrom),
+                    $this->diffIndexes($table, $blueprint, $renamedFrom),
+                    ...$this->diffForeignKeys($table, $blueprint, $renamedFrom),
+                    ...$this->diffChecks($table, $blueprint, $renamedFrom),
+                ] as $change) {
+                    if ($change !== null) {
+                        $alters[] = $change;
+                    }
+                }
                 continue;
             }
 
@@ -415,11 +432,12 @@ final class SchemaDiffer
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint
+     * @param  string|null  $liveTable  The live table to read, when it differs from the target (a declared rename).
      * @return list<SchemaChange>
      */
-    private function diffTable(string $table, Blueprint $blueprint): array
+    private function diffTable(string $table, Blueprint $blueprint, string|null $liveTable = null): array
     {
-        $live = $this->inspector->table($table);
+        $live = $this->inspector->table($liveTable ?? $table);
         $liveColumns = [];
 
         foreach ($live->columns as $column) {
@@ -756,11 +774,12 @@ final class SchemaDiffer
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint
+     * @param  string|null  $liveTable  The live table to read, when it differs from the target (a declared rename).
      * @return list<SchemaChange>
      */
-    private function diffForeignKeys(string $table, Blueprint $blueprint): array
+    private function diffForeignKeys(string $table, Blueprint $blueprint, string|null $liveTable = null): array
     {
-        $live = $this->inspector->table($table);
+        $live = $this->inspector->table($liveTable ?? $table);
 
         $liveForeignKeys = $live->foreignKeys;
         $matched = [];
@@ -875,11 +894,12 @@ final class SchemaDiffer
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint
+     * @param  string|null  $liveTable  The live table to read, when it differs from the target (a declared rename).
      * @return list<SchemaChange>
      */
-    private function diffChecks(string $table, Blueprint $blueprint): array
+    private function diffChecks(string $table, Blueprint $blueprint, string|null $liveTable = null): array
     {
-        $live = $this->inspector->table($table);
+        $live = $this->inspector->table($liveTable ?? $table);
 
         $liveChecks = [];
 
@@ -1027,11 +1047,12 @@ final class SchemaDiffer
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint
+     * @param  string|null  $liveTable  The live table to read, when it differs from the target (a declared rename).
      * @return SchemaChange|null
      */
-    private function diffIndexes(string $table, Blueprint $blueprint): ?SchemaChange
+    private function diffIndexes(string $table, Blueprint $blueprint, string|null $liveTable = null): ?SchemaChange
     {
-        $live = $this->inspector->table($table);
+        $live = $this->inspector->table($liveTable ?? $table);
 
         // Live indexes by name (named ones only — unnamed ride the
         // columns' unique flag).
