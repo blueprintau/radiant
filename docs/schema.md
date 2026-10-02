@@ -238,6 +238,51 @@ throws) → apply in order → return the applied changes. The confirm
 callback is the applier's decision point — the same `SchemaChange` data
 a CLI consumes directly.
 
+An optional `onChange` callback fires after each change is applied
+successfully — for progress bars and live log lines:
+
+```php
+$applied = $synchronizer->sync(
+    $desired,
+    confirm: fn (SchemaChange $change) => confirmWithUser($change->description),
+    onChange: function (SchemaChange $change): void {
+        $progress->advance(message: $change->description);
+    },
+);
+```
+
+A throwing `onChange` aborts the run (and rolls it back when
+`transactional: true`).
+
+### Two-phase sync: plan() + apply()
+
+A host that wants to *display* the plan before applying it can split the
+loop into two phases — the shown plan is then exactly what gets applied,
+with no second diff pass:
+
+```php
+$conn->withLock(function () use ($synchronizer, $desired): void {
+    $plan = $synchronizer->plan($desired);
+
+    foreach ($plan as $change) {
+        render($change->description, destructive: $change->destructive);
+    }
+
+    if (!confirmDestructive()) {
+        return;
+    }
+
+    $synchronizer->apply($plan, confirm: ...);
+}, 'radiant:schema');
+```
+
+`plan()` computes the changes and touches nothing; `apply()` applies
+exactly the given changes — no re-diff — with the same confirm gate and
+transactional semantics as `sync()`. Neither takes a lock itself: the
+caller holds the `'radiant:schema'` lock across the whole flow, which is
+also what guarantees no drift between the shown and applied plan.
+`sync()` remains the one-shot form (plan + apply under its own lock).
+
 ### Remaining limits
 
 A declared index absent from the live table is a deployment gap the

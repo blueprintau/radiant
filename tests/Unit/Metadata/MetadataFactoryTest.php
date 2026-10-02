@@ -20,6 +20,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\CustomDeletedAtPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DoubleUniqueModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DivergentDefaultModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmailVerificationToken;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyFkColumnsModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyTableModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Box;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Category;
@@ -495,5 +496,45 @@ final class MetadataFactoryTest extends TestCase
         self::assertSame($parent, MetadataFactory::for(User::class));
         self::assertSame('users', $parent->tableName);
         self::assertCount(6, $parent->properties);
+    }
+
+    // ---- Lenient resolution ----
+
+    /**
+     * tryFor() resolves a valid class and returns null for a broken one —
+     * and a failed build is never cached, so the strict for() still throws.
+     */
+    public function testTryForResolvesValidAndSkipsBroken(): void
+    {
+        $metadata = MetadataFactory::tryFor(User::class);
+
+        self::assertInstanceOf(ClassMetadata::class, $metadata);
+        self::assertSame('users', $metadata->tableName);
+
+        // A class whose metadata fails validation resolves to null.
+        self::assertNull(MetadataFactory::tryFor(EmptyFkColumnsModel::class));
+
+        // The failed build left no cache entry — the strict path throws.
+        $this->expectException(\InvalidArgumentException::class);
+        MetadataFactory::for(EmptyFkColumnsModel::class);
+    }
+
+    /**
+     * tables() maps table-owning classes; with skipBroken it silently
+     * skips broken and column-less ones instead of throwing.
+     */
+    public function testTablesSkipBrokenSkipsBrokenAndTablelessClasses(): void
+    {
+        $tables = MetadataFactory::tables([
+            User::class,
+            EmptyFkColumnsModel::class,
+            ConcreteBase::class,
+            MtiAdmin::class,
+        ], skipBroken: true);
+
+        self::assertSame([
+            User::class => 'users',
+            MtiAdmin::class => 'admins',
+        ], $tables);
     }
 }

@@ -649,4 +649,169 @@ final class MigrationSyncTest extends DatabaseTestCase
         $childRows = $this->connection->selectSql('SELECT author_id FROM posts')->all();
         self::assertCount(1, $childRows);
     }
+
+    // ---- Two-phase sync: plan() + apply() ----
+
+    /**
+     * plan() computes the changes but touches nothing — the schema is
+     * unchanged until apply() runs.
+     */
+    public function testPlanTouchesNothing(): void
+    {
+        $desired = (new Blueprint('plan_users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        $plan = $synchronizer->plan([$desired]);
+
+        self::assertCount(1, $plan);
+        self::assertSame(SchemaOperation::CreateTable, $plan[0]->operation);
+        self::assertFalse(
+            $this->connection->schemaInspector->hasTable('plan_users'),
+            'plan() must not apply anything',
+        );
+    }
+
+    /**
+     * apply() applies exactly the pre-computed plan — no re-diff — and
+     * returns only the changes actually applied.
+     */
+    public function testApplyAppliesExactlyThePlan(): void
+    {
+        $desired = (new Blueprint('plan_users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $plan = $synchronizer->plan([$desired]);
+
+        $applied = $synchronizer->apply($plan);
+
+        self::assertSame($plan, $applied);
+        self::assertTrue($this->connection->schemaInspector->hasTable('plan_users'));
+
+        // Re-applying the same plan is applied verbatim — no re-diff — so
+        // a stale CREATE TABLE fails loudly instead of silently no-oping.
+        Expectation::throws(
+            fn () => $synchronizer->apply($plan),
+            \Throwable::class,
+        );
+    }
+
+    /**
+     * The two-phase flow under a host-held lock: plan → display → apply
+     * inside withLock() — the shown plan is exactly what gets applied.
+     */
+    public function testHostHeldLockPlanThenApply(): void
+    {
+        $desired = (new Blueprint('locked_users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        $applied = $this->connection->withLock(function () use ($desired, $synchronizer): array {
+            $plan = $synchronizer->plan([$desired]);
+
+            self::assertCount(1, $plan);
+
+            return $synchronizer->apply($plan);
+        }, 'radiant:schema');
+
+        self::assertCount(1, $applied);
+        self::assertTrue($this->connection->schemaInspector->hasTable('locked_users'));
+    }
+
+    /**
+     * apply() honors the confirm gate: a declined destructive change is
+     * excluded from the return and not applied.
+     */
+    public function testApplyConfirmGateExcludesDeclinedChanges(): void
+    {
+        $this->createSimpleTable('plan_temp');
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $plan = $synchronizer->plan([]);
+
+        self::assertCount(1, $plan);
+        self::assertTrue($plan[0]->destructive);
+
+        $applied = $synchronizer->apply($plan, confirm: fn (): bool => false);
+
+        self::assertSame([], $applied);
+        self::assertTrue($this->connection->schemaInspector->hasTable('plan_temp'));
+
+        $applied = $synchronizer->apply($plan, confirm: fn (): bool => true);
+
+        self::assertSame($plan, $applied);
+        self::assertFalse($this->connection->schemaInspector->hasTable('plan_temp'));
+    }
+
+    // ---- onChange callback ----
+
+    /**
+     * onChange fires once per applied change, in order, with the change
+     * instance — and never for declined changes.
+     */
+    public function testOnChangeFiresPerAppliedChange(): void
+    {
+        $this->createSimpleTable('cb_temp');
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        $seen = [];
+        $applied = $synchronizer->sync([], confirm: fn (): bool => false, onChange: function ($change) use (&$seen): void {
+            $seen[] = $change;
+        });
+
+        self::assertSame([], $applied);
+        self::assertSame([], $seen, 'a declined change must not fire onChange');
+
+        $applied = $synchronizer->sync([], confirm: fn (): bool => true, onChange: function ($change) use (&$seen): void {
+            $seen[] = $change;
+        });
+
+        self::assertCount(1, $applied);
+        self::assertSame([$applied[0]], $seen, 'onChange must receive the applied change instance');
+    }
+
+    /**
+     * onChange fires for every applied change under transactional sync —
+     * and a throwing callback aborts the run and rolls everything back.
+     */
+    public function testTransactionalOnChangeFiresAndThrowingCallbackRollsBack(): void
+    {
+        $synchronizer = new SchemaSynchronizer($this->connection);
+
+        $seen = [];
+        $applied = $synchronizer->sync([
+            (new Blueprint('cb_tx_a'))->id()->string('name', 50),
+            (new Blueprint('cb_tx_b'))->id()->string('name', 50),
+        ], transactional: true, onChange: function ($change) use (&$seen): void {
+            $seen[] = $change;
+        });
+
+        self::assertCount(2, $applied);
+        self::assertSame($applied, $seen);
+        self::assertSame(0, $this->connection->transactionLevel());
+
+        // A throwing callback aborts the run — the first CREATE TABLE
+        // rolls back with the failed transaction.
+        Expectation::throws(function () use ($synchronizer): void {
+            $synchronizer->sync([
+                (new Blueprint('cb_tx_c'))->id(),
+                (new Blueprint('cb_tx_d'))->id(),
+            ], transactional: true, onChange: function (): void {
+                throw new \RuntimeException('progress bar exploded');
+            });
+        }, \RuntimeException::class);
+
+        self::assertFalse(
+            $this->connection->schemaInspector->hasTable('cb_tx_c'),
+            'the first CREATE TABLE must roll back when onChange throws',
+        );
+        self::assertSame(0, $this->connection->transactionLevel());
+    }
 }

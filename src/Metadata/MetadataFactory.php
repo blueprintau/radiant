@@ -53,6 +53,25 @@ final class MetadataFactory
     }
 
     /**
+     * Resolve a class's metadata, returning null instead of throwing when
+     * it cannot be built.
+     *
+     * A failed build is never cached, so a later strict {@see for()} call
+     * on the same class still throws.
+     *
+     * @param  class-string<Model>  $class
+     * @return ClassMetadata|null  Null when the class is missing or its metadata fails validation.
+     */
+    public static function tryFor(string $class): ?ClassMetadata
+    {
+        try {
+            return self::for($class);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
      * Invalidate cached metadata.
      *
      * @param  string|null  $class  Null clears the whole cache.
@@ -73,20 +92,23 @@ final class MetadataFactory
      * to its resolved table name.
      *
      * @param  list<class-string<Model>>  $models
+     * @param  bool  $skipBroken  Whether classes whose metadata cannot be resolved are skipped instead of throwing.
      * @return array<class-string<Model>, string>
+     * @throws \InvalidArgumentException
+     * @throws \LogicException
      */
-    public static function tables(array $models): array
+    public static function tables(array $models, bool $skipBroken = false): array
     {
         $tables = [];
 
         foreach ($models as $model) {
-            $tableName = self::for($model)->tableName;
+            $metadata = $skipBroken ? self::tryFor($model) : self::for($model);
 
-            if ($tableName === null) {
-                continue; // no columns of its own — no table (rule 4)
+            if ($metadata === null || $metadata->tableName === null) {
+                continue; // unresolvable, or no columns of its own — no table (rule 4)
             }
 
-            $tables[$model] = $tableName;
+            $tables[$model] = $metadata->tableName;
         }
 
         return $tables;

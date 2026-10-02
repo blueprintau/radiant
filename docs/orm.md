@@ -431,3 +431,20 @@ MetadataFactory::clear(User::class); // clear one class
 Clearing one class does not clear its ancestors or descendants (their
 metadata is cached independently) — prefer the full clear when a model
 family changes.
+
+For hosts that must tolerate broken classes — a schema-sync command
+filtering models by FQCN, where an excluded model may be excluded
+*because* its metadata is unmappable — two lenient entry points skip
+instead of throwing:
+
+```php
+$metadata = MetadataFactory::tryFor(User::class); // ClassMetadata|null
+
+$tables = MetadataFactory::tables($models, skipBroken: true); // class => table
+```
+
+`tryFor()` returns null when a class is missing or its metadata fails
+validation; `tables()` with `skipBroken: true` maps table-owning classes
+to their table names and silently skips the rest. A failed build is never
+cached, so a later strict `MetadataFactory::for()` call on the same class
+still throws.
