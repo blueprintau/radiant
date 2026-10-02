@@ -10,13 +10,13 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 
 /**
- * Fixture: a single-table model whose insert hook CLAIMS the write —
- * the performInsert claim arm (Model::performInsert's early return).
+ * Fixture: a single-table model whose update hook CLAIMS the write —
+ * the performUpdate claim arm.
  */
-#[Table(name: 'hook_claim_posts')]
-class HookClaimPost extends Model
+#[Table(name: 'hook_claim_updates')]
+class HookClaimUpdatePost extends Model
 {
-    use InsertClaimHookTrait;
+    use UpdateClaimHookTrait;
 
     /**
      * The post's id.
