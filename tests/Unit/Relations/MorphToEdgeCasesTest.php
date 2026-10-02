@@ -64,7 +64,7 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->find(3);
         self::assertNotNull($comment);
 
-        self::assertCount(0, $comment->commentable()->getResults());
+        self::assertCount(0, $comment->commentable()->get());
     }
 
     /**
@@ -83,7 +83,7 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('does not resolve to an existing model class');
 
-        $comment->commentable()->getResults();
+        $comment->commentable()->get();
     }
 
     /**
@@ -202,7 +202,7 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('holds a non-string value');
 
-        $comment->commentable()->getResults();
+        $comment->commentable()->get();
     }
 
     /**
@@ -229,7 +229,7 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
             [[PolyPost::class, '1']],
         );
 
-        $loaded = $relation->getResults();
+        $loaded = $relation->get();
         self::assertCount(1, $loaded);
         self::assertInstanceOf(PolyPost::class, $loaded->first());
     }
@@ -277,6 +277,6 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $row = PolyComment::newQuery()->find(9);
         self::assertNotNull($row);
 
-        $row->commentable()->getResults();
+        $row->commentable()->get();
     }
 }

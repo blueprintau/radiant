@@ -205,12 +205,12 @@ final class OrFailTest extends DatabaseTestCase
 
         // The same contract through a relation's constrained query: ada
         // has TWO posts. firstOrFail() would limit(1) a shared builder,
-        // hiding the second post from a later getResults().
+        // hiding the second post from a later get().
         $ada = OfUser::newQuery()->where('name', '=', 'ada')->firstOrFail();
         $posts = $ada->posts();
         $posts->firstOrFail();
 
-        self::assertCount(2, $posts->getResults());
+        self::assertCount(2, $posts->get());
     }
 
     // ---- Static forwarders ----

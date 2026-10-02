@@ -20,7 +20,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * A relation between two models.
  *
  * A relation is a lazily-executed query: constructing it runs nothing;
- * {@see Relation::getResults()} runs it. The FK constraint against the
+ * {@see Relation::get()} runs it. The FK constraint against the
  * parent's key is applied in the constructor, so any filters you add are
  * on top of it.
  *
@@ -132,7 +132,7 @@ abstract class Relation
     /**
      * Name this relation after the model method that created it.
      *
-     * This lets `getResults()` reuse an eagerly-loaded result when one
+     * This lets `get()` reuse an eagerly-loaded result when one
      * exists. Passing null does nothing.
      *
      * @param  string|null  $name
@@ -177,7 +177,7 @@ abstract class Relation
         if (!isset($this->query)) {
             throw new \LogicException(
                 static::class . ' cannot compose filters — its query is built lazily per '
-                . 'resolved type; read the results with getResults() instead.'
+                . 'resolved type; read the results with get() instead.'
             );
         }
 
@@ -313,11 +313,16 @@ abstract class Relation
      * filter has been added, and the parent actually has the relation
      * loaded. Everything else runs a fresh query.
      *
+     * Unlike the query builder's `get()`, this may return a cached
+     * eagerly-loaded result without running SQL. Pass `fresh: true` to
+     * bypass the cache and always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return Collection<TRelated>
      */
-    final public function getResults(): Collection
+    final public function get(bool $fresh = false): Collection
     {
-        if ($this->name !== null && !$this->composed && $this->parent->relationLoaded($this->name)) {
+        if (!$fresh && $this->name !== null && !$this->composed && $this->parent->relationLoaded($this->name)) {
             return self::wrapCached($this->parent->cachedRelation($this->name));
         }
 

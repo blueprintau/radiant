@@ -162,10 +162,10 @@ final class CollectionTest extends DatabaseTestCase
         $users->load('posts');
 
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->posts()->getResults());
+        self::assertCount(2, $users[0]->posts()->get());
         self::assertNotNull($users[1]);
         self::assertTrue($users[1]->relationLoaded('posts'));
-        self::assertCount(0, $users[1]->posts()->getResults());
+        self::assertCount(0, $users[1]->posts()->get());
     }
 
     /**

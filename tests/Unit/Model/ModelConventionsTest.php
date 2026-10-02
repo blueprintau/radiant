@@ -170,7 +170,7 @@ final class ModelConventionsTest extends DatabaseTestCase
         $author = MvAuthor::newQuery()->first();
         self::assertNotNull($author);
 
-        $posts = $author->posts()->getResults();
+        $posts = $author->posts()->get();
 
         // The derived FK column exists on the related table (declared) and
         // matches nothing — the relation compiled and ran against it.

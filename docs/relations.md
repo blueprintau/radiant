@@ -55,8 +55,8 @@ The relation carries the shared filter vocabulary itself (`where`,
 happens right on the relation:
 
 ```php
-foreach ($user->posts()->orderBy('created_at')->getResults() as $post) { ... }
-$recent = $user->posts()->where('active', '=', 1)->limit(5)->getResults();
+foreach ($user->posts()->orderBy('created_at')->get() as $post) { ... }
+$recent = $user->posts()->where('active', '=', 1)->limit(5)->get();
 ```
 
 **Relations are immutable.** Every filter and configurator (`withPivot()`,
@@ -71,10 +71,11 @@ first related model or throws
 relation matches none, and `sole()` requires exactly one match (more than
 one throws `MultipleRecordsFoundException`).
 
-`getResults()` and the fail-fast reads differ in one way: `getResults()`
+`get()` and the fail-fast reads differ in one way: `get()`
 is cache-aware (see [Eager loading](#eager-loading) — after `with()`, the
 unfiltered read returns the loaded result), while `firstOrFail()` and
-`sole()` always execute against the database.
+`sole()` always execute against the database. Pass `fresh: true` to
+bypass the cache and always run the query.
 
 ## Grouped aggregates
 
@@ -110,7 +111,7 @@ $totals = $event->rsvps()->aggregateBy(Aggregate::sum('amount'), 'status');
 ```
 
 Both are reads, not compositions: they never mark the relation composed,
-so a later `getResults()` is unaffected.
+so a later `get()` is unaffected.
 
 The same methods exist on the query builders — `Model::newQuery()` and
 `Database::table()` — with the same contracts. On a model builder the
@@ -148,7 +149,7 @@ $users = User::with('posts.comments')->get();      // dot-notation nests
 An unknown relation name throws **at the `with()` call** — the typo is
 caught at the call site. Loaded relations are cached on the instance
 (`relationLoaded()` checks); the relation METHOD reads that cache —
-`$user->posts()->getResults()` returns the eagerly-loaded result without
+`$user->posts()->get()` returns the eagerly-loaded result without
 re-querying, and is typed by the method's declared return. The cache path
 disengages when it must: a composed chain (`$user->posts()->where(...)`,
 or `withPivot()` on a many-to-many) executes fresh (the cache was loaded
@@ -260,7 +261,7 @@ rows hydrate through its own model.
 
 **Static typing.** Without an allowlist, `morphTo` results are the honest
 `Model|null` (the related class is dynamic) — narrow with a local
-`instanceof` after reading `commentable()->getResults()->first()`. With
+`instanceof` after reading `commentable()->get()->first()`. With
 an allowlist, the relation narrows statically: declare the list in the
 relation method and the reads deliver exactly those classes,
 

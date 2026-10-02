@@ -75,15 +75,15 @@ final class RelationsE2ETest extends DatabaseTestCase
 
     /**
      * Lazy HasMany: the relation composes (constraint + orderBy) and
-     * executes on getResults().
+     * executes on get().
      */
     public function testLazyHasMany(): void
     {
         ['user' => $user] = $this->seed();
 
         // The relation's own filter methods compose onto the constrained
-        // builder — orderBy returns the relation, getResults() materializes.
-        $posts = $user->posts()->orderBy('title')->getResults();
+        // builder — orderBy returns the relation, get() materializes.
+        $posts = $user->posts()->orderBy('title')->get();
 
         self::assertCount(2, $posts);
         self::assertNotNull($posts[0]);
@@ -103,14 +103,14 @@ final class RelationsE2ETest extends DatabaseTestCase
         $post = RelPost::where('title', '=', 'First')->first();
         self::assertNotNull($post);
 
-        $author = $post->author()->getResults();
+        $author = $post->author()->get();
         self::assertCount(1, $author);
         self::assertNotNull($author[0]);
         self::assertSame($user->id, $author[0]->id);
 
         $orphan = RelPost::where('title', '=', 'Orphan')->first();
         self::assertNotNull($orphan);
-        self::assertCount(0, $orphan->author()->getResults());
+        self::assertCount(0, $orphan->author()->get());
     }
 
     /**
@@ -120,7 +120,7 @@ final class RelationsE2ETest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seed();
 
-        $featured = $user->featuredPost()->getResults();
+        $featured = $user->featuredPost()->get();
 
         self::assertCount(1, $featured);
         self::assertNotNull($featured[0]);
@@ -153,27 +153,27 @@ final class RelationsE2ETest extends DatabaseTestCase
         $first->authorId = $second->id;
         $first->save();
 
-        $lazy = $second->featuredPost()->getResults();
+        $lazy = $second->featuredPost()->get();
         self::assertCount(1, $lazy);
         self::assertNotNull($lazy[0]);
         self::assertSame(1, $lazy[0]->id, 'lazy HasOne picks the lowest-PK duplicate');
 
         $eager = RelUser::with('featuredPost')->find($second->id);
         self::assertNotNull($eager);
-        $featured = $eager->featuredPost()->getResults()->first();
+        $featured = $eager->featuredPost()->get()->first();
         self::assertInstanceOf(RelPost::class, $featured);
         self::assertSame(1, $featured->id, 'eager HasOne must agree with lazy: lowest PK wins');
 
         // The first user still owns exactly one post ('Late' is not seeded;
         // 'Second' id 2 remains theirs): their winner is id 2 on both paths.
-        $lazyFirst = $user->featuredPost()->getResults();
+        $lazyFirst = $user->featuredPost()->get();
         self::assertCount(1, $lazyFirst);
         self::assertNotNull($lazyFirst[0]);
         self::assertSame(2, $lazyFirst[0]->id);
 
         $eagerFirst = RelUser::with('featuredPost')->find($user->id);
         self::assertNotNull($eagerFirst);
-        $featuredFirst = $eagerFirst->featuredPost()->getResults()->first();
+        $featuredFirst = $eagerFirst->featuredPost()->get()->first();
         self::assertInstanceOf(RelPost::class, $featuredFirst);
         self::assertSame(2, $featuredFirst->id);
     }
@@ -193,8 +193,8 @@ final class RelationsE2ETest extends DatabaseTestCase
         self::assertNotNull($users[0]);
         self::assertNotNull($users[1]);
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->posts()->getResults());
-        self::assertCount(0, $users[1]->posts()->getResults(), 'the second user has no posts');
+        self::assertCount(2, $users[0]->posts()->get());
+        self::assertCount(0, $users[1]->posts()->get(), 'the second user has no posts');
     }
 
     /**
@@ -209,8 +209,8 @@ final class RelationsE2ETest extends DatabaseTestCase
         self::assertCount(3, $posts);
         self::assertNotNull($posts[0]);
         self::assertNotNull($posts[2]);
-        self::assertInstanceOf(RelUser::class, $posts[0]->author()->getResults()->first());
-        self::assertCount(0, $posts[2]->author()->getResults(), 'the orphan has no author');
+        self::assertInstanceOf(RelUser::class, $posts[0]->author()->get()->first());
+        self::assertCount(0, $posts[2]->author()->get(), 'the orphan has no author');
     }
 
     /**
@@ -229,8 +229,8 @@ final class RelationsE2ETest extends DatabaseTestCase
         self::assertCount(2, $teamPosts);
         self::assertNotNull($teamPosts[0]);
         self::assertNotNull($teamPosts[1]);
-        $firstTeam = $teamPosts[0]->team()->getResults()->first();
-        $secondTeam = $teamPosts[1]->team()->getResults()->first();
+        $firstTeam = $teamPosts[0]->team()->get()->first();
+        $secondTeam = $teamPosts[1]->team()->get()->first();
         self::assertInstanceOf(RelTeam::class, $firstTeam);
         self::assertInstanceOf(RelTeam::class, $secondTeam);
         self::assertSame('Core', $firstTeam->name);
@@ -252,7 +252,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $second = $this->seedSecondUser();
         $post->authorId = $second->id;
 
-        $author = $post->author()->getResults();
+        $author = $post->author()->get();
         self::assertCount(1, $author);
         self::assertNotNull($author[0]);
         self::assertSame($second->id, $author[0]->id);
@@ -271,10 +271,10 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         self::assertCount(2, $teamPosts);
         self::assertNotNull($teamPosts[0]);
-        $team = $teamPosts[0]->team()->getResults()->first();
+        $team = $teamPosts[0]->team()->get()->first();
         self::assertInstanceOf(RelTeam::class, $team);
         self::assertTrue($team->relationLoaded('owner'));
-        self::assertCount(1, $team->owner()->getResults());
+        self::assertCount(1, $team->owner()->get());
     }
 
     /**
@@ -391,19 +391,19 @@ final class RelationsE2ETest extends DatabaseTestCase
         $loaded = RelUser::with('teamPosts')->find($user->id);
 
         self::assertNotNull($loaded);
-        $posts = $loaded->teamPosts()->getResults();
+        $posts = $loaded->teamPosts()->get();
         self::assertInstanceOf(Collection::class, $posts);
         self::assertCount(2, $posts);
     }
 
     /**
-     * LAZY through: getResults() executes the joined query for one parent.
+     * LAZY through: get() executes the joined query for one parent.
      */
     public function testLazyThrough(): void
     {
         ['user' => $user] = $this->seed();
 
-        $posts = $user->teamPosts()->getResults();
+        $posts = $user->teamPosts()->get();
 
         self::assertCount(2, $posts);
     }
@@ -415,12 +415,12 @@ final class RelationsE2ETest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seed();
 
-        $lazy = $user->featuredTeamPost()->getResults();
+        $lazy = $user->featuredTeamPost()->get();
         self::assertCount(1, $lazy);
 
         $loaded = RelUser::with('featuredTeamPost')->find($user->id);
         self::assertNotNull($loaded);
-        self::assertInstanceOf(RelTeamPost::class, $loaded->featuredTeamPost()->getResults()->first());
+        self::assertInstanceOf(RelTeamPost::class, $loaded->featuredTeamPost()->get()->first());
     }
 
     /**
@@ -449,7 +449,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         $loaded = RelUser::with('trackedTeamPosts')->find($user->id);
         self::assertNotNull($loaded);
-        $posts = $loaded->trackedTeamPosts()->getResults();
+        $posts = $loaded->trackedTeamPosts()->get();
 
         self::assertInstanceOf(Collection::class, $posts);
         self::assertCount(1, $posts, 'the trashed team post must not leak through the eager through load');
@@ -457,7 +457,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         self::assertSame('Alpha', $posts[0]->title);
 
         // The lazy path agrees — the scope composes there too.
-        $lazy = $user->trackedTeamPosts()->getResults();
+        $lazy = $user->trackedTeamPosts()->get();
         self::assertCount(1, $lazy);
     }
 
@@ -489,7 +489,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
         self::assertNotNull($users[0]);
         self::assertTrue($users[0]->relationLoaded('posts'));
-        self::assertCount(2, $users[0]->posts()->getResults());
+        self::assertCount(2, $users[0]->posts()->get());
     }
 
     /**
@@ -570,7 +570,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
     /**
      * countBy runs its own grouped query on a scoped clone — the
-     * relation's builder is untouched, so a later getResults() still
+     * relation's builder is untouched, so a later get() still
      * returns every post (the read never marks the relation composed).
      */
     public function testCountByLeavesTheRelationUntouched(): void
@@ -580,7 +580,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $relation = $user->posts();
         $relation->countBy('status');
 
-        self::assertCount(2, $relation->getResults());
+        self::assertCount(2, $relation->get());
     }
 
     /**
@@ -720,7 +720,7 @@ final class RelationsE2ETest extends DatabaseTestCase
 
     /**
      * countBy is a READ, not a composition: it does not mark the
-     * relation composed, so a later getResults() is unaffected.
+     * relation composed, so a later get() is unaffected.
      */
     public function testCountByLeavesRelationUncomposed(): void
     {
@@ -731,7 +731,7 @@ final class RelationsE2ETest extends DatabaseTestCase
         $relation = $user->posts();
         $relation->countBy('status');
 
-        self::assertCount(2, $relation->getResults());
+        self::assertCount(2, $relation->get());
     }
 
     /**

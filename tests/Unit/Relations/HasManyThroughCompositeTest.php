@@ -201,12 +201,12 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
     {
         ['us' => $us, 'de' => $de] = $this->seed();
 
-        $usLegs = $us->legs()->getResults();
+        $usLegs = $us->legs()->get();
         self::assertCount(2, $usLegs);
         self::assertSame(['pickup', 'dropoff'], $usLegs
             ->map(static fn (CmpLeg $leg) => $leg->position)->all());
 
-        $deLegs = $de->legs()->getResults();
+        $deLegs = $de->legs()->get();
         self::assertCount(1, $deLegs);
         self::assertNotNull($deLegs->first());
         self::assertSame('customs', $deLegs->first()->position);
@@ -246,7 +246,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         $ghost->name = 'Ghost';
         $ghost->save();
 
-        self::assertCount(0, $ghost->legs()->getResults());
+        self::assertCount(0, $ghost->legs()->get());
     }
 
     // ---- Eager composite paths ----
@@ -264,8 +264,8 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         self::assertNotNull($regions[0]);
         self::assertNotNull($regions[1]);
 
-        $deLegs = $regions[0]->legs()->getResults();
-        $usLegs = $regions[1]->legs()->getResults();
+        $deLegs = $regions[0]->legs()->get();
+        $usLegs = $regions[1]->legs()->get();
         self::assertInstanceOf(Collection::class, $deLegs);
         self::assertInstanceOf(Collection::class, $usLegs);
         self::assertCount(1, $deLegs, 'the DE region must get only its own leg');
@@ -340,7 +340,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
 
         $loadedGhost = $regions->first();
         self::assertNotNull($loadedGhost);
-        self::assertCount(0, $loadedGhost->legs()->getResults());
+        self::assertCount(0, $loadedGhost->legs()->get());
     }
 
     // ---- match() contracts ----
@@ -377,13 +377,13 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
             [[1, 'US'], [1, 'US'], [1, 'DE']],
         );
 
-        self::assertCount(2, $us->legs()->getResults());
-        self::assertCount(1, $de->legs()->getResults());
+        self::assertCount(2, $us->legs()->get());
+        self::assertCount(1, $de->legs()->get());
 
         // A null key drops its row — the DE region loads empty.
         $us->legs()->match([$us, $de], $legs, 'legs', [[1, 'US'], [1, 'US'], null]);
-        self::assertCount(2, $us->legs()->getResults());
-        self::assertCount(0, $de->legs()->getResults());
+        self::assertCount(2, $us->legs()->get());
+        self::assertCount(0, $de->legs()->get());
     }
 
     // ---- HasOneThrough composite ----
@@ -395,7 +395,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
     {
         ['us' => $us] = $this->seed();
 
-        $legs = $us->firstLeg()->getResults();
+        $legs = $us->firstLeg()->get();
         self::assertCount(1, $legs);
         self::assertNotNull($legs->first());
         self::assertSame('pickup', $legs->first()->position);
@@ -412,7 +412,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         self::assertCount(2, $regions);
         self::assertNotNull($regions[1]);
 
-        $leg = $regions[1]->firstLeg()->getResults()->first();
+        $leg = $regions[1]->firstLeg()->get()->first();
         self::assertInstanceOf(CmpLeg::class, $leg);
         self::assertSame('pickup', $leg->position);
     }
@@ -435,13 +435,13 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
 
         // Both US rows carry the same tuple — the first wins.
         $us->firstLeg()->match([$us], $legs, 'firstLeg', [[1, 'US'], [1, 'US'], [1, 'DE']]);
-        $cached = $us->firstLeg()->getResults();
+        $cached = $us->firstLeg()->get();
         self::assertNotNull($cached->first());
         self::assertSame($first->id, $cached->first()->id);
 
         // A null key skips its row — the second US row becomes the match.
         $us->firstLeg()->match([$us], $legs, 'firstLeg', [null, [1, 'US'], [1, 'DE']]);
-        $cached2 = $us->firstLeg()->getResults();
+        $cached2 = $us->firstLeg()->get();
         self::assertNotNull($cached2->first());
         self::assertSame($second->id, $cached2->first()->id);
     }
@@ -476,7 +476,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
 
         $loaded = RelUser::with('teamPosts')->find($user->id);
         self::assertNotNull($loaded);
-        self::assertCount(1, $loaded->teamPosts()->getResults());
+        self::assertCount(1, $loaded->teamPosts()->get());
     }
 
     /**
@@ -511,7 +511,7 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         $regions = CmpRegion::with('trackedShipments')->orderBy('country')->get();
         self::assertNotNull($regions[1]);
 
-        $shipments = $regions[1]->trackedShipments()->getResults();
+        $shipments = $regions[1]->trackedShipments()->get();
         self::assertInstanceOf(Collection::class, $shipments);
         self::assertCount(1, $shipments, 'the trashed shipment must not leak through the eager load');
         self::assertNotNull($shipments->first());
@@ -532,6 +532,6 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         $lonely->name = 'Lonely';
         $lonely->save();
 
-        self::assertCount(0, $lonely->legs()->getResults());
+        self::assertCount(0, $lonely->legs()->get());
     }
 }

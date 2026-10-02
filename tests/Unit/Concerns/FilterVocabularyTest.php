@@ -216,12 +216,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seedFirst();
 
-        $in = $user->posts()->whereIn('title', ['A1', 'B1'])->getResults();
+        $in = $user->posts()->whereIn('title', ['A1', 'B1'])->get();
         self::assertCount(1, $in);
         self::assertNotNull($in[0]);
         self::assertSame('A1', $in[0]->title);
 
-        $notIn = $user->posts()->whereNotIn('title', ['A1'])->getResults();
+        $notIn = $user->posts()->whereNotIn('title', ['A1'])->get();
         self::assertCount(1, $notIn);
         self::assertNotNull($notIn[0]);
         self::assertSame('A2', $notIn[0]->title);
@@ -235,12 +235,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seedFirst();
 
-        $eq = $user->posts()->whereEq('title', 'A1')->getResults();
+        $eq = $user->posts()->whereEq('title', 'A1')->get();
         self::assertCount(1, $eq);
         self::assertNotNull($eq[0]);
         self::assertSame('A1', $eq[0]->title);
 
-        $orEq = $user->posts()->whereEq('title', 'A1')->orWhereEq('title', 'A2')->getResults();
+        $orEq = $user->posts()->whereEq('title', 'A1')->orWhereEq('title', 'A2')->get();
         self::assertCount(2, $orEq);
     }
 
@@ -251,7 +251,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seedFirst();
 
-        $notNull = $user->posts()->whereNotNull('views')->getResults();
+        $notNull = $user->posts()->whereNotNull('views')->get();
         self::assertCount(2, $notNull);
     }
 
@@ -262,12 +262,12 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seedFirst();
 
-        $low = $user->posts()->whereBetween('views', [0, 150])->getResults();
+        $low = $user->posts()->whereBetween('views', [0, 150])->get();
         self::assertCount(1, $low);
         self::assertNotNull($low[0]);
         self::assertSame('A1', $low[0]->title);
 
-        $high = $user->posts()->whereNotBetween('views', [0, 150])->getResults();
+        $high = $user->posts()->whereNotBetween('views', [0, 150])->get();
         self::assertCount(1, $high);
         self::assertNotNull($high[0]);
         self::assertSame('A2', $high[0]->title);
@@ -283,7 +283,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
         $rows = $user->posts()
             ->where('title', '=', 'A1')
             ->orWhere('views', '=', 200)
-            ->getResults();
+            ->get();
 
         self::assertCount(2, $rows, 'both posts match under OR');
     }
@@ -295,7 +295,7 @@ final class FilterVocabularyTest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seedFirst();
 
-        $page = $user->posts()->orderBy('title')->offset(1)->limit(1)->getResults();
+        $page = $user->posts()->orderBy('title')->offset(1)->limit(1)->get();
 
         self::assertCount(1, $page);
         self::assertNotNull($page[0]);

@@ -325,7 +325,7 @@ final class RelationResidualsTest extends DatabaseTestCase
             }
         };
 
-        self::assertCount(2, $relation->getResults());
+        self::assertCount(2, $relation->get());
     }
 
     /**
@@ -341,13 +341,13 @@ final class RelationResidualsTest extends DatabaseTestCase
             fn ($query) => $query->where('status', '=', 'published')->orWhere('views', '>', 5),
         );
 
-        $results = $composed->getResults();
+        $results = $composed->get();
         self::assertCount(1, $results);
         self::assertNotNull($results->first());
         self::assertSame('First', $results->first()->title);
 
         // The original keeps only the constraint — immutability.
-        self::assertCount(2, $user->posts()->getResults());
+        self::assertCount(2, $user->posts()->get());
     }
 
     /**
@@ -479,14 +479,14 @@ final class RelationResidualsTest extends DatabaseTestCase
 
         // Both rows carry the same parent key — the first (Alpha) wins.
         $user->featuredTeamPost()->match([$user], $results, 'featuredTeamPost', [$team->id, $team->id]);
-        $cached = $user->featuredTeamPost()->getResults();
+        $cached = $user->featuredTeamPost()->get();
         self::assertCount(1, $cached);
         self::assertNotNull($cached->first());
         self::assertSame($firstResult->id, $cached->first()->id);
 
         // A null key skips its row — the second (Beta) becomes the match.
         $user->featuredTeamPost()->match([$user], $results, 'featuredTeamPost', [null, $team->id]);
-        $cached2 = $user->featuredTeamPost()->getResults();
+        $cached2 = $user->featuredTeamPost()->get();
         self::assertNotNull($cached2->first());
         self::assertSame($lastResult->id, $cached2->first()->id);
     }
@@ -504,15 +504,15 @@ final class RelationResidualsTest extends DatabaseTestCase
 
         // tag 1 → post 1, tag 2 → post 2.
         $post1->tags()->match([$post1, $post2], $results, 'tags', [1, 2]);
-        self::assertCount(1, $post1->tags()->getResults());
-        self::assertSame(1, $post1->tags()->getResults()->first()?->id);
-        self::assertCount(1, $post2->tags()->getResults());
-        self::assertSame(2, $post2->tags()->getResults()->first()?->id);
+        self::assertCount(1, $post1->tags()->get());
+        self::assertSame(1, $post1->tags()->get()->first()?->id);
+        self::assertCount(1, $post2->tags()->get());
+        self::assertSame(2, $post2->tags()->get()->first()?->id);
 
         // A null key drops its row — post 2 loads empty.
         $post1->tags()->match([$post1, $post2], $results, 'tags', [1, null]);
-        self::assertCount(1, $post1->tags()->getResults());
-        self::assertCount(0, $post2->tags()->getResults());
+        self::assertCount(1, $post1->tags()->get());
+        self::assertCount(0, $post2->tags()->get());
     }
 
     /**
@@ -528,7 +528,7 @@ final class RelationResidualsTest extends DatabaseTestCase
 
         $post->image()->match([$post], $results, 'image', null);
 
-        $cached = $post->image()->getResults();
+        $cached = $post->image()->get();
         self::assertCount(1, $cached);
         self::assertNotNull($cached->first());
         self::assertSame(1, $cached->first()->id);
@@ -637,7 +637,7 @@ final class RelationResidualsTest extends DatabaseTestCase
         $unsaved = new B2mPost();
         $unsaved->title = 'no key';
 
-        self::assertCount(0, $unsaved->tags()->getResults());
+        self::assertCount(0, $unsaved->tags()->get());
     }
 
     // ---- MorphOne lazy first-match ----
@@ -650,7 +650,7 @@ final class RelationResidualsTest extends DatabaseTestCase
     {
         $post = $this->seedPoly();
 
-        $images = $post->image()->getResults();
+        $images = $post->image()->get();
         self::assertCount(1, $images);
         self::assertNotNull($images->first());
         self::assertSame('first.png', $images->first()->path);

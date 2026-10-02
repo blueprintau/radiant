@@ -57,7 +57,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $post = PolyPost::newQuery()->find(1);
         self::assertNotNull($post);
 
-        $comments = $post->comments()->getResults();
+        $comments = $post->comments()->get();
         self::assertCount(2, $comments);
         self::assertSame(['on post', 'on post too'], $comments->map(fn (PolyComment $m) => $m->attribute('body'))->all());
     }
@@ -70,14 +70,14 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->find(3);
         self::assertNotNull($comment);
 
-        $parent = $comment->commentable()->getResults()->first();
+        $parent = $comment->commentable()->get()->first();
         self::assertInstanceOf(PolyVideo::class, $parent);
         self::assertSame('Video One', $parent->title);
 
         $comment1 = PolyComment::newQuery()->find(1);
         self::assertNotNull($comment1);
 
-        $postParent = $comment1->commentable()->getResults()->first();
+        $postParent = $comment1->commentable()->get()->first();
         self::assertInstanceOf(PolyPost::class, $postParent);
         self::assertSame('Post One', $postParent->title);
     }
@@ -95,7 +95,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->find(4);
         self::assertNotNull($comment);
 
-        self::assertCount(0, $comment->commentable()->getResults());
+        self::assertCount(0, $comment->commentable()->get());
     }
 
     /**
@@ -114,7 +114,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('does not resolve to an existing model class');
 
-        $comment->commentable()->getResults();
+        $comment->commentable()->get();
     }
 
     /**
@@ -132,14 +132,14 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('is not in the relation\'s allowlist');
 
-        $relation->getResults();
+        $relation->get();
     }
 
     /**
      * The templated helper narrows STATICALLY at the call site: the
      * `[PolyPost::class]` literal infers `$TParent = PolyPost`, so the
      * loaded parent is PolyPost without a local instanceof (the generic
-     * flows through getResults() → first()). The runtime allowlist still
+     * flows through get() → first()). The runtime allowlist still
      * gates the resolution — a Video-typed row would throw.
      */
     public function testAllowlistedMorphToNarrowsStatically(): void
@@ -147,7 +147,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->find(1);
         self::assertNotNull($comment);
 
-        $parent = $comment->allowlistedWith([PolyPost::class])->getResults()->first();
+        $parent = $comment->allowlistedWith([PolyPost::class])->get()->first();
 
         // PHPStan sees PolyPost|null here — property access below is the
         // static proof; the instanceof assert is the runtime lock.
@@ -165,7 +165,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         self::assertCount(1, $posts);
         $post = $posts->first();
         self::assertNotNull($post);
-        $comments = $post->comments()->getResults();
+        $comments = $post->comments()->get();
         self::assertInstanceOf(Collection::class, $comments);
         self::assertCount(2, $comments);
     }
@@ -178,7 +178,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $post = PolyPost::newQuery()->with(['image'])->find(1);
         self::assertNotNull($post);
 
-        $image = $post->image()->getResults()->first();
+        $image = $post->image()->get()->first();
         self::assertInstanceOf(PolyImage::class, $image);
         self::assertSame('post.png', $image->path);
     }
@@ -196,7 +196,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         /** @var array<int, PolyPost|PolyVideo> */
         $byId = [];
         foreach ($comments as $comment) {
-            $byId[$comment->id] = $comment->commentable()->getResults()->first();
+            $byId[$comment->id] = $comment->commentable()->get()->first();
         }
 
         self::assertInstanceOf(PolyPost::class, $byId[1]);
@@ -219,7 +219,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->with(['commentable'])->find(4);
         self::assertNotNull($comment);
 
-        self::assertCount(0, $comment->commentable()->getResults());
+        self::assertCount(0, $comment->commentable()->get());
     }
 
     /**
@@ -240,10 +240,10 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $first = $comments->first();
         self::assertNotNull($first);
 
-        $parent = $first->commentable()->getResults()->first();
+        $parent = $first->commentable()->get()->first();
         self::assertInstanceOf(PolyPost::class, $parent);
 
-        $nested = $parent->comments()->getResults();
+        $nested = $parent->comments()->get();
         self::assertInstanceOf(Collection::class, $nested);
         self::assertCount(2, $nested);
     }
@@ -321,7 +321,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         self::assertSame(UuidVideo::class, $loaded->attribute('commentable_type'));
         self::assertSame($videoId, $loaded->attribute('commentable_id'));
 
-        $parent = $loaded->commentable()->getResults()->first();
+        $parent = $loaded->commentable()->get()->first();
         self::assertInstanceOf(UuidVideo::class, $parent);
         self::assertSame('Uuid One', $parent->title);
     }
@@ -368,6 +368,6 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains("[" . UuidVideo::class . "]'s primary key is [uuid]");
 
-        $comment->commentable()->getResults();
+        $comment->commentable()->get();
     }
 }

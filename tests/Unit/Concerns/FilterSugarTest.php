@@ -196,19 +196,19 @@ final class FilterSugarTest extends DatabaseTestCase
 
         self::assertSame(
             ['Alpha one', 'alpha two'],
-            $this->columnValues($user->posts()->whereLike('title', 'Alpha%')->getResults(), 'title'),
+            $this->columnValues($user->posts()->whereLike('title', 'Alpha%')->get(), 'title'),
         );
 
         self::assertSame(
             [],
-            $this->columnValues($user->posts()->whereNotLike('title', 'alpha%')->getResults(), 'title'),
+            $this->columnValues($user->posts()->whereNotLike('title', 'alpha%')->get(), 'title'),
         );
 
         $ben = FvUser::where('name', '=', 'ben')->first();
         self::assertNotNull($ben);
         self::assertSame(
             [],
-            $this->columnValues($ben->posts()->whereNotLike('title', 'Beta%')->getResults(), 'title'),
+            $this->columnValues($ben->posts()->whereNotLike('title', 'Beta%')->get(), 'title'),
         );
     }
 
@@ -225,7 +225,7 @@ final class FilterSugarTest extends DatabaseTestCase
             function (WhereBuilder $nested): WhereBuilder {
                 return $nested->whereEq('title', 'Alpha one');
             },
-        )->getResults();
+        )->get();
 
         self::assertSame(['Alpha one'], $this->columnValues($andGroup, 'title'));
 
@@ -236,7 +236,7 @@ final class FilterSugarTest extends DatabaseTestCase
             ->orWhereNested(function (WhereBuilder $nested): WhereBuilder {
                 return $nested->whereLike('title', 'Beta%');
             })
-            ->getResults();
+            ->get();
 
         self::assertSame(['Beta x.y'], $this->columnValues($orGroup, 'title'));
     }

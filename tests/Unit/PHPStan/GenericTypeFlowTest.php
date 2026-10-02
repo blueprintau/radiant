@@ -61,7 +61,7 @@ final class GenericTypeFlowTest extends DatabaseTestCase
     }
 
     /**
-     * The relation's getResults() delivers the declared TRelated — the
+     * The relation's get() delivers the declared TRelated — the
      * generic the fixture's `HasMany<TypeFlowPost>` promises.
      */
     public function testRelationDeliversDeclaredRelatedType(): void
@@ -69,7 +69,7 @@ final class GenericTypeFlowTest extends DatabaseTestCase
         $user = TypeFlowUser::newQuery()->first();
         self::assertNotNull($user);
 
-        $posts = $user->posts()->getResults();
+        $posts = $user->posts()->get();
 
         self::assertInstanceOf(Collection::class, $posts);
         foreach ($posts as $post) {
@@ -90,7 +90,7 @@ final class GenericTypeFlowTest extends DatabaseTestCase
         $user = TypeFlowUser::with('posts')->first();
         self::assertNotNull($user);
 
-        $posts = $user->posts()->getResults();
+        $posts = $user->posts()->get();
         self::assertInstanceOf(Collection::class, $posts);
         foreach ($posts as $post) {
             self::assertInstanceOf(TypeFlowPost::class, $post);

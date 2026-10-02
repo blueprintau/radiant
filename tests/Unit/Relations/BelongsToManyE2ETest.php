@@ -60,7 +60,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $post = B2mPost::newQuery()->find(1);
         self::assertNotNull($post);
 
-        $tags = $post->tags()->getResults();
+        $tags = $post->tags()->get();
         self::assertCount(2, $tags);
         self::assertSame(['php', 'db'], $tags->map(fn (B2mTag $m) => $m->attribute('label'))->all());
     }
@@ -77,13 +77,13 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
 
         $first = $posts->first();
         self::assertNotNull($first);
-        $tags1 = $first->tags()->getResults();
+        $tags1 = $first->tags()->get();
         self::assertInstanceOf(Collection::class, $tags1);
         self::assertCount(2, $tags1);
 
         $second = $posts->last();
         self::assertNotNull($second);
-        $tags2 = $second->tags()->getResults();
+        $tags2 = $second->tags()->get();
         self::assertInstanceOf(Collection::class, $tags2);
         self::assertCount(1, $tags2);
         self::assertSame('db', $tags2->first()?->attribute('label'));
@@ -97,7 +97,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $post = B2mPost::newQuery()->find(1);
         self::assertNotNull($post);
 
-        $tags = $post->tags()->withPivot('position')->getResults();
+        $tags = $post->tags()->withPivot('position')->get();
         self::assertCount(2, $tags);
         self::assertSame('first', $tags->first()?->pivotValue('position'));
         self::assertSame('second', $tags->last()?->pivotValue('position'));
@@ -158,7 +158,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $detached = $post->tags()->detach(1);
         self::assertSame(1, $detached);
 
-        $remaining = $post->tags()->getResults();
+        $remaining = $post->tags()->get();
         self::assertCount(1, $remaining);
         self::assertSame('db', $remaining->first()?->attribute('label'));
 
@@ -166,7 +166,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $post2 = B2mPost::newQuery()->find(2);
         self::assertNotNull($post2);
         self::assertSame(1, $post2->tags()->detach());
-        self::assertCount(0, $post2->tags()->getResults());
+        self::assertCount(0, $post2->tags()->get());
     }
 
     /**
@@ -183,7 +183,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
 
         self::assertSame(['attached' => [3], 'detached' => [1], 'updated' => []], $diff);
 
-        $labels = $post->tags()->getResults()
+        $labels = $post->tags()->get()
             ->map(fn (B2mTag $m) => $m->attribute('label'))->all();
         self::assertSame(['db', 'orm'], $labels);
     }
@@ -219,7 +219,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $diff = $post->tags()->syncWithoutDetaching([3]);
 
         self::assertSame(['attached' => [3], 'detached' => [], 'updated' => []], $diff);
-        self::assertCount(3, $post->tags()->getResults());
+        self::assertCount(3, $post->tags()->get());
     }
 
     /**
@@ -235,7 +235,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
 
         self::assertSame(['attached' => [3], 'detached' => [2]], $diff);
 
-        $labels = $post->tags()->getResults()
+        $labels = $post->tags()->get()
             ->map(fn (B2mTag $m) => $m->attribute('label'))->all();
         self::assertSame(['php', 'orm'], $labels);
     }
@@ -251,7 +251,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $post = B2mPost::newQuery()->with(['tags'])->find(3);
         self::assertNotNull($post);
 
-        $tags = $post->tags()->getResults();
+        $tags = $post->tags()->get();
         self::assertInstanceOf(Collection::class, $tags);
         self::assertCount(0, $tags);
     }
@@ -269,7 +269,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $post = B2mPost::newQuery()->find(2);
         self::assertNotNull($post);
 
-        $tags = $post->tags()->withTimestamps()->getResults();
+        $tags = $post->tags()->withTimestamps()->get();
         self::assertCount(2, $tags);
 
         $orm = null;
@@ -299,12 +299,12 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         self::assertNotSame($relation, $withPivot);
 
         // The original's lazy read selects no pivot alias.
-        $rows = $relation->getResults();
+        $rows = $relation->get();
         self::assertCount(2, $rows);
         self::assertNull($rows->first()?->pivotValue('position'));
 
         // The composed copy carries the pivot columns.
-        $pivoted = $withPivot->getResults();
+        $pivoted = $withPivot->get();
         self::assertCount(2, $pivoted);
         self::assertSame('first', $pivoted->first()?->pivotValue('position'));
     }

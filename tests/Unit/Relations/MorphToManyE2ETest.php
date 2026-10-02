@@ -58,14 +58,14 @@ final class MorphToManyE2ETest extends DatabaseTestCase
         $post = MtmPost::newQuery()->find(1);
         self::assertNotNull($post);
 
-        $tags = $post->tags()->getResults();
+        $tags = $post->tags()->get();
         self::assertCount(2, $tags);
         self::assertSame(['php', 'db'], $tags->map(fn (MtmTag $m) => $m->attribute('label'))->all());
 
         $video = MtmVideo::newQuery()->find(1);
         self::assertNotNull($video);
 
-        $videoTags = $video->tags()->getResults();
+        $videoTags = $video->tags()->get();
         self::assertCount(1, $videoTags);
         self::assertSame('db', $videoTags->first()?->attribute('label'));
     }
@@ -80,7 +80,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
         $post = $posts->first();
         self::assertNotNull($post);
 
-        $tags = $post->tags()->getResults();
+        $tags = $post->tags()->get();
         self::assertInstanceOf(Collection::class, $tags);
         self::assertCount(2, $tags);
     }
@@ -112,7 +112,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
         $tag = MtmTag::newQuery()->find(2);
         self::assertNotNull($tag);
 
-        $posts = $tag->posts()->getResults();
+        $posts = $tag->posts()->get();
         self::assertCount(1, $posts);
         self::assertSame('Post One', $posts->first()?->attribute('title'));
     }
@@ -132,7 +132,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
         }
 
         self::assertNotNull($db);
-        $posts = $db->posts()->getResults();
+        $posts = $db->posts()->get();
         self::assertInstanceOf(Collection::class, $posts);
         self::assertCount(1, $posts);
     }

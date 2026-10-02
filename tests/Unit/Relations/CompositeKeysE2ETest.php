@@ -155,12 +155,12 @@ class CompositeKeysE2ETest extends DatabaseTestCase
     {
         ['alpha' => $alpha, 'beta' => $beta] = $this->seed();
 
-        self::assertCount(1, $alpha->shipments()->getResults());
-        self::assertNotNull($alpha->shipments()->getResults()[0]);
-        self::assertSame('First', $alpha->shipments()->getResults()[0]->title);
-        self::assertCount(1, $beta->shipments()->getResults());
-        self::assertNotNull($beta->shipments()->getResults()[0]);
-        self::assertSame('Second', $beta->shipments()->getResults()[0]->title);
+        self::assertCount(1, $alpha->shipments()->get());
+        self::assertNotNull($alpha->shipments()->get()[0]);
+        self::assertSame('First', $alpha->shipments()->get()[0]->title);
+        self::assertCount(1, $beta->shipments()->get());
+        self::assertNotNull($beta->shipments()->get()[0]);
+        self::assertSame('Second', $beta->shipments()->get()[0]->title);
     }
 
     /**
@@ -185,7 +185,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         // → exactly the (1, US) row plus the Second row — 2 rows but the
         // (1, DE) 'First' row must NOT appear; and a title filter that
         // matches nothing must leave ONLY the tuple match.
-        $results = $alpha->shipments()->orWhere('title', '=', 'Second')->getResults();
+        $results = $alpha->shipments()->orWhere('title', '=', 'Second')->get();
 
         self::assertCount(2, $results);
 
@@ -197,7 +197,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         // 'Second' belongs to (1, DE) — its presence proves the OR hit the
         // constraint's edge; if the tuple had leaked flat, the (1, DE)
         // 'First' row would ALSO appear (its fk1 part matches).
-        self::assertNotContains('Second', $alpha->shipments()->getResults()->map(
+        self::assertNotContains('Second', $alpha->shipments()->get()->map(
             static fn (Model $shipment) => $shipment->attribute('title'),
         )->toArray(), 'the tuple tuple alone must not match (1, DE) rows');
     }
@@ -232,7 +232,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $alpha = CmpRegion::find(['id' => 1, 'country' => 'US']);
         self::assertNotNull($alpha);
 
-        $shipment = $alpha->primaryShipment()->getResults();
+        $shipment = $alpha->primaryShipment()->get();
         self::assertCount(1, $shipment);
         self::assertNotNull($shipment[0]);
         self::assertSame('First', $shipment[0]->title);
@@ -248,7 +248,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $shipment = CmpShipment::where('title', '=', 'Second')->first();
         self::assertNotNull($shipment);
 
-        $region = $shipment->region()->getResults();
+        $region = $shipment->region()->get();
         self::assertCount(1, $region);
         self::assertNotNull($region[0]);
         self::assertSame('Beta', $region[0]->name);
@@ -268,11 +268,11 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertNotNull($regions[0]);
         self::assertNotNull($regions[1]);
         // The typed relation method narrows statically — no local
-        // instanceof dance: shipments()->getResults() is
+        // instanceof dance: shipments()->get() is
         // Collection<CmpShipment>, so ->first() is CmpShipment|null
         // and property access type-checks after the null assert.
-        $deShipments = $regions[0]->shipments()->getResults();
-        $usShipments = $regions[1]->shipments()->getResults();
+        $deShipments = $regions[0]->shipments()->get();
+        $usShipments = $regions[1]->shipments()->get();
         self::assertInstanceOf(Collection::class, $deShipments);
         self::assertInstanceOf(Collection::class, $usShipments);
         $deShipment = $deShipments->first();
@@ -296,8 +296,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertCount(2, $shipments);
         self::assertNotNull($shipments[0]);
         self::assertNotNull($shipments[1]);
-        $deRegion = $shipments[0]->region()->getResults()->first();
-        $usRegion = $shipments[1]->region()->getResults()->first();
+        $deRegion = $shipments[0]->region()->get()->first();
+        $usRegion = $shipments[1]->region()->get()->first();
         self::assertInstanceOf(CmpRegion::class, $deRegion);
         self::assertInstanceOf(CmpRegion::class, $usRegion);
         self::assertSame('Beta', $deRegion->name);
@@ -321,7 +321,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $shipments = CmpShipment::with('region')->orderBy('id')->get();
         self::assertCount(3, $shipments);
         self::assertNotNull($shipments[2]);
-        self::assertCount(0, $shipments[2]->region()->getResults());
+        self::assertCount(0, $shipments[2]->region()->get());
     }
 
     /**
@@ -348,13 +348,13 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertNotNull($shipment);
 
         // Lazy BelongsTo: the NULL part resolves empty — never partial.
-        $region = $shipment->region()->getResults();
+        $region = $shipment->region()->get();
         self::assertCount(0, $region);
 
         // Eager BelongsTo: same empty result, no crash.
         $eager = CmpShipment::with('region')->orderBy('id')->get();
         self::assertNotNull($eager[2]);
-        self::assertCount(0, $eager[2]->region()->getResults());
+        self::assertCount(0, $eager[2]->region()->get());
 
         // And the OTHER direction: shipments() under a region with a NULL
         // part in its tuple — the region cannot own a partial match.
@@ -364,7 +364,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         $orphan->name = 'Ghost';
         $orphan->save();
 
-        self::assertCount(0, $orphan->shipments()->getResults());
+        self::assertCount(0, $orphan->shipments()->get());
     }
 
     /**
@@ -462,7 +462,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $shipments = CmpShipment::with('region')->orderBy('country')->get();
         self::assertNotNull($shipments[1]);
-        $region = $shipments[1]->region()->getResults()->first();
+        $region = $shipments[1]->region()->get()->first();
 
         self::assertInstanceOf(CmpRegion::class, $region);
         self::assertSame('Alpha', $region->name);
@@ -485,7 +485,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
 
         $shipment = CmpShipment::find(99);
         self::assertNotNull($shipment);
-        self::assertCount(0, $shipment->region()->getResults());
+        self::assertCount(0, $shipment->region()->get());
     }
 
     /**
@@ -501,8 +501,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertNotNull($shipment);
 
         // The unfiltered read rides the cache; the filtered read re-queries.
-        self::assertCount(1, $shipment->region()->getResults());
-        self::assertCount(0, $shipment->region()->where('name', '=', 'No Such Region')->getResults());
+        self::assertCount(1, $shipment->region()->get());
+        self::assertCount(0, $shipment->region()->where('name', '=', 'No Such Region')->get());
     }
 
     /**
@@ -548,8 +548,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertCount(2, $regions);
         self::assertNotNull($regions[0]);
         self::assertNotNull($regions[1]);
-        $deShipments = $regions[0]->trackedShipments()->getResults();
-        $usShipments = $regions[1]->trackedShipments()->getResults();
+        $deShipments = $regions[0]->trackedShipments()->get();
+        $usShipments = $regions[1]->trackedShipments()->get();
         self::assertInstanceOf(Collection::class, $deShipments);
         self::assertInstanceOf(Collection::class, $usShipments);
         self::assertCount(0, $deShipments, 'the trashed DE child must not leak through the eager load');
@@ -569,8 +569,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertCount(2, $regions);
         self::assertNotNull($regions[0]);
         self::assertNotNull($regions[1]);
-        self::assertCount(0, $regions[0]->primaryTrackedShipment()->getResults());
-        self::assertCount(1, $regions[1]->primaryTrackedShipment()->getResults());
+        self::assertCount(0, $regions[0]->primaryTrackedShipment()->get());
+        self::assertCount(1, $regions[1]->primaryTrackedShipment()->get());
     }
 
     /**
@@ -588,8 +588,8 @@ class CompositeKeysE2ETest extends DatabaseTestCase
         self::assertCount(2, $shipments);
         self::assertNotNull($shipments[0]);
         self::assertNotNull($shipments[1]);
-        $usRegion = $shipments[0]->region()->getResults()->first();
-        $deRegion = $shipments[1]->region()->getResults()->first();
+        $usRegion = $shipments[0]->region()->get()->first();
+        $deRegion = $shipments[1]->region()->get()->first();
         self::assertInstanceOf(CmpRegion::class, $usRegion);
         self::assertInstanceOf(CmpRegion::class, $deRegion);
         self::assertSame('Alpha', $usRegion->name);
