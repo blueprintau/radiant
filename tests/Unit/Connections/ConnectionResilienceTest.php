@@ -135,6 +135,28 @@ final class ConnectionResilienceTest extends TestCase
         self::assertNotSame($connection, $rebuilt);
     }
 
+    /**
+     * Evicting a STALE connection with an OPEN transaction rolls back
+     * before the discard — and a rollBack whose PDO call throws breaks
+     * the loop instead of masking the eviction.
+     */
+    public function testDiscardRollsBackOpenTransactionOnStaleConnection(): void
+    {
+        $manager = $this->makeManager();
+        $connection = $this->sql($manager);
+
+        $connection->beginTransaction();
+        self::assertSame(1, $connection->transactionLevel());
+
+        // Mark stale AND break the PDO — the discard's rollBack throws.
+        $connection->markStale();
+        $this->breakPdo($connection, 'server closed the connection unexpectedly');
+
+        // The eviction path swallows the rollback failure and rebuilds.
+        $rebuilt = $this->sql($manager);
+        self::assertNotSame($connection, $rebuilt);
+    }
+
     // ---- Helpers ----
 
     /**

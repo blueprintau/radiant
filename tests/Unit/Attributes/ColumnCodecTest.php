@@ -11,6 +11,7 @@ use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecKind;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecProbe;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecStatus;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UserPreferences;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\EmptyEnumForCodec;
 use PHPUnit\Framework\TestCase;
 
@@ -417,5 +418,124 @@ final class ColumnCodecTest extends TestCase
         );
 
         $column->decode(['x'], CodecKind::class);
+    }
+
+    /**
+     * An enum column with NO values whose property type IS an enum class
+     * fails the values guard — the class-string source is the only way to
+     * derive values, and none were declared.
+     */
+    public function testEnumColumnWithoutValuesThrows(): void
+    {
+        $column = new Column(type: ColumnType::Enum);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'declares an enum column without values; declare `values:` with the allowed strings '
+            . 'or an enum class-string.',
+        );
+
+        $column->assertTypeCompatible(CodecStatus::class, self::PROBE, 'name');
+    }
+
+    /**
+     * An INTERFACE property type (even a JsonStorable one) hits the
+     * objectCompatibility null arm — only concrete classes map to Json.
+     */
+    public function testInterfacePropertyTypeHasNoCompatibleColumns(): void
+    {
+        $column = new Column(type: ColumnType::Json);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'Compatible column types for [' . \BlueprintAU\Radiant\Database\Query\JsonStorable::class . ']: none.',
+        );
+
+        $column->assertTypeCompatible(\BlueprintAU\Radiant\Database\Query\JsonStorable::class, self::PROBE, 'name');
+    }
+
+    /**
+     * A property with a PHP default and NO declared column default is
+     * consistent — nothing to shadow.
+     */
+    public function testDefaultConsistentWithoutColumnDefault(): void
+    {
+        $column = new Column(type: ColumnType::String, length: 8);
+
+        // No throw — no column default, nothing to shadow.
+        $column->assertDefaultConsistent(
+            new \ReflectionProperty(CodecProbe::class, 'name'),
+            CodecProbe::class,
+        );
+
+        self::assertNull($column->name);
+    }
+
+    /**
+     * A float property decodes through the float cast.
+     */
+    public function testFloatColumnDecodesThroughCast(): void
+    {
+        $column = new Column(type: ColumnType::Float);
+
+        self::assertSame(1.5, $column->decode('1.5', 'float'));
+    }
+
+    /**
+     * A bool property decodes through the bool cast.
+     */
+    public function testBoolColumnDecodesThroughCast(): void
+    {
+        $column = new Column(type: ColumnType::Boolean);
+
+        self::assertTrue($column->decode('1', 'bool'));
+        self::assertFalse($column->decode('0', 'bool'));
+    }
+
+    /**
+     * A Json column whose property type is a class but whose value is NOT
+     * JsonSerializable fails fast — the encode guard.
+     */
+    public function testJsonEncodeRejectsNonSerializableObject(): void
+    {
+        $column = new Column(type: ColumnType::Json, name: 'meta');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'Column [meta] expects a ' . \stdClass::class . ' value; got stdClass',
+        );
+
+        $column->encode(new \stdClass(), \stdClass::class);
+    }
+
+    /**
+     * A Json column whose property type is a JsonStorable class encodes
+     * the object through jsonSerialize.
+     */
+    public function testJsonEncodeSerializesStorableObject(): void
+    {
+        $column = new Column(type: ColumnType::Json, name: 'meta');
+
+        $encoded = $column->encode(new UserPreferences(), UserPreferences::class);
+
+        self::assertIsString($encoded);
+        self::assertStringContainsString('"theme":"dark"', $encoded);
+    }
+
+    /**
+     * A Date column encodes a datetime to the UTC calendar day — the
+     * `Y-m-d` arm.
+     */
+    public function testDateColumnEncodesToUtcCalendarDay(): void
+    {
+        $column = new Column(type: ColumnType::Date, name: 'day');
+
+        $encoded = $column->encode(
+            new \DateTimeImmutable('2026-10-02 23:30:00', new \DateTimeZone('Europe/Berlin')),
+            'datetime',
+        );
+
+        // 23:30 Berlin = 21:30 UTC the same day — the calendar day holds.
+        self::assertSame('2026-10-02', $encoded);
     }
 }

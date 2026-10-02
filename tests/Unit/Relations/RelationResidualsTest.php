@@ -22,6 +22,7 @@ use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpShipment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyImage;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost;
+use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPostNoFk;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeam;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelTeamPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelUser;
@@ -267,6 +268,24 @@ final class RelationResidualsTest extends DatabaseTestCase
         $this->expectExceptionMessageIsOrContains('single local key; call getLocalKey()');
 
         $user->posts()->getLocalKeys();
+    }
+
+    /**
+     * A belongsTo with NO explicit keys walks the convention path: the
+     * owner key derives from the related model's primary key, the FK from
+     * the related class's short name — and the derived FK fails the
+     * column-exists guard when the model never declares it.
+     */
+    public function testConventionBelongsToDerivesKeysFromRelatedClass(): void
+    {
+        $post = new RelPostNoFk();
+        $post->id = 1;
+        $post->title = 'no fk';
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('foreign key');
+
+        $post->authorByConvention();
     }
 
     // ---- Base Relation paths ----

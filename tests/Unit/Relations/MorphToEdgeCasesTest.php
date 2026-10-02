@@ -178,6 +178,63 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
     }
 
     /**
+     * getTypeColumn() exposes the declared discriminator column name.
+     */
+    public function testGetTypeColumnReturnsDeclaredName(): void
+    {
+        $comment = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment);
+
+        self::assertSame('commentable_type', $comment->commentable()->getTypeColumn());
+    }
+
+    /**
+     * A NON-STRING type value held in memory fails fast — the synthetic
+     * attribute store bypasses the DB's string typing, so the alias guard
+     * is the only line of defense.
+     */
+    public function testNonStringTypeValueInMemoryFailsFast(): void
+    {
+        $comment = new PolyComment();
+        $comment->setAttribute('commentable_type', 42);
+        $comment->setAttribute('commentable_id', 1);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('holds a non-string value');
+
+        $comment->commentable()->getResults();
+    }
+
+    /**
+     * match() drops result rows whose positional pair is missing — a
+     * shorter pair list leaves the extra models undispatched.
+     */
+    public function testMatchSkipsResultsWithoutPairs(): void
+    {
+        $comment = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment);
+
+        $post = PolyPost::newQuery()->find(1);
+        $video = PolyVideo::newQuery()->find(1);
+        self::assertNotNull($post);
+        self::assertNotNull($video);
+
+        // Two results, ONE pair — the second row has no (alias, key) slot
+        // and must be skipped, not dispatched to a guessed parent.
+        $relation = $comment->commentable();
+        $relation->match(
+            [$comment],
+            \BlueprintAU\Radiant\Collection::make([$post, $video]),
+            'commentable',
+            [[PolyPost::class, '1']],
+        );
+
+        $loaded = $relation->getResults();
+        self::assertCount(1, $loaded);
+        self::assertInstanceOf(PolyPost::class, $loaded->first());
+    }
+
+    /**
      * Run an eager load through the mixed-typed boundary.
      *
      * @param  \BlueprintAU\Radiant\Relations\MorphTo<\BlueprintAU\Radiant\Model>  $relation

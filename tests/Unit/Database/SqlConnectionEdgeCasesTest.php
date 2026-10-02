@@ -467,6 +467,288 @@ final class SqlConnectionEdgeCasesTest extends TestCase
     }
 
     /**
+     * insertGetId() on a non-RETURNING dialect whose lastInsertId()
+     * reports a real generated id returns it — the success arm.
+     */
+    public function testInsertGetIdReturnsLastInsertId(): void
+    {
+        $connection = new /** A SQL connection whose grammar never RETURNs. */
+        class (new \PDO('sqlite::memory:')) extends SqlConnection {
+            /**
+             * A grammar without RETURNING — the MySQL-shaped fallback path.
+             *
+             * @return \BlueprintAU\Radiant\Database\Grammars\Grammar
+             */
+            protected function getDefaultQueryGrammar(): \BlueprintAU\Radiant\Database\Grammars\Grammar
+            {
+                return new /** A grammar that reads the key back via lastInsertId(). */
+                class () extends \BlueprintAU\Radiant\Database\Grammars\Grammar {
+                    /**
+                     * No RETURNING — insertGetId() falls through to
+                     * lastInsertId().
+                     *
+                     * @return bool
+                     */
+                    protected function usesReturning(): bool
+                    {
+                        return false;
+                    }
+
+                    /**
+                     * The identifier wrapper — plain double quotes.
+                     *
+                     * @param  string  $value
+                     * @return string
+                     */
+                    protected function wrap(string $value): string
+                    {
+                        return '"' . str_replace('"', '""', $value) . '"';
+                    }
+                };
+            }
+
+            /**
+             * The default schema grammar — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+             */
+            protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
+            }
+
+            /**
+             * The schema inspector — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+             */
+            protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector(
+                    new \PDO('sqlite::memory:'),
+                );
+            }
+
+            /**
+             * Savepoints are supported (sqlite semantics).
+             *
+             * @return bool
+             */
+            protected function supportsSavepoints(): bool
+            {
+                return true;
+            }
+
+            /**
+             * Create a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function createSavepoint(string $name): void
+            {
+                $this->statement("SAVEPOINT {$name}");
+            }
+
+            /**
+             * Release a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function releaseSavepoint(string $name): void
+            {
+                $this->statement("RELEASE SAVEPOINT {$name}");
+            }
+
+            /**
+             * Roll back to a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function rollbackToSavepoint(string $name): void
+            {
+                $this->statement("ROLLBACK TO SAVEPOINT {$name}");
+            }
+        };
+
+        $connection->statement('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)');
+
+        $id = $connection->table('users')->insertIdColumn('id')->insertGetId(['name' => 'Alice']);
+
+        self::assertSame('1', $id);
+    }
+
+    /**
+     * withLock() without a Lock adapter fails fast — the base SQL
+     * connection has no native cross-process lock.
+     */
+    public function testWithLockWithoutAdapterThrows(): void
+    {
+        $connection = new /** A bare SQL connection over sqlite — no Lock adapter. */
+        class (new \PDO('sqlite::memory:')) extends SqlConnection {
+            /**
+             * The default query grammar — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Grammars\Grammar
+             */
+            protected function getDefaultQueryGrammar(): \BlueprintAU\Radiant\Database\Grammars\Grammar
+            {
+                return new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar();
+            }
+
+            /**
+             * The default schema grammar — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+             */
+            protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
+            }
+
+            /**
+             * The schema inspector — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+             */
+            protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector(
+                    new \PDO('sqlite::memory:'),
+                );
+            }
+
+            /**
+             * Savepoints are supported (sqlite semantics).
+             *
+             * @return bool
+             */
+            protected function supportsSavepoints(): bool
+            {
+                return true;
+            }
+
+            /**
+             * Create a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function createSavepoint(string $name): void
+            {
+                $this->statement("SAVEPOINT {$name}");
+            }
+
+            /**
+             * Release a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function releaseSavepoint(string $name): void
+            {
+                $this->statement("RELEASE SAVEPOINT {$name}");
+            }
+
+            /**
+             * Roll back to a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function rollbackToSavepoint(string $name): void
+            {
+                $this->statement("ROLLBACK TO SAVEPOINT {$name}");
+            }
+        };
+
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessageIsOrContains('supply a Lock adapter');
+
+        $connection->withLock(static fn (): null => null, 'test:domain');
+    }
+
+    /**
+     * supportsTransactionalDdl() reports false on the base SQL connection
+     * — only dialects that can wrap DDL claim it.
+     */
+    public function testSupportsTransactionalDdlIsFalseOnBase(): void
+    {
+        $connection = new /** A bare SQL connection over sqlite. */
+        class (new \PDO('sqlite::memory:')) extends SqlConnection {
+            /**
+             * The default query grammar — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Grammars\Grammar
+             */
+            protected function getDefaultQueryGrammar(): \BlueprintAU\Radiant\Database\Grammars\Grammar
+            {
+                return new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar();
+            }
+
+            /**
+             * The default schema grammar — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+             */
+            protected function getDefaultSchemaGrammar(): \BlueprintAU\Radiant\Database\Schema\Grammars\SchemaGrammar
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Grammars\SqliteSchemaGrammar();
+            }
+
+            /**
+             * The schema inspector — sqlite's.
+             *
+             * @return \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+             */
+            protected function getDefaultSchemaInspector(): \BlueprintAU\Radiant\Database\Schema\Inspectors\SchemaInspector
+            {
+                return new \BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector(
+                    new \PDO('sqlite::memory:'),
+                );
+            }
+
+            /**
+             * Savepoints are supported (sqlite semantics).
+             *
+             * @return bool
+             */
+            protected function supportsSavepoints(): bool
+            {
+                return true;
+            }
+
+            /**
+             * Create a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function createSavepoint(string $name): void
+            {
+                $this->statement("SAVEPOINT {$name}");
+            }
+
+            /**
+             * Release a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function releaseSavepoint(string $name): void
+            {
+                $this->statement("RELEASE SAVEPOINT {$name}");
+            }
+
+            /**
+             * Roll back to a savepoint.
+             *
+             * @param  string  $name
+             */
+            protected function rollbackToSavepoint(string $name): void
+            {
+                $this->statement("ROLLBACK TO SAVEPOINT {$name}");
+            }
+        };
+
+        self::assertFalse($connection->supportsTransactionalDdl());
+    }
+
+    /**
      * chunkSql() rejects a non-positive chunk size.
      *
      * @param int $size The invalid size.

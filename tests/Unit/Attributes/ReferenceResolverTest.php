@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Attributes;
 use BlueprintAU\Radiant\Attributes\ForeignKey;
 use BlueprintAU\Radiant\Attributes\ReferenceResolver;
 use BlueprintAU\Radiant\Database;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefNonModelClass;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefRole;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\RefTableless;
 use PHPUnit\Framework\TestCase;
@@ -157,5 +158,23 @@ final class ReferenceResolverTest extends TestCase
         $foreignKey = new ForeignKey(columns: ['roleId'], references: 'roles');
 
         self::assertSame(['id'], $foreignKey->resolvedReferencesColumns());
+    }
+
+    /**
+     * A namespaced NON-model class-string passes resolve()'s gate only
+     * through the defense-in-depth is_a guard in resolvedReferencesColumns()
+     * — resolve() itself would have thrown first, so the guard is probed
+     * directly on the attribute.
+     */
+    public function testForeignKeyNonModelNamespacedReferenceThrows(): void
+    {
+        $foreignKey = new ForeignKey(columns: ['x'], references: RefNonModelClass::class);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'Reference [' . RefNonModelClass::class . '] resolved as a model but is not one.',
+        );
+
+        $foreignKey->resolvedReferencesColumns();
     }
 }

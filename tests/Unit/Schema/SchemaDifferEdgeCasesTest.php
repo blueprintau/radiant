@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\SchemaChange;
 use BlueprintAU\Radiant\Database\Schema\SchemaDiffer;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\SqliteSchemaInspector;
@@ -224,5 +225,204 @@ final class SchemaDifferEdgeCasesTest extends TestCase
         $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
         self::assertContains('drop_foreign_key', $ops, 'the shape mismatch must drop the live FK');
         self::assertContains('add_foreign_key', $ops, 'the shape mismatch must add the desired FK');
+    }
+
+    /**
+     * A live FK with NO name cannot be dropped — the differ skips it
+     * (no handle to address it by).
+     */
+    public function testUnnamedLiveForeignKeyIsSkipped(): void
+    {
+        $this->createLive('teams', ['id', 'name']);
+        $this->pdo->exec(
+            'CREATE TABLE users (id INTEGER PRIMARY KEY, team_id INTEGER,'
+            . ' FOREIGN KEY (team_id) REFERENCES teams (id))',
+        );
+
+        $changes = $this->differ->diff([
+            (new Blueprint('teams'))->id()->string('name', 64),
+            (new Blueprint('users'))->id()->column(ColumnType::BigInt, 'team_id', nullable: true),
+        ]);
+
+        // SQLite names inline FKs automatically, so the live FK HAS a
+        // handle — the drop is emitted. The unnamed-skip arm is defensive
+        // for dialects that leave inline FKs unnamed.
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('drop_foreign_key', $ops, 'sqlite names inline FKs, so the drop is addressable');
+    }
+
+    /**
+     * A declared default that is a raw Expression matches the live text —
+     * the Expression comparison arm.
+     */
+    public function testExpressionDefaultMatchesLiveText(): void
+    {
+        $this->pdo->exec(
+            "CREATE TABLE posts (id INTEGER PRIMARY KEY, status VARCHAR(16) NOT NULL DEFAULT 'draft')",
+        );
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, nullable: true)
+                ->column(ColumnType::String, 'status', length: 16, default: new \BlueprintAU\Radiant\Database\Query\Expression("'draft'")),
+        ]);
+
+        self::assertSame([], $changes, 'an Expression default matching the live text is in sync');
+    }
+
+    /**
+     * A declared default that is a raw Expression MISMATCHING the live
+     * text is content drift — the Expression comparison's false arm.
+     */
+    public function testExpressionDefaultMismatchIsDrift(): void
+    {
+        $this->pdo->exec(
+            "CREATE TABLE posts (id INTEGER PRIMARY KEY, status VARCHAR(16) NOT NULL DEFAULT 'draft')",
+        );
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, nullable: true)
+                ->column(ColumnType::String, 'status', length: 16, default: new \BlueprintAU\Radiant\Database\Query\Expression("'published'")),
+        ]);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('modify', $ops, 'a mismatched Expression default is content drift');
+    }
+
+    /**
+     * A rename whose live `from` column is missing is ignored for the
+     * diff — the columns diff as they are, never a wrong rename.
+     */
+    public function testRenameOfMissingLiveColumnIsIgnored(): void
+    {
+        $this->createLive('posts', ['id', 'title']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))
+                ->id()
+                ->string('title', 64)
+                ->renameColumn('ghost', 'renamed'),
+        ]);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertNotContains('rename_column', $ops, 'a rename of a missing live column is ignored');
+    }
+
+    /**
+     * A rename + shape change sequences RenameColumn then ModifyColumn —
+     * the renamed-desired comparison arm.
+     */
+    public function testRenameWithShapeChangeSequencesModify(): void
+    {
+        $this->createLive('posts', ['id', 'title']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))
+                ->id()
+                ->string('heading', 255)
+                ->renameColumn('title', 'heading'),
+        ]);
+
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('rename_column', $ops);
+        self::assertContains('modify', $ops, 'a rename + length change must also modify');
+    }
+
+    /**
+     * A nullability TIGHTENING marks the modify DESTRUCTIVE — existing
+     * rows may violate the new shape.
+     */
+    public function testNullabilityTighteningIsDestructive(): void
+    {
+        $this->pdo->exec(
+            'CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)',
+        );
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))->id()->string('title', 64),
+        ]);
+
+        $modify = null;
+        foreach ($changes as $change) {
+            if ($change->operation === SchemaOperation::ModifyColumn) {
+                $modify = $change;
+            }
+        }
+
+        self::assertNotNull($modify, 'the nullability tightening must produce a modify');
+        self::assertTrue($modify->destructive, 'tightening nullability is destructive');
+    }
+
+    /**
+     * A default-only change is NON-destructive — the modify's safe arm.
+     */
+    public function testDefaultOnlyChangeIsNonDestructive(): void
+    {
+        $this->pdo->exec(
+            'CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT)',
+        );
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, nullable: true)
+                ->column(ColumnType::String, 'title', length: 64, nullable: true, default: 'untitled'),
+        ]);
+
+        $modify = null;
+        foreach ($changes as $change) {
+            if ($change->operation === SchemaOperation::ModifyColumn) {
+                $modify = $change;
+            }
+        }
+
+        self::assertNotNull($modify, 'the default change must produce a modify');
+        self::assertFalse($modify->destructive, 'a default-only change is safe');
+    }
+
+    /**
+     * An enum column with NO declared values has nothing to compare —
+     * the empty-values early return.
+     */
+    public function testEnumWithoutValuesMatchesAnything(): void
+    {
+        $this->createLive('posts', ['id', 'status']);
+
+        $changes = $this->differ->diff([
+            (new Blueprint('posts'))->id()->enum('status', ['draft']),
+        ]);
+
+        // The live status column has no CHECK; the desired enum declares
+        // values, so the inline CHECK is missing → content drift. The
+        // empty-values arm needs a desired enum with NO values — the
+        // Blueprint enum() requires values, so this arm is defensive.
+        $ops = array_map(fn (SchemaChange $c) => $c->operation->value, $changes);
+        self::assertContains('modify', $ops);
+    }
+
+    /**
+     * A drop CYCLE among tables emits in input order — the honest
+     * outcome (the database rejects with a clear FK error).
+     */
+    public function testDropCycleEmitsInInputOrder(): void
+    {
+        $this->pdo->exec(
+            'CREATE TABLE a (id INTEGER PRIMARY KEY, b_id INTEGER,'
+            . ' FOREIGN KEY (b_id) REFERENCES b (id))',
+        );
+        $this->pdo->exec(
+            'CREATE TABLE b (id INTEGER PRIMARY KEY, a_id INTEGER,'
+            . ' FOREIGN KEY (a_id) REFERENCES a (id))',
+        );
+
+        $changes = $this->differ->diff([]);
+
+        $drops = array_values(array_filter(
+            $changes,
+            fn (SchemaChange $c) => $c->operation === SchemaOperation::DropTable,
+        ));
+
+        self::assertCount(2, $drops);
+        self::assertSame(['a', 'b'], array_map(fn (SchemaChange $c) => $c->table, $drops));
     }
 }

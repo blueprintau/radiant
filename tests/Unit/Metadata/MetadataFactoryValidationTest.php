@@ -13,6 +13,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyCheckModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyFkColumnsModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyFkReferencesModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyMorphNameModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EmptyNamedTableWithColumns;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\FkToNoPkModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ModelScopeBadElementModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ModelScopeBadReturnModel;
@@ -356,5 +357,19 @@ final class MetadataFactoryValidationTest extends TestCase
         );
 
         MetadataFactory::for(MtiChildOfCompositePk::class);
+    }
+
+    /**
+     * #[Table(name: '')] on a class WITH own columns fails fast — the
+     * empty-name mis-declaration.
+     */
+    public function testEmptyTableNameWithOwnColumnsThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            "Model [" . EmptyNamedTableWithColumns::class . "] declares #[Table(name: '')]",
+        );
+
+        MetadataFactory::for(EmptyNamedTableWithColumns::class);
     }
 }

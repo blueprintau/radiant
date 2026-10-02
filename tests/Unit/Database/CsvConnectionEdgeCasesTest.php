@@ -322,6 +322,56 @@ final class CsvConnectionEdgeCasesTest extends TestCase
     }
 
     /**
+     * Aggregates GROUPED by a column carry the group values alongside —
+     * one row per group, the SQL shape.
+     */
+    public function testGroupedAggregatesCarryGroupValues(): void
+    {
+        $db = $this->seedUsers();
+
+        $rows = $db->table('users')
+            ->groupBy('email')
+            ->select('email', new Aggregate('count', 'id'))
+            ->get();
+
+        // Three distinct emails → three groups.
+        self::assertCount(3, $rows);
+
+        $byEmail = [];
+        foreach ($rows as $row) {
+            $byEmail[$row->email] = $row->{'count(id)'};
+        }
+
+        self::assertSame(1, $byEmail['alice@example.com']);
+        self::assertSame(1, $byEmail['bob@example.org']);
+        self::assertSame(1, $byEmail['carol@example.com']);
+    }
+
+    /**
+     * Projecting an unknown column fails fast.
+     */
+    public function testProjectUnknownColumnViaSelectListThrows(): void
+    {
+        $db = $this->seedUsers();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown column [ghost] on CSV connection.');
+
+        $db->table('users')->select('ghost')->get();
+    }
+
+    /**
+     * max()/min() over an empty table report null — the empty-column arm.
+     */
+    public function testMaxAndMinOverEmptyTableReportNull(): void
+    {
+        $db = $this->makeCsv([]);
+
+        self::assertNull($db->table('users')->max('age'));
+        self::assertNull($db->table('users')->min('age'));
+    }
+
+    /**
      * An aggregate query with limit(0) has no rows to aggregate — the
      * empty-select-list arm of selectColumn.
      */

@@ -217,6 +217,21 @@ final class ConnectorValidationTest extends TestCase
         ]);
     }
 
+    /**
+     * A missing database rejects at validation — the field is required
+     * for Postgres.
+     */
+    public function testPostgresMissingDatabaseThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Postgres requires a non-empty string "database"; got nothing.');
+
+        (new PostgresConnector())->validConfig([
+            'host' => '127.0.0.1',
+            'port' => 5432,
+        ]);
+    }
+
     // ---- MySqlConnector ----
 
     /**
@@ -245,6 +260,21 @@ final class ConnectorValidationTest extends TestCase
 
         (new MySqlConnector())->validConfig([
             'host' => '127.0.0.1',
+            'database' => 'radiant',
+        ]);
+    }
+
+    /**
+     * A missing host rejects at validation — the field is required for
+     * MySQL.
+     */
+    public function testMySqlMissingHostThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('MySQL requires a non-empty string "host"; got nothing.');
+
+        (new MySqlConnector())->validConfig([
+            'port' => 3306,
             'database' => 'radiant',
         ]);
     }
@@ -426,5 +456,22 @@ final class ConnectorValidationTest extends TestCase
             'port' => 1, // nothing listens here; refusal is immediate
             'database' => 'radiant',
         ]);
+    }
+
+    // ---- connect() defense-in-depth shape guards ----
+
+    /**
+     * The DSN-field gate's null/empty arm — reachable only through
+     * reflection (the connectors are final and the drivers' own type
+     * checks fire first), so the gate is probed directly.
+     */
+    public function testDsnFieldRejectsNull(): void
+    {
+        $method = new \ReflectionMethod(MySqlConnector::class, 'validDsnField');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('The "host" config field must be a non-empty string; got nothing.');
+
+        $method->invoke(new MySqlConnector(), null, 'host');
     }
 }

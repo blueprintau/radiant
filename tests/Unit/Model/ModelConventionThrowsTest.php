@@ -4,24 +4,28 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Attributes\Column;
-use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
-use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CompositePkRelationProbe;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\NoPkRelationTarget;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\ScalarPkRelationProbe;
+use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\StringKeyMorphTarget;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\CmpRegion;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
 use PHPUnit\Framework\Attributes\DoesNotPerformAssertions;
 
 /**
- * The relation-convention throw arms on {@see Model} — the fail-fast
- * guards that fire when a convention cannot derive its counterpart:
- * composite keys handed to scalar-key relations, morph pairs without a
- * derivable name, and relation endpoints without a usable primary key.
+ * The relation-convention throw arms on {@see \BlueprintAU\Radiant\Model} —
+ * the fail-fast guards that fire when a convention cannot derive its
+ * counterpart: composite keys handed to scalar-key relations, morph pairs
+ * without a derivable name, and relation endpoints without a usable
+ * primary key.
  *
- * The relation methods are protected, so each test probes them through an
- * anonymous subclass.
+ * The relation methods are protected, so each test probes them through a
+ * named fixture subclass ({@see CompositePkRelationProbe},
+ * {@see ScalarPkRelationProbe}) — named classes keep Intelephense's
+ * completion working, where anonymous subclasses do not.
  */
 final class ModelConventionThrowsTest extends DatabaseTestCase
 {
@@ -32,16 +36,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphManyCompositeLocalKeyThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** composite-PK holder */ class extends CmpRegion {
-                /** Probe: expose the protected morphMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphMany(PolyPost::class, 'commentable');
-                }
-            })->probe(),
+            fn () => (new CompositePkRelationProbe())->probeMorphMany(PolyPost::class, 'commentable'),
             \LogicException::class,
             'morphMany() does not support composite keys',
         );
@@ -53,16 +48,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphOneCompositeLocalKeyThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** composite-PK holder */ class extends CmpRegion {
-                /** Probe: expose the protected morphOne.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphOne(PolyPost::class, 'commentable');
-                }
-            })->probe(),
+            fn () => (new CompositePkRelationProbe())->probeMorphOne(PolyPost::class, 'commentable'),
             \LogicException::class,
             'morphOne() does not support composite keys',
         );
@@ -75,16 +61,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphForeignKeyWithoutNameOrTypeColumnThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** probe holder */ class extends PolyPost {
-                /** Probe: expose the protected morphMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphMany(PolyComment::class, '', typeColumn: 'not_type_suffixed');
-                }
-            })->probe(),
+            fn () => (new ScalarPkRelationProbe())->probeMorphMany(PolyComment::class, null, typeColumn: 'not_type_suffixed'),
             \InvalidArgumentException::class,
             'needs a morph name (or an explicit `_type`-suffixed type column)',
         );
@@ -97,16 +74,35 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphTypeColumnWithoutNameOrForeignKeyThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** probe holder */ class extends PolyPost {
-                /** Probe: expose the protected morphMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphMany(PolyComment::class, '', foreignKey: 'no_suffix');
-                }
-            })->probe(),
+            fn () => (new ScalarPkRelationProbe())->probeMorphMany(PolyComment::class, null, foreignKey: 'no_suffix'),
+            \InvalidArgumentException::class,
+            'needs a morph name (or an explicit `_id`-suffixed foreign key)',
+        );
+    }
+
+    /**
+     * A morphMany with an EXPLICIT `_id`-suffixed FK and no morph name
+     * derives the type column by mirroring `_id` → `_type` — the
+     * convention's success path.
+     */
+    #[DoesNotPerformAssertions]
+    public function testMorphManyDerivesTypeColumnFromExplicitForeignKey(): void
+    {
+        // The call itself is the subject: the derivation succeeds and the
+        // relation builds (PolyComment declares both morph columns).
+        (new ScalarPkRelationProbe())->probeMorphMany(PolyComment::class, null, foreignKey: 'commentable_id');
+    }
+
+    /**
+     * A morphTo with an EXPLICIT `_id`-suffixed FK and no morph name
+     * cannot derive its columns — the FK derivation runs FIRST on the
+     * inverse side and needs the type column (or a name), so the
+     * `_id` → `_type` mirror is unreachable there.
+     */
+    public function testMorphToWithForeignKeyOnlyThrows(): void
+    {
+        Expectation::throwsWithMessage(
+            fn () => (new ScalarPkRelationProbe())->probeMorphTo(foreignKey: 'commentable_id'),
             \InvalidArgumentException::class,
             'needs a morph name (or an explicit `_id`-suffixed foreign key)',
         );
@@ -119,16 +115,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testHasManyCompositeLocalKeyWithoutExplicitForeignThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** composite-PK holder */ class extends CmpRegion {
-                /** Probe: expose the protected hasMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->hasMany(PolyPost::class);
-                }
-            })->probe(),
+            fn () => (new CompositePkRelationProbe())->probeHasMany(PolyPost::class),
             \LogicException::class,
             'cannot derive its counterpart columns by convention',
         );
@@ -141,16 +128,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testBelongsToCompositeOwnerKeyWithoutExplicitForeignThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** probe holder */ class extends PolyPost {
-                /** Probe: expose the protected belongsTo.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->belongsTo(CmpRegion::class);
-                }
-            })->probe(),
+            fn () => (new ScalarPkRelationProbe())->probeBelongsTo(CmpRegion::class),
             \LogicException::class,
             'cannot derive its counterpart columns by convention',
         );
@@ -163,16 +141,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testRelationEndpointWithoutPrimaryKeyThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** probe holder */ class extends PolyPost {
-                /** Probe: expose the protected belongsTo.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->belongsTo(NoPkRelationTarget::class);
-                }
-            })->probe(),
+            fn () => (new ScalarPkRelationProbe())->probeBelongsTo(NoPkRelationTarget::class),
             \LogicException::class,
             'Relation endpoints require a primary key',
         );
@@ -186,16 +155,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphOnCompositePkModelThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** composite-PK holder */ class extends CmpRegion {
-                /** Probe: expose the protected morphMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphMany(PolyComment::class, 'commentable', localKey: 'id');
-                }
-            })->probe(),
+            fn () => (new CompositePkRelationProbe())->probeMorphMany(PolyComment::class, 'commentable', localKey: 'id'),
             \LogicException::class,
             'A morph target requires a single named primary key',
         );
@@ -208,16 +168,7 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
     public function testMorphKeyTypeMismatchThrows(): void
     {
         Expectation::throwsWithMessage(
-            fn () => (new /** probe holder */ class extends PolyPost {
-                /** Probe: expose the protected morphMany.
-                 *
-                 * @return mixed
-                 */
-                public function probe(): mixed
-                {
-                    return $this->morphMany(StringKeyMorphTarget::class, 'commentable');
-                }
-            })->probe(),
+            fn () => (new ScalarPkRelationProbe())->probeMorphMany(StringKeyMorphTarget::class, 'commentable'),
             \InvalidArgumentException::class,
             'A morph pair can only point at models whose primary-key type matches',
         );
@@ -237,50 +188,4 @@ final class ModelConventionThrowsTest extends DatabaseTestCase
             self::fail('an unloaded relation must not report as loaded');
         }
     }
-}
-
-/**
- * Fixture: a model with a declared FK column but NO primary key — the
- * owner-key convention cannot derive one.
- */
-class NoPkRelationTarget extends Model
-{
-    /**
-     * The FK column back to the parent.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt)]
-    public int $post_id;
-}
-
-/**
- * Fixture: a morph child whose morph key column is a string — mismatching
- * PolyPost's bigint primary key, so the type guard fires.
- */
-class StringKeyMorphTarget extends Model
-{
-    /**
-     * The primary key.
-     *
-     * @var int
-     */
-    #[Column(type: ColumnType::BigInt, primaryKey: true, autoIncrement: true)]
-    public int $id;
-
-    /**
-     * The morph FK column — a STRING, mismatching the parent's bigint PK.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 36)]
-    public string $commentable_id;
-
-    /**
-     * The morph type column.
-     *
-     * @var string
-     */
-    #[Column(type: ColumnType::String, length: 255)]
-    public string $commentable_type;
 }
