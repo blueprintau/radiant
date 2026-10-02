@@ -66,6 +66,7 @@ final class DatabaseManager
     ) {
         $this->current_connection = $default;
         $this->validateConfig($connections);
+        $this->assertConnectionExists($default);
     }
 
     /**
@@ -121,10 +122,12 @@ final class DatabaseManager
      *
      * @param  string|null  $name
      * @return ConnectionInterface
+     * @throws \InvalidArgumentException
      */
     public function connection(?string $name = null): ConnectionInterface
     {
         $name ??= $this->current_connection;
+        $this->assertConnectionExists($name);
         if (isset($this->resolved[$name])
             && $this->resolved[$name] instanceof SqlConnection
             && $this->resolved[$name]->isStale()) {
@@ -153,9 +156,7 @@ final class DatabaseManager
         }
 
         if (!isset($this->resolved[$name])) {
-            if (!isset($this->connections[$name])) {
-                throw new \InvalidArgumentException("Unknown connection [{$name}].");
-            }
+            $this->assertConnectionExists($name);
             return; // not resolved — nothing to evict
         }
 
@@ -212,6 +213,19 @@ final class DatabaseManager
             } catch (\Throwable) {
                 break; // dead connection — the server-side transaction is gone too
             }
+        }
+    }
+
+    /**
+     * Fail fast when the named connection is not registered.
+     *
+     * @param  string  $name
+     * @throws \InvalidArgumentException
+     */
+    private function assertConnectionExists(string $name): void
+    {
+        if (!isset($this->connections[$name])) {
+            throw new \InvalidArgumentException("Unknown connection [{$name}].");
         }
     }
 
@@ -307,9 +321,7 @@ final class DatabaseManager
      */
     public function useConnection(string $name): void
     {
-        if (!isset($this->connections[$name])) {
-            throw new \InvalidArgumentException("Unknown connection [{$name}].");
-        }
+        $this->assertConnectionExists($name);
 
         $current = $this->resolved[$this->current_connection] ?? null;
         if ($current instanceof SqlConnection && $current->transactionLevel() > 0) {
@@ -335,9 +347,12 @@ final class DatabaseManager
      * @param  string  $name
      * @param  \Closure(): T  $callback
      * @return T
+     * @throws \InvalidArgumentException
      */
     public function usingConnection(string $name, \Closure $callback): mixed
     {
+        $this->assertConnectionExists($name);
+
         $previous = $this->current_connection;
         $this->current_connection = $name;
         try {

@@ -42,9 +42,10 @@ Multiple named connections can be declared. `$manager->connection('name')`
 selects one, `$manager->usingConnection('name', fn () => ...)` scopes a
 callback to one, and `$manager->useConnection('name')` makes one active
 persistently — rejected while the active connection holds an open
-transaction, since switching away would leave it dangling. Each connector
-validates its own config at construction and fails fast with a message
-naming the problem.
+transaction, since switching away would leave it dangling. Every name —
+`connection('name')`, both switches, and the constructor's `default:` —
+fail fast on an unknown name. Each connector validates its own config at
+construction and fails fast with a message naming the problem.
 
 | Driver | Key | Required | Optional |
 | --- | --- | --- | --- |

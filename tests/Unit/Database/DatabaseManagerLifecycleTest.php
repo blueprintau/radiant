@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Database;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Connectors\ConnectorInterface;
 use BlueprintAU\Radiant\Database\DatabaseManager;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Support\NullConnection;
 use PHPUnit\Framework\TestCase;
 
@@ -253,17 +254,17 @@ final class DatabaseManagerLifecycleTest extends TestCase
         self::assertSame('secondary', $inside);
         self::assertSame('default', $manager->currentConnection());
 
-        $restored = $this->currentName($manager);
-
-        try {
+        // Expectation::throws, not a bare try/catch: usingConnection()'s
+        // declared throw surface is only InvalidArgumentException, so a
+        // catch (\RuntimeException) around the call reads as dead code to
+        // PHPStan — the callback's runtime throw is invisible statically.
+        Expectation::throws(function () use ($manager): void {
             $manager->usingConnection('secondary', function (): void {
                 throw new \RuntimeException('boom');
             });
-        } catch (\RuntimeException) {
-            $restored = $this->currentName($manager);
-        }
+        }, \RuntimeException::class);
 
-        self::assertSame('default', $restored);
+        self::assertSame('default', $this->currentName($manager));
     }
 
     /**
@@ -308,6 +309,57 @@ final class DatabaseManagerLifecycleTest extends TestCase
         $this->expectExceptionMessageIsOrContains('open transaction');
 
         $manager->useConnection('secondary');
+    }
+
+    /**
+     * usingConnection() validates the name before swapping — an unknown
+     * connection throws at the call site, runs no callback and leaves
+     * the active connection untouched.
+     */
+    public function testUsingConnectionRejectsUnknownName(): void
+    {
+        $manager = new DatabaseManager($this->sqliteMap());
+        $ran = false;
+
+        Expectation::throwsWithMessage(
+            function () use ($manager, &$ran): void {
+                $manager->usingConnection('ghost', function () use (&$ran): void {
+                    $ran = true;
+                });
+            },
+            \InvalidArgumentException::class,
+            'Unknown connection [ghost].',
+        );
+
+        self::assertFalse($ran);
+        self::assertSame('default', $manager->currentConnection());
+    }
+
+    /**
+     * connection() rejects an unknown name before any lookup or build —
+     * never an undefined-key failure inside makeConnection().
+     */
+    public function testConnectionRejectsUnknownName(): void
+    {
+        $manager = new DatabaseManager($this->sqliteMap());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown connection [ghost].');
+
+        $manager->connection('ghost');
+    }
+
+    /**
+     * A default name that is not a key of the connections map fails at
+     * construction — a typo'd default must not surface only on first
+     * nameless connection() call.
+     */
+    public function testConstructorRejectsUnknownDefaultConnection(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown connection [ghost].');
+
+        new DatabaseManager($this->sqliteMap(), 'ghost');
     }
 
     /**
