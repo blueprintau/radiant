@@ -327,6 +327,10 @@ final class DatabaseManager
      * Run a callback with a different active connection, restoring the
      * previous one afterwards.
      *
+     * Unlike {@see useConnection()}, an open transaction on the active
+     * connection is allowed — the swap is always restored, so the
+     * transaction stays under the caller's control.
+     *
      * @template T
      * @param  string  $name
      * @param  \Closure(): T  $callback
