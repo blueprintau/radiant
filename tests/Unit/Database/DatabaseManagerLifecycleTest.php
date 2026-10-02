@@ -24,9 +24,7 @@ final class DatabaseManagerLifecycleTest extends TestCase
      */
     protected function tearDown(): void
     {
-        Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
+        Database::clearManager();
     }
 
     /**
@@ -266,6 +264,50 @@ final class DatabaseManagerLifecycleTest extends TestCase
         }
 
         self::assertSame('default', $restored);
+    }
+
+    /**
+     * useConnection() switches the active connection persistently — a
+     * nameless connection() resolves through the new name, and nothing
+     * restores the previous one.
+     */
+    public function testUseConnectionPersists(): void
+    {
+        $manager = new DatabaseManager($this->sqliteMap());
+
+        $manager->useConnection('secondary');
+
+        self::assertSame('secondary', $manager->currentConnection());
+        self::assertSame($manager->connection('secondary'), $manager->connection());
+    }
+
+    /**
+     * useConnection() rejects an unknown name at the switch site — never
+     * later, deep inside a connection() lookup.
+     */
+    public function testUseConnectionRejectsUnknownName(): void
+    {
+        $manager = new DatabaseManager($this->sqliteMap());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unknown connection [ghost].');
+
+        $manager->useConnection('ghost');
+    }
+
+    /**
+     * Switching away from a connection holding an open transaction fails
+     * fast — the transaction would be left dangling, holding locks.
+     */
+    public function testUseConnectionRejectsOpenTransaction(): void
+    {
+        $manager = new DatabaseManager($this->sqliteMap());
+        $manager->sqlConnection()->beginTransaction();
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageIsOrContains('open transaction');
+
+        $manager->useConnection('secondary');
     }
 
     /**

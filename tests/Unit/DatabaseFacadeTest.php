@@ -37,11 +37,11 @@ final class DatabaseFacadeTest extends TestCase
     }
 
     /**
-     * Reset the static manager between tests.
+     * Reset the static facade between tests.
      */
     protected function tearDown(): void
     {
-        Database::setManager(new DatabaseManager(['default' => ['driver' => 'sqlite', 'database' => ':memory:']]));
+        Database::clearManager();
         parent::tearDown();
     }
 
@@ -125,6 +125,16 @@ final class DatabaseFacadeTest extends TestCase
     }
 
     /**
+     * useConnection() switches the active connection persistently.
+     */
+    public function testUseConnection(): void
+    {
+        Database::useConnection('sqlite');
+
+        self::assertSame(Database::connection('sqlite'), Database::connection());
+    }
+
+    /**
      * SQL operations on a non-SQL connection throw.
      */
     public function testSelectOnNonSqlConnectionThrows(): void
@@ -132,5 +142,28 @@ final class DatabaseFacadeTest extends TestCase
         $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
         $this->expectExceptionMessageIsOrContains('The connection is not a SQL connection.');
         Database::usingConnection('csv', fn () => Database::select('select * from users'));
+    }
+
+    /**
+     * hasManager() reports the injection state of the facade.
+     */
+    public function testHasManager(): void
+    {
+        self::assertTrue(Database::hasManager());
+    }
+
+    /**
+     * clearManager() unsets the manager — the next manager() call fails fast.
+     */
+    public function testClearManager(): void
+    {
+        Database::clearManager();
+
+        self::assertFalse(Database::hasManager());
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageIsOrContains('Database manager not set.');
+
+        Database::manager();
     }
 }

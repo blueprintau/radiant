@@ -295,6 +295,35 @@ final class DatabaseManager
     }
 
     /**
+     * Make a named connection the active one, persistently.
+     *
+     * Unlike {@see usingConnection()}, the switch is not scoped — it stays
+     * until changed again. Switching away from a connection holding an
+     * open transaction fails fast: the transaction would be left dangling.
+     *
+     * @param  string  $name
+     * @throws \InvalidArgumentException
+     * @throws \LogicException
+     */
+    public function useConnection(string $name): void
+    {
+        if (!isset($this->connections[$name])) {
+            throw new \InvalidArgumentException("Unknown connection [{$name}].");
+        }
+
+        $current = $this->resolved[$this->current_connection] ?? null;
+        if ($current instanceof SqlConnection && $current->transactionLevel() > 0) {
+            throw new \LogicException(
+                "Cannot switch away from connection [{$this->current_connection}] "
+                    . "with an open transaction (level {$current->transactionLevel()}); "
+                    . 'commit or roll back first.'
+            );
+        }
+
+        $this->current_connection = $name;
+    }
+
+    /**
      * Run a callback with a different active connection, restoring the
      * previous one afterwards.
      *

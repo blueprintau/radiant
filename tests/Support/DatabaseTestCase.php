@@ -94,9 +94,7 @@ abstract class DatabaseTestCase extends TestCase
             $this->createdTables = [];
         }
 
-        Database::setManager(new DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
+        Database::clearManager();
     }
 
     /**

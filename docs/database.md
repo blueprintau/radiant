@@ -39,9 +39,12 @@ $db = $manager->connection();
 ```
 
 Multiple named connections can be declared. `$manager->connection('name')`
-selects one, and `$manager->usingConnection('name', fn () => ...)`
-scopes a callback to one. Each connector validates its own config at
-construction and fails fast with a message naming the problem.
+selects one, `$manager->usingConnection('name', fn () => ...)` scopes a
+callback to one, and `$manager->useConnection('name')` makes one active
+persistently — rejected while the active connection holds an open
+transaction, since switching away would leave it dangling. Each connector
+validates its own config at construction and fails fast with a message
+naming the problem.
 
 | Driver | Key | Required | Optional |
 | --- | --- | --- | --- |
@@ -325,3 +328,9 @@ $changed = Database::affectingStatement('UPDATE users SET active = ? WHERE id = 
 // SQL-only features through the facade fail fast on a non-SQL backend:
 $conn = Database::sqlConnection(); // throws UnsupportedFeatureException otherwise
 ```
+
+`Database::hasManager()` reports whether a manager has been injected, and
+`Database::clearManager()` unsets it. Calling any other facade method
+without a manager fails fast with a `RuntimeException` — never a silent
+fallthrough — which makes unset bootstrap state visible at the call site
+(and gives test teardowns a one-liner reset).

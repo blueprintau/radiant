@@ -56,6 +56,24 @@ final class Database
     }
 
     /**
+     * Whether a manager has been injected into the facade.
+     *
+     * @return bool
+     */
+    public static function hasManager(): bool
+    {
+        return self::$manager !== null;
+    }
+
+    /**
+     * Clear the injected manager.
+     */
+    public static function clearManager(): void
+    {
+        self::$manager = null;
+    }
+
+    /**
      * Get a connection by name, building and caching it on first use.
      *
      * @param  string|null  $name
@@ -90,6 +108,16 @@ final class Database
     public static function usingConnection(string $name, \Closure $callback): mixed
     {
         return self::manager()->usingConnection($name, $callback);
+    }
+
+    /**
+     * Make a named connection the active one, persistently.
+     *
+     * @param  string  $name
+     */
+    public static function useConnection(string $name): void
+    {
+        self::manager()->useConnection($name);
     }
 
     /**

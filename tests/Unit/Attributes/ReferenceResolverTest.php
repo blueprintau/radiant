@@ -22,14 +22,12 @@ use PHPUnit\Framework\TestCase;
 final class ReferenceResolverTest extends TestCase
 {
     /**
-     * Restore the static facade to an empty manager after each test so
-     * metadata registered through the manager never leaks.
+     * Clear the static facade after each test so metadata registered
+     * through the manager never leaks.
      */
     protected function tearDown(): void
     {
-        Database::setManager(new Database\DatabaseManager([
-            'default' => ['driver' => 'sqlite', 'database' => ':memory:'],
-        ]));
+        Database::clearManager();
     }
 
 
