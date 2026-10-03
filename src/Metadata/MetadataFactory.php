@@ -443,6 +443,14 @@ final class MetadataFactory
 
             $backfillAttr = $property->getAttributes(Backfill::class)[0] ?? null;
 
+            if ($backfillAttr !== null && $backfillAttr->newInstance()->value === null) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] property [{$property->getName()}] declares #[Backfill(null)] — "
+                    . 'null is not a backfill value: it cannot fill a NOT NULL column and is a '
+                    . 'no-op on a nullable one. Drop #[Backfill] or declare a real value.'
+                );
+            }
+
             $mapping = new PropertyMapping(
                 propertyName: $property->getName(),
                 columnName: $columnName,

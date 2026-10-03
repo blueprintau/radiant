@@ -31,6 +31,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiRedeclaredKey;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiSuperAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\NonDatetimeSoftDeletePost;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\NullBackfillModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\OrphanBackfillModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Shipment;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\SoftDeletingPost;
@@ -181,6 +182,18 @@ final class MetadataFactoryTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains('declares #[Backfill] without a #[Column]');
         MetadataFactory::for(OrphanBackfillModel::class);
+    }
+
+    /**
+     * #[Backfill(null)] is a mis-declaration — null cannot fill a NOT NULL
+     * column and is a no-op on a nullable one, and it would be
+     * indistinguishable from "no backfill" downstream.
+     */
+    public function testNullBackfillThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('declares #[Backfill(null)]');
+        MetadataFactory::for(NullBackfillModel::class);
     }
 
     // ---- Table resolution (rules 1–5) ----

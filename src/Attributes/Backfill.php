@@ -10,7 +10,8 @@ namespace BlueprintAU\Radiant\Attributes;
  *
  * It must ride a property that also declares {@see Column}, and it is
  * consulted only when the column is being added — on a fresh create it
- * is a no-op.
+ * is a no-op. A null value is a mis-declaration and fails fast at
+ * metadata build.
  */
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 final class Backfill
@@ -18,7 +19,7 @@ final class Backfill
     /**
      * Create a backfill declaration.
      *
-     * @param  mixed  $value  A scalar or an SQL Expression — the value existing rows are backfilled with.
+     * @param  mixed  $value  A scalar or an SQL Expression — the value existing rows are backfilled with; never null.
      */
     final public function __construct(
         public mixed $value,
