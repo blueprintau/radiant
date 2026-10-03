@@ -137,11 +137,51 @@ final class SqliteSchemaGrammar extends SchemaGrammar
             throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
         }
 
-        return array_map(
+        $backfills = $blueprint->getBackfills();
+
+        // A NOT NULL column without a default cannot be added to a
+        // non-empty table — its backfill renders as a temporary inline
+        // DEFAULT so the ADD succeeds and fills the existing rows (the
+        // rebuild, not this path, produces the no-final-default shape).
+        $statements = array_map(
             fn (array $column): string => 'ALTER TABLE ' . $this->wrap($table)
-                . ' ADD COLUMN ' . $this->compileAddColumn($column),
+                . ' ADD COLUMN ' . $this->compileAddColumn($this->withTemporaryDefault($column, $backfills)),
             $columns,
         );
+
+        // SQLite cannot SET/DROP a column default in place, so a backfill
+        // on an in-place (nullable) add is an UPDATE of the existing rows.
+        // A NOT NULL-no-default column already got its backfill from the
+        // inline DEFAULT above — no UPDATE for it.
+        foreach ($backfills as $column => $value) {
+            if ($this->addedNotNullWithoutDefault($blueprint, $column)) {
+                continue;
+            }
+
+            $statements[] = 'UPDATE ' . $this->wrap($table) . ' SET ' . $this->wrap($column)
+                . ' = ' . $this->compileDefault($value) . ' WHERE ' . $this->wrap($column) . ' IS NULL';
+        }
+
+        return $statements;
+    }
+
+    /**
+     * Whether the named column is an added NOT NULL column without a
+     * declared default.
+     *
+     * @param  Blueprint  $blueprint
+     * @param  string  $name
+     * @return bool
+     */
+    private function addedNotNullWithoutDefault(Blueprint $blueprint, string $name): bool
+    {
+        foreach ($blueprint->getColumns() as $column) {
+            if ($column['name'] === $name) {
+                return $column['nullable'] !== true && $column['default'] === null;
+            }
+        }
+
+        return false;
     }
 
     /**

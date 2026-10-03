@@ -616,6 +616,57 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * A backfill() on an in-place (nullable) add fills the existing rows
+     * via an UPDATE — SQLite cannot SET/DROP a column default in place, so
+     * the backfill is never silently dropped.
+     */
+    public function testSqliteInPlaceAddAppliesBackfill(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice'), ('Bob')");
+
+        $add = (new Blueprint('users'))
+            ->column(ColumnType::String, 'nickname', length: 50, nullable: true)
+            ->backfill('nickname', 'unknown');
+
+        $this->connection->alter(SchemaOperation::AddColumn, $add);
+
+        $rows = $this->connection->selectSql('SELECT nickname FROM users ORDER BY id')->all();
+        self::assertSame(['unknown', 'unknown'], array_map(fn ($row) => $row->nickname, $rows));
+    }
+
+    /**
+     * A NOT NULL column without a default cannot be added to a non-empty
+     * table — its backfill() renders as a temporary inline DEFAULT so the
+     * ADD succeeds and fills the existing rows (no separate UPDATE).
+     */
+    public function testSqliteInPlaceNotNullAddBackfillsViaInlineDefault(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice'), ('Bob')");
+
+        $add = (new Blueprint('users'))
+            ->column(ColumnType::Int, 'priority') // NOT NULL, no default
+            ->backfill('priority', 5);
+
+        // The ADD carries the backfill as an inline DEFAULT; no UPDATE.
+        $statements = $this->connection->schemaGrammar->compileAddColumns($add);
+        self::assertCount(1, $statements);
+        self::assertStringContainsString('DEFAULT 5', $statements[0]);
+
+        $this->connection->alter(SchemaOperation::AddColumn, $add);
+
+        $rows = $this->connection->selectSql('SELECT priority FROM users ORDER BY id')->all();
+        self::assertSame([5, 5], array_map(fn ($row) => (int) $row->priority, $rows));
+    }
+
+    /**
      * The full rename + reshape stress scenario on SQLite: a sloppy
      * all-TEXT legacy table is renamed and brought to a properly-typed
      * shape covering every change kind at once — table rename, column

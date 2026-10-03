@@ -207,4 +207,61 @@ final class MySqlConnectionRemoteTest extends IntegrationTestCase
         $live = $this->connection->schemaInspector->table('rmt_modify');
         self::assertStringContainsString('120', $live->columns[1]['type']);
     }
+
+    /**
+     * A NOT NULL add with a backfill() compiles the temporary-DEFAULT
+     * sequence: the column is added with the backfill as its default
+     * (existing rows get it), then the declared default is restored (new
+     * rows get that) — or dropped when none is declared.
+     */
+    public function testAddColumnBackfillsViaTemporaryDefault(): void
+    {
+        $this->createTables((new Blueprint('rmt_backfill'))
+            ->id()
+            ->string('name', 50));
+
+        $this->connection->table('rmt_backfill')->insert([['name' => 'Alice'], ['name' => 'Bob']]);
+
+        // Declared default 7, backfill 3: existing rows get 3, new rows 7.
+        $add = (new Blueprint('rmt_backfill'))
+            ->column(ColumnType::Int, 'priority', default: 7)
+            ->backfill('priority', 3);
+
+        $this->connection->alter(\BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn, $add);
+
+        $existing = $this->connection->table('rmt_backfill')->pluck('priority')->all();
+        self::assertSame([3, 3], array_map(intval(...), $existing), 'existing rows get the backfill');
+
+        $this->connection->table('rmt_backfill')->insert(['name' => 'Carol']);
+        $new = $this->connection->table('rmt_backfill')->where('name', '=', 'Carol')->first();
+        self::assertNotNull($new);
+        self::assertSame(7, (int) $new->priority, 'new rows get the declared default');
+    }
+
+    /**
+     * A NOT NULL add with a backfill() and NO declared default drops the
+     * temporary default afterwards — the column ends with no ongoing
+     * default.
+     */
+    public function testAddColumnBackfillOnlyDropsTemporaryDefault(): void
+    {
+        $this->createTables((new Blueprint('rmt_backfill'))
+            ->id()
+            ->string('name', 50));
+
+        $this->connection->table('rmt_backfill')->insert([['name' => 'Alice'], ['name' => 'Bob']]);
+
+        $add = (new Blueprint('rmt_backfill'))
+            ->column(ColumnType::Int, 'priority')
+            ->backfill('priority', 5);
+
+        $this->connection->alter(\BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn, $add);
+
+        $existing = $this->connection->table('rmt_backfill')->pluck('priority')->all();
+        self::assertSame([5, 5], array_map(intval(...), $existing));
+
+        $column = $this->connection->selectSql("SHOW COLUMNS FROM rmt_backfill LIKE 'priority'")->first();
+        self::assertNotNull($column);
+        self::assertNull($column->Default, 'the temporary default must be dropped');
+    }
 }

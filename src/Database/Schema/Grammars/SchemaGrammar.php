@@ -168,10 +168,74 @@ abstract class SchemaGrammar
             throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
         }
 
-        return ['ALTER TABLE ' . $this->wrap($blueprint->getTable()) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
-            fn (array $column) => $this->compileAddColumn($column),
+        $backfills = $blueprint->getBackfills();
+        $table = $blueprint->getTable();
+
+        // A NOT NULL column with a backfill is added with the backfill as
+        // a TEMPORARY default (existing rows get it), then the default is
+        // restored to the declared one (new rows get that) or dropped.
+        $statements = ['ALTER TABLE ' . $this->wrap($table) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
+            fn (array $column) => $this->compileAddColumn($this->withTemporaryDefault($column, $backfills)),
             $columns,
         ))];
+
+        foreach ($columns as $column) {
+            if (!array_key_exists($column['name'], $backfills)) {
+                continue;
+            }
+
+            $statements[] = $column['default'] !== null
+                ? $this->compileSetColumnDefault($table, $column['name'], $column['default'])
+                : $this->compileDropColumnDefault($table, $column['name']);
+        }
+
+        return $statements;
+    }
+
+    /**
+     * A column definition with its default swapped for the temporary
+     * backfill value, when one is declared.
+     *
+     * @param  ColumnShape  $column
+     * @param  array<string, mixed>  $backfills
+     * @return ColumnShape
+     */
+    protected function withTemporaryDefault(array $column, array $backfills): array
+    {
+        if (!array_key_exists($column['name'], $backfills)) {
+            return $column;
+        }
+
+        return [...$column, 'default' => $backfills[$column['name']]];
+    }
+
+    /**
+     * Compile the statement that restores a column's declared default
+     * after a backfill.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @param  mixed  $default  A scalar or an Expression.
+     * @return string
+     * @throws UnsupportedFeatureException
+     */
+    protected function compileSetColumnDefault(string $table, string $column, mixed $default): string
+    {
+        throw new UnsupportedFeatureException('This dialect does not support altering a column default.');
+    }
+
+    /**
+     * Compile the statement that drops a column's temporary default after
+     * a backfill.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
+     * @throws UnsupportedFeatureException
+     */
+    protected function compileDropColumnDefault(string $table, string $column): string
+    {
+        throw new UnsupportedFeatureException('This dialect does not support altering a column default.');
     }
 
     /**

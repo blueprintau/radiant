@@ -226,14 +226,33 @@ On SQLite an `AddColumn` normally applies in place (one `ADD COLUMN`
 statement per column — SQLite's `ALTER TABLE` accepts a single
 clause). A **NOT NULL column without a default** cannot be added in
 place to a non-empty table, so that add routes through the table
-rebuild, which backfills the existing rows. The framework never
-guesses a value: the backfill comes from the blueprint's explicit
-`backfill()` value, else the column's declared default — a NOT NULL
-added column with **neither** fails fast at compile time. Declare the
-ongoing default on the column, or supply a one-off migration value
-with `$blueprint->backfill('column', $value)` (which wins over the
-column default when both are set). SQLite 3.35+ drops columns
-natively, so a `DropColumn` applies in place.
+rebuild, which backfills the existing rows. SQLite 3.35+ drops
+columns natively, so a `DropColumn` applies in place.
+
+#### Backfilling existing rows
+
+An added NOT NULL column needs a value for the rows that already
+exist. The framework never guesses one: it comes from the blueprint's
+explicit `$blueprint->backfill('column', $value)`, else the column's
+declared default — a NOT NULL added column with **neither** fails
+fast at compile time. When both are set, `backfill()` wins for the
+**existing** rows while the declared default applies to **new** rows.
+
+How the backfill lands depends on the dialect:
+
+- **MySQL / Postgres** — the column is added with the backfill as a
+  temporary `DEFAULT` (existing rows get it), then the declared
+  default is restored (`SET DEFAULT`) or the temporary one dropped
+  (`DROP DEFAULT`). No full-table scan.
+- **SQLite (rebuild)** — a NOT NULL add via `apply()` routes through
+  the table rebuild, which backfills in the copy projection and
+  produces the no-final-default shape.
+- **SQLite (in-place nullable add)** — the column is added, then an
+  `UPDATE ... SET col = value WHERE col IS NULL` fills the existing
+  rows (SQLite cannot `SET`/`DROP DEFAULT` in place).
+- **SQLite (in-place NOT NULL add, no default)** — a direct `alter()`
+  renders the backfill as a temporary inline `DEFAULT` so the `ADD
+  COLUMN` succeeds and fills the existing rows (no separate `UPDATE`).
 
 ### FK and CHECK drift
 

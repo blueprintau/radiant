@@ -104,6 +104,34 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * Compile the statement that restores a column's declared default.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @param  mixed  $default  A scalar or an Expression.
+     * @return string
+     */
+    #[\Override]
+    protected function compileSetColumnDefault(string $table, string $column, mixed $default): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ALTER COLUMN ' . $this->wrap($column)
+            . ' SET DEFAULT ' . $this->compileDefault($default);
+    }
+
+    /**
+     * Compile the statement that drops a column's temporary default.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
+     */
+    #[\Override]
+    protected function compileDropColumnDefault(string $table, string $column): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ALTER COLUMN ' . $this->wrap($column) . ' DROP DEFAULT';
+    }
+
+    /**
      * Compile an `ALTER TABLE ... MODIFY COLUMN` statement — MySQL's
      * in-place content-drift form.
      *
