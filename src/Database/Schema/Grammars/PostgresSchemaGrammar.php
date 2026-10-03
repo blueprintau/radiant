@@ -185,7 +185,10 @@ final class PostgresSchemaGrammar extends SchemaGrammar
             // The USING clause casts the existing values explicitly —
             // Postgres only auto-casts implicitly-castable pairs, so a
             // text→numeric / text→timestamp reshape needs the explicit cast.
-            $type = $this->type($column['type'], $column['length']);
+            // The full shape (length, precision, scale) renders so a
+            // Decimal(10,2) stays numeric(10,2) — otherwise the second
+            // diff sees a perpetual drift.
+            $type = $this->type($column['type'], $column['length'], $column['precision'], $column['scale']);
             $statements[] = $base . ' TYPE ' . $type . ' USING ' . $name . '::' . $type;
 
             // Nullability second: SET NOT NULL validates existing rows, so

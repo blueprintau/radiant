@@ -147,6 +147,26 @@ final class MigrationFeaturesTest extends DatabaseTestCase
     }
 
     /**
+     * A Postgres Decimal modify renders its full shape — precision and
+     * scale — so the live column matches the declared type and the next
+     * diff converges (no perpetual drift).
+     */
+    public function testCompileModifyColumnPostgresDecimalKeepsShape(): void
+    {
+        $blueprint = (new Blueprint('orders'))
+            ->column(ColumnType::Decimal, 'total_amount', precision: 10, scale: 2);
+
+        self::assertSame(
+            [
+                'ALTER TABLE "orders" ALTER COLUMN "total_amount" TYPE numeric(10,2) USING "total_amount"::numeric(10,2)',
+                'ALTER TABLE "orders" ALTER COLUMN "total_amount" SET NOT NULL',
+                'ALTER TABLE "orders" ALTER COLUMN "total_amount" DROP DEFAULT',
+            ],
+            $this->postgres->compileModifyColumn($blueprint),
+        );
+    }
+
+    /**
      * SQLite has no in-place modify — the base throw stands (the
      * connection routes the change through the rebuild instead).
      */
