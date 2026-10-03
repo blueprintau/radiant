@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant;
 
+use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
@@ -220,6 +222,156 @@ abstract class Model
     final public static function all(): Collection
     {
         return static::newQuery()->get();
+    }
+
+    // ---- Static reads ----
+
+    /**
+     * Get the first model of the table, or null when it is empty.
+     *
+     * @return static|null
+     */
+    final public static function first(): ?static
+    {
+        return static::newQuery()->first();
+    }
+
+    /**
+     * Count the models in the table.
+     *
+     * @return int
+     */
+    final public static function count(): int
+    {
+        return static::newQuery()->count();
+    }
+
+    /**
+     * Whether any model exists in the table.
+     *
+     * @return bool
+     */
+    final public static function exists(): bool
+    {
+        return static::newQuery()->exists();
+    }
+
+    /**
+     * The value of a single column from the first row, decoded through
+     * the column's cast.
+     *
+     * @param  string|Aggregate  $column
+     * @return mixed
+     */
+    final public static function value(string|Aggregate $column): mixed
+    {
+        return static::newQuery()->value($column);
+    }
+
+    /**
+     * A collection of a single column's values, decoded through the casts.
+     *
+     * @param  string  $column
+     * @return BaseCollection<int, mixed>
+     */
+    final public static function pluck(string $column): BaseCollection
+    {
+        return static::newQuery()->pluck($column);
+    }
+
+    /**
+     * The maximum value of a column, decoded through the cast for
+     * declared columns.
+     *
+     * @param  string  $column
+     * @return mixed
+     */
+    final public static function max(string $column): mixed
+    {
+        return static::newQuery()->max($column);
+    }
+
+    /**
+     * The minimum value of a column, decoded through the cast for
+     * declared columns.
+     *
+     * @param  string  $column
+     * @return mixed
+     */
+    final public static function min(string $column): mixed
+    {
+        return static::newQuery()->min($column);
+    }
+
+    /**
+     * The sum of a column's values, decoded through the cast for
+     * declared columns.
+     *
+     * @param  string  $column
+     * @return mixed
+     */
+    final public static function sum(string $column): mixed
+    {
+        return static::newQuery()->sum($column);
+    }
+
+    /**
+     * The average of a column's values, decoded through the cast for
+     * declared columns.
+     *
+     * @param  string  $column
+     * @return mixed
+     */
+    final public static function avg(string $column): mixed
+    {
+        return static::newQuery()->avg($column);
+    }
+
+    /**
+     * Multiple aggregates in one query, decoded through each aggregate's
+     * column cast.
+     *
+     * @param  Aggregate  ...$aggregates
+     * @return \stdClass
+     */
+    final public static function aggregates(Aggregate ...$aggregates): \stdClass
+    {
+        return static::newQuery()->aggregates(...$aggregates);
+    }
+
+    /**
+     * Run one aggregate per group of the matching rows — a grouped
+     * aggregate in a single query.
+     *
+     * @param  Aggregate  $aggregate
+     * @param  string  $groupBy
+     * @return BaseCollection<string, mixed>
+     */
+    final public static function aggregateBy(Aggregate $aggregate, string $groupBy): BaseCollection
+    {
+        return static::newQuery()->aggregateBy($aggregate, $groupBy);
+    }
+
+    /**
+     * Count the matching rows per group of a column — in a single query.
+     *
+     * @param  string  $column
+     * @param  list<int|string>|null  $seed  Group values guaranteed to appear (0 when absent).
+     * @return BaseCollection<string, int>
+     */
+    final public static function countBy(string $column, ?array $seed = null): BaseCollection
+    {
+        return static::newQuery()->countBy($column, $seed);
+    }
+
+    /**
+     * Stream every model in the table, hydrating each row as it arrives.
+     *
+     * @return \Generator<int, static>
+     */
+    final public static function cursor(): \Generator
+    {
+        return static::newQuery()->cursor();
     }
 
     // ---- Static filter-modifier forwarders ----

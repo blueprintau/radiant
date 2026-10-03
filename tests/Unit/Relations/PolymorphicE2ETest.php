@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyImage;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
@@ -293,6 +295,90 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         $this->expectExceptionMessageIsOrContains('cannot compose filters');
 
         $comment->commentable()->countBy('id');
+    }
+
+    /**
+     * MorphTo's row reads resolve per type — first() returns the resolved
+     * parent for each comment's own alias.
+     */
+    public function testMorphToFirstResolvesPerType(): void
+    {
+        $comment3 = PolyComment::newQuery()->find(3);
+        self::assertNotNull($comment3);
+
+        $video = $comment3->commentable()->first();
+        self::assertInstanceOf(PolyVideo::class, $video);
+        self::assertSame('Video One', $video->title);
+
+        $comment1 = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment1);
+
+        $post = $comment1->commentable()->first();
+        self::assertInstanceOf(PolyPost::class, $post);
+    }
+
+    /**
+     * MorphTo's count()/exists() run against the resolved type's query.
+     */
+    public function testMorphToCountAndExists(): void
+    {
+        $comment = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment);
+
+        self::assertSame(1, $comment->commentable()->count());
+        self::assertTrue($comment->commentable()->exists());
+    }
+
+    /**
+     * MorphTo's findOrFail() resolves through the type column.
+     */
+    public function testMorphToFindOrFailResolves(): void
+    {
+        $comment3 = PolyComment::newQuery()->find(3);
+        self::assertNotNull($comment3);
+
+        $video = $comment3->commentable()->findOrFail(1);
+
+        self::assertInstanceOf(PolyVideo::class, $video);
+    }
+
+    /**
+     * MorphTo's scalar reads cannot compose — the same LogicException as
+     * countBy() above.
+     */
+    public function testMorphToScalarReadThrows(): void
+    {
+        $comment = PolyComment::newQuery()->find(1);
+        self::assertNotNull($comment);
+
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageIsOrContains('cannot compose filters');
+
+        $comment->commentable()->value('title');
+    }
+
+    /**
+     * A NULL morph pair's firstOrFail() throws ModelNotFoundException —
+     * the regression lock for the uninitialized-query crash the read
+     * family's readQuery() hook fixed.
+     */
+    public function testMorphToFirstOrFailOnNullPairThrowsNotFound(): void
+    {
+        $this->connection->table('poly_comments')->insert([
+            ['id' => 7, 'body' => 'unlinked', 'commentable_type' => null, 'commentable_id' => null],
+        ]);
+
+        $comment = PolyComment::newQuery()->find(7);
+        self::assertNotNull($comment);
+
+        $exception = Expectation::throws(
+            fn () => $comment->commentable()->firstOrFail(),
+            ModelNotFoundException::class,
+        );
+
+        // The related class is unknowable in this state — the exception
+        // names the PARENT class the no-match query was built on.
+        self::assertSame(PolyComment::class, $exception->model);
     }
 
     /**

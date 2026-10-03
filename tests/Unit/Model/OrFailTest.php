@@ -330,6 +330,35 @@ final class OrFailTest extends DatabaseTestCase
         self::assertNull($exception->key);
     }
 
+    /**
+     * A relation's findOrFail() returns the related model when it exists
+     * inside the relation's constraint.
+     */
+    public function testRelationFindOrFailReturnsModel(): void
+    {
+        $ada = OfUser::newQuery()->where('name', '=', 'ada')->firstOrFail();
+
+        $post = $ada->posts()->findOrFail(1);
+
+        self::assertInstanceOf(OfPost::class, $post);
+        self::assertSame('first', $post->title);
+    }
+
+    /**
+     * A relation's findOrFail() throws carrying the missing key.
+     */
+    public function testRelationFindOrFailThrowsWithKey(): void
+    {
+        $orphan = OfUser::newQuery()->where('name', '=', 'orphan')->firstOrFail();
+
+        $exception = Expectation::throws(
+            fn () => $orphan->posts()->findOrFail(999),
+            ModelNotFoundException::class,
+        );
+
+        self::assertSame(999, $exception->key);
+    }
+
     // ---- Soft-delete interplay ----
 
     /**

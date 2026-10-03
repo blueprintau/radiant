@@ -67,6 +67,14 @@ for reads backed by a uniqueness guarantee. Relations expose the same
 fail-fast reads: `$user->featuredPost()->firstOrFail()` and
 `->sole()` delegate to the constrained query.
 
+The remaining reads also have static forms — `User::first()`,
+`User::count()`, `User::exists()`, `User::value('name')`,
+`User::pluck('name')`, `User::max('signed_up_at')`,
+`User::aggregates(...)`, `User::countBy('status')`, and
+`User::cursor()` — every one a forwarder over `newQuery()`. Relations
+carry the same read family instance-side, scoped to the relation's
+constraint.
+
 Every `#[Column]` property must declare a single named PHP type — untyped,
 union, and intersection types fail at metadata build. A `?Carbon` property
 on a DateTime column round-trips `Carbon` instances; an `int` property on

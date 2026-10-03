@@ -11,6 +11,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
  * Many-to-many: the parent and the related model link THROUGH a pivot
@@ -248,6 +249,30 @@ class BelongsToMany extends Relation
     }
 
     /**
+     * The constrained query — with the pivot select when pivot columns
+     * are declared.
+     *
+     * @return ModelQueryBuilder<TRelated>
+     */
+    #[\Override]
+    protected function readQuery(): ModelQueryBuilder
+    {
+        if ($this->pivotColumns === []) {
+            return $this->getQuery();
+        }
+
+        $selects = [];
+
+        foreach ($this->pivotColumns as $column) {
+            $selects[] = self::qualify($this->pivotTable, $column) . ' as radiant_pivot_' . $column;
+        }
+
+        $selects[] = $this->related::table() . '.*';
+
+        return $this->getQuery()->select(...$selects);
+    }
+
+    /**
      * Run the constrained query.
      *
      * @return Collection<TRelated>
@@ -255,20 +280,7 @@ class BelongsToMany extends Relation
     #[\Override]
     protected function executeResults(): Collection
     {
-        $query = $this->query;
-
-        if ($this->pivotColumns !== []) {
-            $selects = [];
-
-            foreach ($this->pivotColumns as $column) {
-                $selects[] = self::qualify($this->pivotTable, $column) . ' as radiant_pivot_' . $column;
-            }
-
-            $selects[] = $this->related::table() . '.*';
-            $query = $query->select(...$selects);
-        }
-
-        return $query->get();
+        return $this->readQuery()->get();
     }
 
     /**

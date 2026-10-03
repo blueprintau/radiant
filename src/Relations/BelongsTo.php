@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\ModelQueryBuilder;
 
 /**
  * The inverse one-to-one/one-to-many: the PARENT table holds the FK.
@@ -68,6 +69,36 @@ final class BelongsTo extends Relation
     }
 
     /**
+     * Whether the parent's FK currently resolves — every component
+     * non-null.
+     *
+     * @return bool
+     */
+    private function hasResolvableKey(): bool
+    {
+        if ($this->isComposite()) {
+            return !in_array(null, $this->parentKeyValues($this->getForeignKeys()), true);
+        }
+
+        return $this->parent->attribute($this->getForeignKey()) !== null;
+    }
+
+    /**
+     * The constrained query — a no-match query when the FK is null.
+     *
+     * @return ModelQueryBuilder<TRelated>
+     */
+    #[\Override]
+    protected function readQuery(): ModelQueryBuilder
+    {
+        if (!$this->hasResolvableKey()) {
+            return $this->getQuery()->whereRaw('1 = 0', []);
+        }
+
+        return $this->getQuery();
+    }
+
+    /**
      * Run the constrained query — a single model or none.
      *
      * @return Collection<TRelated>
@@ -75,11 +106,7 @@ final class BelongsTo extends Relation
     #[\Override]
     protected function executeResults(): Collection
     {
-        if ($this->isComposite()) {
-            if (in_array(null, $this->parentKeyValues($this->getForeignKeys()), true)) {
-                return Collection::make([]);
-            }
-        } elseif ($this->parent->attribute($this->getForeignKey()) === null) {
+        if (!$this->hasResolvableKey()) {
             return Collection::make([]);
         }
 

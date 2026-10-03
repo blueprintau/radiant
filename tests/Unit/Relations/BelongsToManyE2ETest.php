@@ -104,6 +104,21 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
     }
 
     /**
+     * first() carries the pivot values too — the read family rides the
+     * same pivot-carrying select as get().
+     */
+    public function testFirstCarriesPivotValues(): void
+    {
+        $post = B2mPost::newQuery()->find(1);
+        self::assertNotNull($post);
+
+        $tag = $post->tags()->withPivot('position')->first();
+
+        self::assertNotNull($tag);
+        self::assertSame('first', $tag->pivotValue('position'));
+    }
+
+    /**
      * A pivot column starting with the reserved `radiant_` prefix fails
      * fast at the withPivot() call — the internal `radiant_pivot_{column}`
      * alias would collide with the reserved namespace the row lift treats

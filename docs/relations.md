@@ -65,17 +65,28 @@ modified, and a discarded call is a no-op. A composed chain always
 executes fresh: the eagerly-loaded result was fetched unfiltered, so it
 can never be served for a filtered read.
 
-The relation also exposes fail-fast reads: `firstOrFail()` returns the
-first related model or throws
+The relation also exposes the full read family, all scoped to the
+relation's constraint: `first()`/`find()` return the first related model
+(or null), `firstOrFail()` throws
 `BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException` when the
-relation matches none, and `sole()` requires exactly one match (more than
-one throws `MultipleRecordsFoundException`).
+relation matches none, `sole()` requires exactly one match (more than one
+throws `MultipleRecordsFoundException`), and `count()`/`exists()` report
+the constrained set. The scalar reads (`value()`, `pluck()`,
+`max()`/`min()`/`sum()`/`avg()`, `aggregates()`) and the grouped
+aggregates (`aggregateBy()`, `countBy()`) run against the constrained
+query too.
 
 `get()` and the fail-fast reads differ in one way: `get()`
 is cache-aware (see [Eager loading](#eager-loading) — after `with()`, the
 unfiltered read returns the loaded result), while `firstOrFail()` and
 `sole()` always execute against the database. Pass `fresh: true` to
 bypass the cache and always run the query.
+
+On `morphTo()` the row reads (`first()`, `find()`, `count()`,
+`exists()`, the fail-fast family) resolve the related class per row and
+run against it; the scalar reads cannot compose — the related table is
+not known until the type column resolves, so they throw
+`LogicException`.
 
 ## Grouped aggregates
 

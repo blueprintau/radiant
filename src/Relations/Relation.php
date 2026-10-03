@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
-use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Concerns\FetchesResults;
 use BlueprintAU\Radiant\Concerns\FiltersQuery;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Expression;
@@ -43,6 +43,9 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 abstract class Relation
 {
     use FiltersQuery;
+
+    /** @use FetchesResults<TRelated> */
+    use FetchesResults;
 
     /**
      * The maximum number of parent keys per eager-load query.
@@ -182,6 +185,16 @@ abstract class Relation
         }
 
         return $this->query;
+    }
+
+    /**
+     * The query the row reads run against.
+     *
+     * @return ModelQueryBuilder<TRelated>
+     */
+    protected function readQuery(): ModelQueryBuilder
+    {
+        return $this->getQuery();
     }
 
     /**
@@ -357,31 +370,6 @@ abstract class Relation
     }
 
     /**
-     * Get the first related model or throw if no related models exist.
-     *
-     * @return TRelated
-n     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
-     */
-    final public function firstOrFail(): Model
-    {
-        return $this->getQuery()->firstOrFail();
-    }
-
-    /**
-     * Require the relation to match exactly one related model.
-     *
-     * @return TRelated
-     *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
-     */
-    final public function sole(): Model
-    {
-        return $this->getQuery()->sole();
-    }
-
-    /**
      * The underlying query builder for the related model.
      *
      * @return ModelQueryBuilder<TRelated>
@@ -525,56 +513,6 @@ n     *
         $clone->query = $this->compositionQuery()->having($column, $operator, $value);
 
         return $clone;
-    }
-
-    /**
-     * Run one aggregate per group of the related rows — a grouped
-     * aggregate in a single query.
-     *
-     * The FK constraint rides along automatically: the groups only ever
-     * cover THIS parent's related rows. The result is keyed by the group
-     * column's value, so the aggregate's own alias is ignored here (it
-     * matters only for the multi-aggregate row shape of the builder's
-     * aggregates()).
-     *
-     * The value type follows the aggregate: `count` yields int;
-     * `sum`/`avg` over numeric columns yield int|float; `min`/`max` yield
-     * the column's decoded type (a datetime column yields Carbon); custom
-     * functions and Expression arguments yield the raw driver value. For
-     * a guaranteed-numeric grouped count, use {@see Relation::countBy()}.
-     *
-     * @param  Aggregate  $aggregate  The aggregate to compute per group.
-     * @param  string  $groupBy  The column whose values key the result.
-     * @return BaseCollection<string, mixed>
-     * @throws \LogicException  On a relation whose query is built lazily (MorphTo).
-     */
-    final public function aggregateBy(Aggregate $aggregate, string $groupBy): BaseCollection
-    {
-        return $this->compositionQuery()->aggregateBy($aggregate, $groupBy);
-    }
-
-    /**
-     * Count the related rows per group of a column — in a single query.
-     *
-     * The FK constraint rides along automatically: the counts only ever
-     * cover THIS parent's related rows. The result is keyed by the group
-     * column's value with int counts.
-     *
-     * The optional seed lists group values that must appear even when the
-     * database has no rows for them — each seeded key absent from the
-     * result becomes 0. The seed is ADDITIVE: database rows always win,
-     * and group values found in the data but missing from the seed still
-     * appear. (Only counts can be seeded — an absent group has no honest
-     * min, max, or average.)
-     *
-     * @param  string  $column  The column whose values key the result.
-     * @param  list<int|string>|null  $seed  Group values guaranteed to appear (0 when absent).
-     * @return BaseCollection<string, int>
-     * @throws \LogicException  On a relation whose query is built lazily (MorphTo).
-     */
-    final public function countBy(string $column, ?array $seed = null): BaseCollection
-    {
-        return $this->compositionQuery()->countBy($column, $seed);
     }
 
     /**

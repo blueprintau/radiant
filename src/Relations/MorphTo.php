@@ -200,6 +200,32 @@ final class MorphTo extends Relation
     }
 
     /**
+     * The resolved type's constrained query — the row reads' target.
+     *
+     * @return ModelQueryBuilder<TRelated>
+     */
+    #[\Override]
+    protected function readQuery(): ModelQueryBuilder
+    {
+        $alias = $this->aliasOf($this->parent);
+
+        if ($alias === null) {
+            // Null morph pair → no results, without compiling a meaningless
+            // query (BelongsTo's convention). The no-match query builds on
+            // the PARENT's class — the Model::class marker cannot (its
+            // table() throws), and a `1 = 0` query never hydrates a row.
+            /** @var ModelQueryBuilder<TRelated> */
+            return ($this->parent)::newQuery()->whereRaw('1 = 0', []);
+        }
+
+        // aliasOf() validated the alias against the allowlist (or the
+        // bound IS Model without one) — the resolved builder's rows are
+        // all TRelated.
+        /** @var ModelQueryBuilder<TRelated> */
+        return $this->queryFor($alias);
+    }
+
+    /**
      * Build the constrained query for ONE resolved type.
      *
      * @param  class-string<Model>  $alias
