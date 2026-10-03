@@ -57,6 +57,99 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
+     * Apply a ModifyColumn change through the table rebuild.
+     *
+     * The rebuild renders the full desired shape (the change's main
+     * blueprint), not the drifted subset the in-place dialects compile.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    #[Override]
+    protected function applyModifyColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        $this->modifyColumn($change->blueprint);
+    }
+
+    /**
+     * Apply a DropColumn change, skipping columns already absent.
+     *
+     * A prior rebuild on the same table renders the full desired shape,
+     * which excludes the dropped columns — a second drop would fail.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    #[Override]
+    protected function applyDropColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        // A null subject falls back to the blueprint's own dropColumn()
+        // declarations.
+        $subject = $change->subject ?? $change->blueprint->getDropColumns();
+        $live = array_column($this->schemaInspector->table($change->table)->columns, 'name');
+        $pending = array_values(array_intersect($subject, $live));
+
+        if ($pending === []) {
+            return; // Already dropped (a rebuild realized the desired shape).
+        }
+
+        parent::applyDropColumn($change);
+    }
+
+    /**
+     * Apply an AddColumn change, routing a NOT NULL-without-default add
+     * through the table rebuild.
+     *
+     * SQLite cannot add such a column in place to a non-empty table, so
+     * the change rebuilds from the full desired blueprint and backfills
+     * the existing rows. Every other add stays in place.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    #[Override]
+    protected function applyAddColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        // A null subject acts on every column the blueprint declares.
+        $subject = $change->subject ?? array_map(
+            fn (array $column) => $column['name'],
+            $change->blueprint->getColumns(),
+        );
+        $live = array_column($this->schemaInspector->table($change->table)->columns, 'name');
+        $pending = array_values(array_diff($subject, $live));
+
+        if ($pending === []) {
+            return; // Already added (a rebuild realized the desired shape).
+        }
+
+        if ($this->addRequiresRebuild($change)) {
+            $this->rebuildTable($change->blueprint);
+            return;
+        }
+
+        parent::applyAddColumn($change);
+    }
+
+    /**
+     * Whether an add change carries a NOT NULL column without a default.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return bool
+     */
+    private function addRequiresRebuild(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    {
+        $subject = $change->subject ?? array_map(
+            fn (array $column) => $column['name'],
+            $change->blueprint->getColumns(),
+        );
+
+        foreach ($change->blueprint->onlyColumns($subject)->getColumns() as $column) {
+            if ($column['nullable'] !== true && $column['default'] === null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Modify columns on SQLite — routed through the table rebuild.
      *
      * @param  Blueprint  $blueprint

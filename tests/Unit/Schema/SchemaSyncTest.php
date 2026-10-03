@@ -284,9 +284,9 @@ final class SchemaSyncTest extends DatabaseTestCase
     }
 
     /**
-     * A column rename (title → slug) is an add+drop on one table — the
-     * alter is flagged possibleRename and the description names both sides,
-     * instead of the old misleading DropColumn-only label.
+     * A column rename (title → slug) is an add+drop on one table — BOTH
+     * halves are flagged possibleRename and name the other side, instead
+     * of the old misleading DropColumn-only label.
      */
     public function testColumnRenameRaisesAdvisory(): void
     {
@@ -299,12 +299,23 @@ final class SchemaSyncTest extends DatabaseTestCase
 
         $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
 
-        self::assertCount(1, $changes);
+        // The add and the drop are separate changes, both carrying the
+        // rename advisory.
+        self::assertCount(2, $changes);
+        self::assertSame(SchemaOperation::AddColumn, $changes[0]->operation);
+        self::assertSame(SchemaOperation::DropColumn, $changes[1]->operation);
+
         self::assertTrue($changes[0]->possibleRename);
-        self::assertTrue($changes[0]->destructive);
+        self::assertFalse($changes[0]->destructive);
         self::assertStringContainsString('POSSIBLE RENAME', $changes[0]->description);
         self::assertStringContainsString('[title]', $changes[0]->description);
         self::assertStringContainsString('[slug]', $changes[0]->description);
+
+        self::assertTrue($changes[1]->possibleRename);
+        self::assertTrue($changes[1]->destructive);
+        self::assertStringContainsString('POSSIBLE RENAME', $changes[1]->description);
+        self::assertStringContainsString('[title]', $changes[1]->description);
+        self::assertStringContainsString('[slug]', $changes[1]->description);
     }
 
     /**

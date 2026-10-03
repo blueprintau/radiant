@@ -348,16 +348,17 @@ final class MetadataPipelineTest extends DatabaseTestCase
     }
 
     /**
-     * SQLite does not support dropping columns — the dialect gate fails
-     * fast instead of silently ignoring the operation.
+     * SQLite 3.35+ drops a column natively — the alter applies in place
+     * and the column is gone from the live schema.
      */
     public function testAlterDropsColumn(): void
     {
         $blueprint = (new Blueprint('users'))->dropColumn('meta');
 
-        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->expectExceptionMessageIsOrContains('does not support dropping columns');
         $this->connection->alter(SchemaOperation::DropColumn, $blueprint);
+
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertNotContains('meta', array_column($live->columns, 'name'));
     }
 
     // ---- Renamed columns: columnName ≠ propertyName end to end ----

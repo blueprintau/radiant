@@ -93,23 +93,14 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     }
 
     /**
-     * Compile an `ALTER TABLE ... DROP COLUMN` statement.
+     * Compile one column's `DROP COLUMN` clause.
      *
-     * @param  Blueprint  $blueprint
+     * @param  string  $column
      * @return string
      */
-    protected function compileDropColumn(Blueprint $blueprint): string
+    protected function compileDropColumn(string $column): string
     {
-        $table = $blueprint->getTable();
-        $columns = $blueprint->getDropColumns();
-        if ($columns === []) {
-            throw new \InvalidArgumentException('Cannot drop columns with no columns defined.');
-        }
-
-        return 'ALTER TABLE ' . $this->wrap($table) . ' DROP COLUMN ' . implode(', DROP COLUMN ', array_map(
-            fn (string $column) => $this->wrap($column),
-            $columns,
-        ));
+        return $this->wrap($column);
     }
 
     /**

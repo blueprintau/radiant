@@ -12,10 +12,9 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
  *
  * Identifiers are quoted with double quotes (embedded quotes doubled).
  * Auto-increment renders as `AUTOINCREMENT` (only valid on an `INTEGER
- * PRIMARY KEY` column). SQLite cannot drop columns before 3.35, so
- * {@see compileDropColumn()} inherits the base
- * {@see UnsupportedFeatureException} — a drop request fails fast rather than
- * silently doing nothing.
+ * PRIMARY KEY` column). SQLite 3.35+ drops columns natively, and `ALTER
+ * TABLE` accepts a single `ADD COLUMN` clause per statement — a
+ * multi-column add compiles one statement per column.
  */
 final class SqliteSchemaGrammar extends SchemaGrammar
 {
@@ -121,6 +120,68 @@ final class SqliteSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * Compile the `ALTER TABLE ... ADD COLUMN` statements.
+     *
+     * SQLite accepts a single `ADD COLUMN` clause per statement, so a
+     * multi-column add is one statement per column.
+     *
+     * @param  Blueprint  $blueprint
+     * @return list<string>
+     */
+    #[\Override]
+    public function compileAddColumns(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+        $columns = $blueprint->getColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
+        }
+
+        return array_map(
+            fn (array $column): string => 'ALTER TABLE ' . $this->wrap($table)
+                . ' ADD COLUMN ' . $this->compileAddColumn($column),
+            $columns,
+        );
+    }
+
+    /**
+     * Compile the `ALTER TABLE ... DROP COLUMN` statements.
+     *
+     * SQLite 3.35+ drops columns natively, one `DROP COLUMN` clause per
+     * statement.
+     *
+     * @param  Blueprint  $blueprint
+     * @return list<string>
+     */
+    #[\Override]
+    public function compileDropColumns(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+        $columns = $blueprint->getDropColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot drop columns with no columns defined.');
+        }
+
+        return array_map(
+            fn (string $column): string => 'ALTER TABLE ' . $this->wrap($table)
+                . ' DROP COLUMN ' . $this->compileDropColumn($column),
+            $columns,
+        );
+    }
+
+    /**
+     * Compile one column's `DROP COLUMN` clause.
+     *
+     * @param  string  $column
+     * @return string
+     */
+    #[\Override]
+    protected function compileDropColumn(string $column): string
+    {
+        return $this->wrap($column);
+    }
+
+    /**
      * Compile the full table-rebuild sequence — SQLite's answer to every
      * change it cannot make in place (content drift, FK/CHECK changes).
      *
@@ -162,15 +223,139 @@ final class SqliteSchemaGrammar extends SchemaGrammar
         // name, never the temp name).
         $tempBlueprint = $desired->forTable($tempName);
 
+        // An added NOT NULL column has no source in the copy projection —
+        // the temp table must accept the copied rows. The temp definition
+        // relaxes such a column to nullable (the final shape is enforced
+        // from the next write; the rebuild itself never tightens data it
+        // just inserted), and the copy backfills the column's value so
+        // existing rows carry one. The value is the blueprint's explicit
+        // backfill(), else the column's declared default — never a guessed
+        // zero value. A NOT NULL added column with neither fails fast at
+        // compile time.
+        $declaredBackfills = $desired->getBackfills();
+        $backfills = [];
+
+        foreach ($desired->getColumns() as $column) {
+            if (in_array($column['name'], $liveColumns, true)) {
+                continue; // Not an added column — it has a copy source.
+            }
+
+            if ($column['nullable'] === true) {
+                continue; // Nullable added columns copy as their natural NULL.
+            }
+
+            $value = $declaredBackfills[$column['name']] ?? $column['default'] ?? null;
+
+            if ($value === null) {
+                throw new \InvalidArgumentException(sprintf(
+                    'A table rebuild of [%s] cannot add the NOT NULL column [%s]: it declares no '
+                    . 'default and no backfill() value to fill the existing rows with. Declare a '
+                    . 'default on the column, provide one with Blueprint::backfill(), or make the '
+                    . 'column nullable.',
+                    $table,
+                    $column['name'],
+                ));
+            }
+
+            $backfills[$column['name']] = $value;
+        }
+
+        if ($backfills !== []) {
+            $tempBlueprint = $this->relaxColumns($tempBlueprint, array_keys($backfills));
+        }
+
         $statements = array_values(array_filter([
             $foreignKeyConstraintsEnabled ? 'PRAGMA foreign_keys = OFF' : null,
             'CREATE TABLE ' . $this->wrap($tempName) . ' (' . $this->compileTableBody($tempBlueprint) . ')',
-            $this->compileCopyTable($table, $tempName, $copyColumns),
+            $this->compileCopyTableWithBackfill($table, $tempName, $copyColumns, $backfills),
             $this->compileDrop($table),
             $this->compileRenameTable($tempName, $table),
             $foreignKeyConstraintsEnabled ? 'PRAGMA foreign_keys = ON' : null,
         ]));
 
         return $statements;
+    }
+
+    /**
+     * A copy of the blueprint with the named columns relaxed to nullable.
+     *
+     * @param  Blueprint  $blueprint
+     * @param  list<string>  $names
+     * @return Blueprint
+     */
+    private function relaxColumns(Blueprint $blueprint, array $names): Blueprint
+    {
+        $relaxed = new Blueprint($blueprint->getTable());
+
+        foreach ($blueprint->getColumns() as $column) {
+            $relaxed = $relaxed->column(
+                $column['type'],
+                $column['name'],
+                primaryKey: $column['primaryKey'],
+                autoIncrement: $column['autoIncrement'],
+                nullable: in_array($column['name'], $names, true) ? true : $column['nullable'],
+                unique: $column['unique'],
+                index: $column['index'],
+                length: $column['length'],
+                precision: $column['precision'],
+                scale: $column['scale'] ?? null,
+                values: $column['values'] ?? null,
+                default: $column['default'],
+                foreign: $column['foreign'],
+                onDelete: $column['onDelete'],
+                onUpdate: $column['onUpdate'],
+            );
+        }
+
+        foreach ($blueprint->getForeignKeys() as $foreignKey) {
+            $relaxed = $relaxed->foreignKey(
+                $foreignKey['columns'],
+                $foreignKey['references'][0],
+                array_slice($foreignKey['references'], 1),
+                $foreignKey['onDelete'],
+                $foreignKey['onUpdate'],
+                $foreignKey['deferrable'],
+                $foreignKey['initiallyDeferred'],
+            );
+        }
+
+        foreach ($blueprint->getChecks() as $check) {
+            $relaxed = $relaxed->check($check['expression'], $check['name']);
+        }
+
+        return $relaxed;
+    }
+
+    /**
+     * Compile the data-copy statement, backfilling the added NOT NULL
+     * columns with their values.
+     *
+     * @param  string  $from
+     * @param  string  $to
+     * @param  list<string>  $columns  The live ∩ desired projection.
+     * @param  array<string, mixed>  $backfills  Added column => backfill value.
+     * @return string
+     */
+    private function compileCopyTableWithBackfill(string $from, string $to, array $columns, array $backfills): string
+    {
+        if ($backfills === []) {
+            return $this->compileCopyTable($from, $to, $columns);
+        }
+
+        $targetColumns = [...$columns, ...array_keys($backfills)];
+
+        $selectExpressions = array_map(
+            fn (string $column): string => $this->wrap($column),
+            $columns,
+        );
+
+        foreach ($backfills as $default) {
+            $selectExpressions[] = $this->compileDefault($default);
+        }
+
+        return 'INSERT INTO ' . $this->wrap($to)
+            . ' (' . implode(', ', array_map(fn (string $column) => $this->wrap($column), $targetColumns)) . ')'
+            . ' SELECT ' . implode(', ', $selectExpressions)
+            . ' FROM ' . $this->wrap($from);
     }
 }

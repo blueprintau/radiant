@@ -158,4 +158,53 @@ final class MySqlConnectionRemoteTest extends IntegrationTestCase
         $child = $this->connection->schemaInspector->table('rmt_fk_child');
         self::assertFalse($child->foreignKeys[0]['deferrable'], 'MySQL has no DEFERRABLE');
     }
+
+    /**
+     * A ModifyColumn change compiles ONLY the drifted subset — the
+     * auto-increment primary key is NOT restated (a full-shape compile
+     * would fail with "Multiple primary key defined"), and unchanged
+     * columns are not needlessly re-ALTERed.
+     */
+    public function testModifyColumnCompilesOnlyTheDriftedSubset(): void
+    {
+        $this->createTables((new Blueprint('rmt_modify'))
+            ->id()
+            ->string('name', 50)
+            ->string('email', 100));
+
+        $differ = new \BlueprintAU\Radiant\Database\Schema\SchemaDiffer($this->connection->schemaInspector);
+
+        // Widen ONLY the name column — id and email are unchanged.
+        $desired = (new Blueprint('rmt_modify'))
+            ->id()
+            ->string('name', 120)
+            ->string('email', 100);
+
+        // Diff ONLY the table under test (dropTables off) so a leftover
+        // table in the shared schema cannot add a drop_table change.
+        $changes = $differ->diff([$desired], dropTables: false);
+
+        self::assertCount(1, $changes);
+        self::assertSame(\BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn, $changes[0]->operation);
+
+        // The change carries the drifted column NAMES as its subject.
+        self::assertSame(['name'], $changes[0]->subject);
+
+        // The compiled SQL (the full blueprint filtered to the subject)
+        // touches ONLY the name column — no PRIMARY KEY restatement, no
+        // re-ALTER of the unchanged email column.
+        $sql = $this->connection->schemaGrammar->compileModifyColumn(
+            $changes[0]->blueprint->onlyColumns($changes[0]->subject ?? []),
+        );
+        self::assertSame(
+            ['ALTER TABLE `rmt_modify` MODIFY `name` varchar(120) NOT NULL'],
+            $sql,
+        );
+
+        // Applying the change must not trip "Multiple primary key defined".
+        $this->connection->apply($changes[0]);
+
+        $live = $this->connection->schemaInspector->table('rmt_modify');
+        self::assertStringContainsString('120', $live->columns[1]['type']);
+    }
 }

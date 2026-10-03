@@ -169,10 +169,6 @@ abstract class IntegrationTestCase extends DatabaseTestCase
 
     /**
      * Schema alter (add/drop column) works on the live server.
-     *
-     * The drop-column arm is skipped on sqlite — the dialect rebuilds the
-     * table instead of dropping the column, so compileDropColumn throws
-     * UnsupportedFeatureException.
      */
     public function testSchemaAlter(): void
     {
@@ -186,14 +182,88 @@ abstract class IntegrationTestCase extends DatabaseTestCase
         self::assertNotNull($row);
         self::assertSame(30, (int) $row->age);
 
-        if ($this->connection instanceof \BlueprintAU\Radiant\Database\Connections\SqliteConnection) {
-            return;
-        }
-
         $this->connection->alter(SchemaOperation::DropColumn, (new Blueprint('users'))->dropColumn('age'));
         $row = $this->connection->table('users')->where('name', '=', 'Alice')->first();
         self::assertNotNull($row);
         self::assertObjectNotHasProperty('age', $row);
+    }
+
+    /**
+     * A full rename + reshape sync: a sloppy all-TEXT legacy table is
+     * renamed and brought to a properly-typed shape covering every change
+     * kind at once — table rename, column rename, adds (incl. NOT NULL),
+     * modifies and a drop — and the seeded rows survive. This is the
+     * regression test for the sync-failure class where a mixed alter lost
+     * its add side, a modify restated the primary key, and a SQLite
+     * rebuild could not add a NOT NULL column.
+     */
+    public function testRenameAndReshapeSyncAppliesEveryChangeKind(): void
+    {
+        // The shared schema may carry a leftover from a prior run — the
+        // rename target must be absent for the declared rename to verify.
+        foreach (['orders', 'legacy_orders'] as $stale) {
+            if ($this->connection->schemaInspector->hasTable($stale)) {
+                $this->connection->drop($stale);
+            }
+        }
+
+        // The EXISTING (live) definition: a sloppy all-TEXT legacy schema.
+        $this->createTables(
+            (new Blueprint('legacy_orders'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::Text, 'order_ref')
+                ->column(ColumnType::Text, 'customer_email')
+                ->column(ColumnType::Text, 'total_amount')
+                ->column(ColumnType::Text, 'legacy_flag', nullable: true)
+                ->column(ColumnType::Text, 'created_at'),
+        );
+
+        $this->connection->table('legacy_orders')->insert([
+            ['order_ref' => 'ORD-1', 'customer_email' => 'a@b.com', 'total_amount' => '199.99', 'legacy_flag' => 'gold', 'created_at' => '2026-01-01 10:00:00'],
+            ['order_ref' => 'ORD-2', 'customer_email' => 'c@d.com', 'total_amount' => '49.50', 'legacy_flag' => null, 'created_at' => '2026-02-01 10:00:00'],
+        ]);
+
+        // The DESIRED definition: renamed + re-typed, covering every kind.
+        $desired = (new Blueprint('orders'))
+            ->renamedFrom('legacy_orders')
+            ->renameColumn('order_ref', 'order_number')
+            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+            ->column(ColumnType::String, 'order_number', length: 64)
+            ->column(ColumnType::String, 'customer_email', length: 255)
+            ->column(ColumnType::Decimal, 'total_amount', precision: 10, scale: 2)
+            ->column(ColumnType::DateTime, 'created_at')
+            ->column(ColumnType::Int, 'priority', default: 0)
+            ->column(ColumnType::String, 'discount_code', length: 32, nullable: true);
+
+        $synchronizer = new \BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer($this->connection);
+        $changes = $synchronizer->plan([$desired]);
+
+        // Every change applies cleanly — one at a time, so no failure can
+        // mask a later change.
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The acceptance check: live schema matches the desired shape, the
+        // legacy column is gone, and both rows survived.
+        $live = $this->connection->schemaInspector->table('orders');
+        $liveNames = array_column($live->columns, 'name');
+        $desiredNames = array_map(fn (array $c) => $c['name'], $desired->getColumns());
+
+        self::assertSame([], array_diff($desiredNames, $liveNames), 'all desired columns must be present');
+        self::assertSame([], array_diff($liveNames, $desiredNames), 'no extra live columns (legacy_flag dropped)');
+        self::assertSame(2, $this->connection->table('orders')->count(), 'the seeded rows must survive');
+
+        // A re-diff converges — the schema is fully in sync.
+        $converged = (new Blueprint('orders'))
+            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+            ->column(ColumnType::String, 'order_number', length: 64)
+            ->column(ColumnType::String, 'customer_email', length: 255)
+            ->column(ColumnType::Decimal, 'total_amount', precision: 10, scale: 2)
+            ->column(ColumnType::DateTime, 'created_at')
+            ->column(ColumnType::Int, 'priority', default: 0)
+            ->column(ColumnType::String, 'discount_code', length: 32, nullable: true);
+        self::assertSame([], $synchronizer->plan([$converged]), 'a second plan must be empty');
     }
 
     /**

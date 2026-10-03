@@ -6,7 +6,6 @@ namespace BlueprintAU\Radiant\Tests\Unit\Database;
 
 use BlueprintAU\Radiant\Database\Connections\MySqlConnection;
 use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
-use BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
@@ -192,18 +191,18 @@ final class SqlConnectionSchemaOpsTest extends TestCase
     }
 
     /**
-     * alter(DropColumn) on sqlite throws — the sqlite grammar inherits the
-     * base no-in-place-drop refusal; drops route through the rebuild
-     * (ModifyColumn) instead.
+     * alter(DropColumn) on sqlite drops the column in place — SQLite 3.35+
+     * supports DROP COLUMN natively, and the data in the remaining columns
+     * survives.
      */
-    public function testAlterDropColumnThrowsOnSqlite(): void
+    public function testAlterDropColumnDropsOnSqlite(): void
     {
-        $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessageIsOrContains('does not support dropping columns');
-
         $alter = (new Blueprint('users'))->dropColumn('name');
 
         $this->connection->alter(SchemaOperation::DropColumn, $alter);
+
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertSame(['id'], array_column($live->columns, 'name'));
     }
 
     /**

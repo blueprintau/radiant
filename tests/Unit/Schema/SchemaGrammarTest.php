@@ -594,13 +594,14 @@ final class SchemaGrammarTest extends TestCase
     // ---- Alter ----
 
     /**
-     * Adding a column compiles per dialect.
+     * Adding a column compiles per dialect — SQLite renders one statement
+     * per column (its ALTER TABLE accepts a single ADD COLUMN clause).
      */
     public function testAlterAddColumn(): void
     {
         $blueprint = (new Blueprint('users'))->string('nickname', 100);
         $sql = (new SqliteSchemaGrammar())->compileAddColumns($blueprint);
-        self::assertSame('ALTER TABLE "users" ADD COLUMN "nickname" varchar(100) NOT NULL', $sql);
+        self::assertSame(['ALTER TABLE "users" ADD COLUMN "nickname" varchar(100) NOT NULL'], $sql);
     }
 
     /**
@@ -610,7 +611,7 @@ final class SchemaGrammarTest extends TestCase
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
         $sql = (new MySqlSchemaGrammar())->compileDropColumns($blueprint);
-        self::assertSame('ALTER TABLE `users` DROP COLUMN `nickname`', $sql);
+        self::assertSame(['ALTER TABLE `users` DROP COLUMN `nickname`'], $sql);
     }
 
     /**
@@ -620,18 +621,18 @@ final class SchemaGrammarTest extends TestCase
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
         $sql = (new PostgresSchemaGrammar())->compileDropColumns($blueprint);
-        self::assertSame('ALTER TABLE "users" DROP COLUMN "nickname"', $sql);
+        self::assertSame(['ALTER TABLE "users" DROP COLUMN "nickname"'], $sql);
     }
 
     /**
-     * SQLite cannot drop columns — it fails fast.
+     * SQLite 3.35+ drops a column natively — one DROP COLUMN clause per
+     * statement, matching its single-clause ALTER TABLE.
      */
-    public function testAlterDropColumnSqliteThrows(): void
+    public function testAlterDropColumnSqlite(): void
     {
         $blueprint = (new Blueprint('users'))->dropColumn('nickname');
-        $this->expectException(UnsupportedFeatureException::class);
-        $this->expectExceptionMessageIsOrContains('does not support dropping columns');
-        (new SqliteSchemaGrammar())->compileDropColumns($blueprint);
+        $sql = (new SqliteSchemaGrammar())->compileDropColumns($blueprint);
+        self::assertSame(['ALTER TABLE "users" DROP COLUMN "nickname"'], $sql);
     }
 
     // ---- Drop ----

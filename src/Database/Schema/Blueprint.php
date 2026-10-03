@@ -100,8 +100,30 @@ final class Blueprint
         $copy->checks = $this->checks;
         $copy->columnRenames = $this->columnRenames;
         $copy->renamedFrom = $this->renamedFrom;
+        $copy->backfills = $this->backfills;
 
         $copy->indexes = [];
+
+        return $copy;
+    }
+
+    /**
+     * A copy of this blueprint holding only the named columns.
+     *
+     * Constraints, indexes and renames are not carried: a subset is a
+     * column list, not a table.
+     *
+     * @param  list<string>  $names
+     * @return static
+     */
+    public function onlyColumns(array $names): static
+    {
+        $copy = new static($this->table);
+
+        $copy->columns = array_values(array_filter(
+            $this->columns,
+            fn (array $column) => in_array($column['name'], $names, true),
+        ));
 
         return $copy;
     }
@@ -184,6 +206,13 @@ final class Blueprint
      * @var list<string>
      */
     private array $dropColumns = [];
+
+    /**
+     * The explicit backfill values for added NOT NULL columns (ALTER only).
+     *
+     * @var array<string, mixed>
+     */
+    private array $backfills = [];
 
     /**
      * Live foreign-key constraint names to drop (ALTER only) — the drop
@@ -890,6 +919,31 @@ final class Blueprint
         $clone = clone $this;
         $clone->dropColumns = [...$this->dropColumns, $name];
         return $clone;
+    }
+
+    /**
+     * Provide the value existing rows are backfilled with for an added
+     * NOT NULL column that declares no default (ALTER only).
+     *
+     * @param  string  $name
+     * @param  mixed  $value  A scalar or an Expression.
+     * @return static
+     */
+    public function backfill(string $name, mixed $value): static
+    {
+        $clone = clone $this;
+        $clone->backfills = [...$this->backfills, $name => $value];
+        return $clone;
+    }
+
+    /**
+     * The explicit backfill values for added NOT NULL columns.
+     *
+     * @return array<string, mixed>
+     */
+    final public function getBackfills(): array
+    {
+        return $this->backfills;
     }
 
     /**

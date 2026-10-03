@@ -203,13 +203,37 @@ Table and column renames compose too: `renamedFrom()` + `renameColumn()`
 A column present on both sides with a changed type, nullability, or
 default is detected as a `ModifyColumn` change — destructive when the
 change tightens nullability (existing rows may violate the new shape),
-non-destructive for a default-only change. MySQL compiles `ALTER TABLE
-... MODIFY`; Postgres compiles the split clauses (`TYPE` / `SET NOT
-NULL` / `SET DEFAULT`); **SQLite has no in-place form**, so the change
-routes through a **table rebuild** — the data-preserving sequence
-(create temp → copy rows → drop old → rename → re-create indexes →
-`foreign_key_check` gate), executed inside a transaction so a failure
-rolls the whole rebuild back.
+non-destructive for a default-only change. The change carries the
+**drifted subset** as its `subject` blueprint: MySQL compiles `ALTER
+TABLE ... MODIFY` and Postgres the split clauses (`TYPE` / `SET NOT
+NULL` / `SET DEFAULT`) for exactly those columns — never the full
+desired shape (a full-shape compile would restate the primary key and
+re-ALTER unchanged columns). **SQLite has no in-place form**, so the
+change routes through a **table rebuild** — the data-preserving
+sequence (create temp → copy rows → drop old → rename → re-create
+indexes → `foreign_key_check` gate), executed inside a transaction so
+a failure rolls the whole rebuild back.
+
+### Adds and drops: separate changes, never merged
+
+A diff that adds some columns and drops others on one table emits
+**two changes** — an `AddColumn` then a `DropColumn` — never one
+merged alter. A merged record would dispatch only its dominant
+operation and silently lose the other side. Both halves carry the
+`possibleRename` advisory when the add+drop shape looks like a rename.
+
+On SQLite an `AddColumn` normally applies in place (one `ADD COLUMN`
+statement per column — SQLite's `ALTER TABLE` accepts a single
+clause). A **NOT NULL column without a default** cannot be added in
+place to a non-empty table, so that add routes through the table
+rebuild, which backfills the existing rows. The framework never
+guesses a value: the backfill comes from the blueprint's explicit
+`backfill()` value, else the column's declared default — a NOT NULL
+added column with **neither** fails fast at compile time. Declare the
+ongoing default on the column, or supply a one-off migration value
+with `$blueprint->backfill('column', $value)` (which wins over the
+column default when both are set). SQLite 3.35+ drops columns
+natively, so a `DropColumn` applies in place.
 
 ### FK and CHECK drift
 

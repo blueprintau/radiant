@@ -467,16 +467,12 @@ final class SchemaDiffer
         // RenameColumn then ModifyColumn.
         ['columns' => $desiredColumns, 'renames' => $renames, 'renamedDesired' => $renamedDesired] = $this->columnSets($blueprint, $liveColumns);
 
-        $alter = new Blueprint($table);
-        $modify = new Blueprint($table);
-        $destructive = false;
         $additions = [];
         $drops = [];
         $modifications = [];
 
         foreach ($desiredColumns as $name => $column) {
             if (!isset($liveColumns[$name])) {
-                $alter = $this->withColumn($alter, $column);
                 $additions[] = $name;
                 continue;
             }
@@ -486,7 +482,6 @@ final class SchemaDiffer
             // and default directly. An enum column's inline CHECK is part
             // of its definition — a values change is content drift.
             if ($this->columnDrifts($liveColumns[$name], $column) || !$this->enumCheckMatches($table, $column, $live)) {
-                $modify = $this->withColumn($modify, $column);
                 $modifications[] = $name;
             }
         }
@@ -497,9 +492,7 @@ final class SchemaDiffer
             }
 
             if (!isset($desiredColumns[$name])) {
-                $alter = $alter->dropColumn($name);
                 $drops[] = $name;
-                $destructive = true;
             }
         }
 
@@ -514,7 +507,6 @@ final class SchemaDiffer
             }
 
             if ($this->columnDrifts($liveColumns[$from], $column)) {
-                $modify = $this->withColumn($modify, $column);
                 $modifications[] = $to;
             }
         }
@@ -526,18 +518,22 @@ final class SchemaDiffer
             $changes[] = $this->renameChange($table, $renames);
         }
 
-        if ($additions !== [] || $drops !== []) {
-            $changes[] = $this->alterChange($table, $alter, $additions, $drops, $destructive);
+        // Adds and drops are SEPARATE changes — a merged add+drop alter
+        // would dispatch only the dominant side and silently lose the
+        // other. The add applies first (a later modify may reference a
+        // just-added column); the drop follows. Each change carries the
+        // FULL desired blueprint plus the NAMES of the columns it acts on
+        // — the dialects filter the blueprint by those names.
+        if ($additions !== []) {
+            $changes[] = $this->addChange($table, $blueprint, $additions, $drops);
+        }
+
+        if ($drops !== []) {
+            $changes[] = $this->dropChange($table, $blueprint, $additions, $drops);
         }
 
         if ($modifications !== []) {
-            // The change carries the ORIGINAL desired blueprint: dialects
-            // without an in-place modify form (SQLite) rebuild the whole
-            // table from it (the rebuild re-binds via forTable()); the
-            // in-place dialects compile the modified subset from the
-            // change's own record. The description names the modified
-            // subset.
-            $changes[] = $this->modifyChange($table, $modify, $blueprint, $modifications, $renames, $liveColumns);
+            $changes[] = $this->modifyChange($table, $blueprint, $modifications, $renames, $liveColumns);
         }
 
         return $changes;
@@ -593,34 +589,6 @@ final class SchemaDiffer
     }
 
     /**
-     * Append a desired column definition to a blueprint.
-     *
-     * @param  Blueprint  $target
-     * @param  array<string, mixed>  $column
-     * @return Blueprint
-     */
-    private function withColumn(Blueprint $target, array $column): Blueprint
-    {
-        return $target->column(
-            $column['type'],
-            $column['name'],
-            primaryKey: $column['primaryKey'],
-            autoIncrement: $column['autoIncrement'],
-            nullable: $column['nullable'],
-            unique: $column['unique'],
-            index: $column['index'],
-            length: $column['length'],
-            precision: $column['precision'],
-            scale: $column['scale'] ?? null,
-            values: $column['values'] ?? null,
-            default: $column['default'],
-            foreign: $column['foreign'],
-            onDelete: $column['onDelete'],
-            onUpdate: $column['onUpdate'],
-        );
-    }
-
-    /**
      * Determine whether a live column's type, nullability, or default drifts from the declared shape.
      *
      * @param  array<string, mixed>  $liveColumn
@@ -671,38 +639,25 @@ final class SchemaDiffer
     }
 
     /**
-     * Build the Add/DropColumn change for a table's column additions and drops.
+     * Build the AddColumn change for a table's column additions.
      *
      * @param  string  $table
-     * @param  Blueprint  $alter
+     * @param  Blueprint  $blueprint  The full desired blueprint.
      * @param  list<string>  $additions
-     * @param  list<string>  $drops
-     * @param  bool  $destructive
+     * @param  list<string>  $drops  The drop side, for the rename advisory.
      * @return SchemaChange
      */
-    private function alterChange(string $table, Blueprint $alter, array $additions, array $drops, bool $destructive): SchemaChange
+    private function addChange(string $table, Blueprint $blueprint, array $additions, array $drops): SchemaChange
     {
-        // The operation reflects what DOMINATES the alter; both sides are
-        // always in the blueprint and the description.
-        $operation = $drops === [] ? SchemaOperation::AddColumn : SchemaOperation::DropColumn;
-
-        $parts = [];
-        if ($additions !== []) {
-            $parts[] = sprintf('add column(s) [%s]', implode(', ', $additions));
-        }
-        if ($drops !== []) {
-            $parts[] = sprintf('drop column(s) [%s]', implode(', ', $drops));
-        }
         $description = sprintf(
-            'alter table [%s]: %s%s',
+            'alter table [%s]: add column(s) [%s]',
             $table,
-            implode(', ', $parts),
-            $destructive ? ' — DESTRUCTIVE: data loss' : '',
+            implode(', ', $additions),
         );
 
-        // A mixed add+drop is the rename SHAPE — flagged so the host asks,
-        // never guessed.
-        $possibleRename = $additions !== [] && $drops !== [];
+        // A mixed add+drop is the rename SHAPE — flagged on BOTH halves so
+        // the host asks, never guessed.
+        $possibleRename = $drops !== [];
 
         if ($possibleRename) {
             $description .= sprintf(
@@ -713,31 +668,73 @@ final class SchemaDiffer
             );
         }
 
-        return new SchemaChange($table, $operation, $alter, $destructive, $description, $possibleRename);
+        return new SchemaChange($table, SchemaOperation::AddColumn, $blueprint, false, $description, $possibleRename, null, $additions);
+    }
+
+    /**
+     * Build the DropColumn change for a table's column drops.
+     *
+     * @param  string  $table
+     * @param  Blueprint  $blueprint  The full desired blueprint.
+     * @param  list<string>  $additions  The add side, for the rename advisory.
+     * @param  list<string>  $drops
+     * @return SchemaChange
+     */
+    private function dropChange(string $table, Blueprint $blueprint, array $additions, array $drops): SchemaChange
+    {
+        $description = sprintf(
+            'alter table [%s]: drop column(s) [%s] — DESTRUCTIVE: data loss',
+            $table,
+            implode(', ', $drops),
+        );
+
+        $possibleRename = $additions !== [];
+
+        if ($possibleRename) {
+            $description .= sprintf(
+                ' — POSSIBLE RENAME: [%s] -> [%s]? If intended, declare it with'
+                . ' Blueprint::renameColumn() and re-diff; applying as-is destroys the dropped data.',
+                implode(', ', $drops),
+                implode(', ', $additions),
+            );
+        }
+
+        return new SchemaChange($table, SchemaOperation::DropColumn, $blueprint, true, $description, $possibleRename, null, $drops);
     }
 
     /**
      * Build the ModifyColumn change, classifying destructiveness from nullability tightening.
      *
      * @param  string  $table
-     * @param  Blueprint  $modify  Blueprint collecting the drifted column definitions.
-     * @param  Blueprint  $blueprint  The original desired blueprint carried on the change.
-     * @param  list<string>  $modifications
+     * @param  Blueprint  $blueprint  The full desired blueprint carried on the change.
+     * @param  list<string>  $modifications  The drifted column names (the subject).
      * @param  array<string, string>  $renames
      * @param  array<string, array<string, mixed>>  $liveColumns
      * @return SchemaChange
      */
-    private function modifyChange(string $table, Blueprint $modify, Blueprint $blueprint, array $modifications, array $renames, array $liveColumns): SchemaChange
+    private function modifyChange(string $table, Blueprint $blueprint, array $modifications, array $renames, array $liveColumns): SchemaChange
     {
         // Destructive when the change tightens nullability (existing rows
         // may violate the new shape); non-destructive for a default-only
         // change.
         $modifyDestructive = false;
 
-        foreach ($modify->getColumns() as $column) {
+        $desiredByName = [];
+
+        foreach ($blueprint->getColumns() as $column) {
+            $desiredByName[$column['name']] = $column;
+        }
+
+        foreach ($modifications as $name) {
+            $column = $desiredByName[$name] ?? null;
+
+            if ($column === null) {
+                continue;
+            }
+
             // A renamed column's live shape is the FROM column's (the
             // rename has not applied yet at diff time).
-            $liveName = array_search($column['name'], $renames, true) ?: $column['name'];
+            $liveName = array_search($name, $renames, true) ?: $name;
             $liveColumn = $liveColumns[$liveName] ?? null;
 
             if ($liveColumn === null) {
@@ -760,6 +757,9 @@ final class SchemaDiffer
                 implode(', ', $modifications),
                 $modifyDestructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
             ),
+            false,
+            null,
+            $modifications,
         );
     }
 

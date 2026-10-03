@@ -570,14 +570,18 @@ abstract class SqlConnection implements ConnectionInterface
      */
     final public function alter(SchemaOperation $operation, Blueprint $blueprint): void
     {
-        $this->statement(match ($operation) {
+        $statements = match ($operation) {
             SchemaOperation::AddColumn => $this->schemaGrammar->compileAddColumns($blueprint),
             SchemaOperation::DropColumn => $this->schemaGrammar->compileDropColumns($blueprint),
             default => throw new \LogicException(
                 "Operation [{$operation->value}] is not a column alter; use the "
                 . 'dedicated create/drop/rebuildIndexes paths.'
             ),
-        });
+        };
+
+        foreach ($statements as $sql) {
+            $this->statement($sql);
+        }
     }
 
     /**
@@ -600,14 +604,15 @@ abstract class SqlConnection implements ConnectionInterface
     {
         match ($change->operation) {
             SchemaOperation::CreateTable => $this->create($change->blueprint),
-            SchemaOperation::AddColumn, SchemaOperation::DropColumn => $this->alter($change->operation, $change->blueprint),
+            SchemaOperation::AddColumn => $this->applyAddColumn($change),
+            SchemaOperation::DropColumn => $this->applyDropColumn($change),
             SchemaOperation::DropTable => $this->drop($change->table),
             SchemaOperation::AlterIndexes => $this->rebuildIndexes($change->blueprint),
             SchemaOperation::RenameTable => $this->renameTable($change->blueprint->getRenamedFrom() ?? throw new \LogicException(
                 "A RenameTable change for [{$change->table}] carries no renamedFrom declaration."
             ), $change->table),
             SchemaOperation::RenameColumn => $this->applyColumnRenames($change->blueprint),
-            SchemaOperation::ModifyColumn => $this->modifyColumn($change->blueprint),
+            SchemaOperation::ModifyColumn => $this->applyModifyColumn($change),
             SchemaOperation::AddForeignKey => $this->addForeignKey($change->table, $change->blueprint),
             SchemaOperation::DropForeignKey => $this->dropForeignKey($change->table, $change->blueprint),
             SchemaOperation::AddCheck => $this->addCheck($change->table, $change->blueprint),
@@ -649,6 +654,65 @@ abstract class SqlConnection implements ConnectionInterface
         foreach ($blueprint->getColumnRenames() as $rename) {
             $this->renameColumn($blueprint->getTable(), $rename['from'], $rename['to']);
         }
+    }
+
+    /**
+     * Apply an AddColumn change in place.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    protected function applyAddColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        $this->alter(SchemaOperation::AddColumn, $this->subjectBlueprint($change));
+    }
+
+    /**
+     * Apply a DropColumn change.
+     *
+     * The drop blueprint is built from the change's subject names, falling
+     * back to the blueprint's own dropColumn() declarations.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    protected function applyDropColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        $names = $change->subject ?? $change->blueprint->getDropColumns();
+
+        $drop = new Blueprint($change->table);
+
+        foreach ($names as $name) {
+            $drop = $drop->dropColumn($name);
+        }
+
+        $this->alter(SchemaOperation::DropColumn, $drop);
+    }
+
+    /**
+     * Apply a ModifyColumn change in place.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     */
+    protected function applyModifyColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        $this->modifyColumn($this->subjectBlueprint($change));
+    }
+
+    /**
+     * The blueprint the in-place dialects compile for a change.
+     *
+     * The full desired blueprint filtered to the change's subject column
+     * names, or the full blueprint when the change acts on the whole table.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return Blueprint
+     */
+    private function subjectBlueprint(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): Blueprint
+    {
+        if ($change->subject === null) {
+            return $change->blueprint;
+        }
+
+        return $change->blueprint->onlyColumns($change->subject);
     }
 
     /**

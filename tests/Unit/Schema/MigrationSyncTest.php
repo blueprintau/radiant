@@ -233,25 +233,29 @@ final class MigrationSyncTest extends DatabaseTestCase
 
         $operations = array_map(fn ($change) => $change->operation, $changes);
         self::assertSame(
-            [SchemaOperation::RenameTable, SchemaOperation::DropColumn, SchemaOperation::ModifyColumn],
+            [
+                SchemaOperation::RenameTable,
+                SchemaOperation::AddColumn,
+                SchemaOperation::DropColumn,
+                SchemaOperation::ModifyColumn,
+            ],
             $operations,
         );
-        // The add+drop alter is destructive (the drop loses data).
-        self::assertTrue($changes[1]->destructive);
+        // The drop change is destructive (it loses data); the add is not.
+        self::assertFalse($changes[1]->destructive);
+        self::assertTrue($changes[2]->destructive);
 
-        // The rename and the modify (via the rebuild) apply; the in-place
-        // column DROP is unsupported on SQLite and fails fast by design.
-        $this->connection->apply($changes[0]);
-        $this->connection->apply($changes[2]);
+        // Every change applies — the add and the in-place drop both land
+        // on SQLite 3.35+, and the modify routes through the rebuild.
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
 
         $live = $this->connection->schemaInspector->table('users');
         $names = array_column($live->columns, 'name');
         self::assertContains('email', $names);
+        self::assertNotContains('legacy_flag', $names);
         self::assertStringContainsString('120', $live->columns[1]['type']);
-
-        // The drop itself is refused on this dialect.
-        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException::class);
-        $this->connection->apply($changes[1]);
     }
 
     /**
@@ -405,6 +409,275 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * A mixed add+drop alter applies BOTH sides — the differ emits them as
+     * separate changes (never one dominant-operation record that would
+     * silently lose a side), and both land on the live schema.
+     */
+    public function testMixedAddDropAlterAppliesBothSides(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'legacy_flag', length: 10, nullable: true);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name, legacy_flag) VALUES ('Alice', 'y')");
+
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'email', length: 255, nullable: true)
+            ->dropColumn('legacy_flag');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        // Separate add and drop changes — never a merged record.
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::AddColumn, SchemaOperation::DropColumn], $operations);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // BOTH sides landed: the column was added AND the flag dropped.
+        $live = $this->connection->schemaInspector->table('users');
+        $names = array_column($live->columns, 'name');
+        self::assertContains('email', $names, 'the add side must not be lost');
+        self::assertNotContains('legacy_flag', $names, 'the drop side must not be lost');
+
+        // The row survived.
+        $rows = $this->connection->selectSql('SELECT name FROM users')->all();
+        self::assertCount(1, $rows);
+    }
+
+    /**
+     * A rebuild that adds a NOT NULL column backfills the existing rows —
+     * the copy projection has no source for the added column, so the
+     * rebuild relaxes the temp table and copies the column's declared
+     * default into the surviving rows.
+     */
+    public function testRebuildBackfillsAddedNotNullColumn(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice'), ('Bob')");
+
+        // Add a NOT NULL column WITH a default via a modify (the rebuild
+        // path) — the existing rows must be backfilled, not rejected.
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::Int, 'priority', default: 7);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The existing rows carry the backfilled default.
+        $rows = $this->connection->selectSql('SELECT name, priority FROM users ORDER BY id')->all();
+        self::assertCount(2, $rows);
+        self::assertSame(7, (int) $rows[0]->priority);
+        self::assertSame(7, (int) $rows[1]->priority);
+    }
+
+    /**
+     * An explicit backfill() wins over the column's declared default —
+     * the ongoing default (for new rows) and the migration backfill (for
+     * existing rows) can differ.
+     */
+    public function testRebuildBackfillOverridesColumnDefault(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
+
+        // The column's ongoing default is 7, but the existing row is
+        // backfilled with the explicit migration value 3.
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::Int, 'priority', default: 7)
+            ->backfill('priority', 3);
+
+        $this->connection->modifyColumn($desired);
+
+        $row = $this->connection->selectSql('SELECT priority FROM users')->first();
+        self::assertNotNull($row);
+        self::assertSame(3, (int) $row->priority, 'the explicit backfill() must win over the column default');
+    }
+
+    /**
+     * A rebuild that adds a NOT NULL column with NEITHER a declared
+     * default NOR an explicit backfill() fails fast at compile time — the
+     * framework never guesses a zero value for the existing rows.
+     */
+    public function testRebuildRejectsNotNullAddWithoutDefaultOrBackfill(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
+
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'shipping_address', length: 500); // NOT NULL, no default, no backfill
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('declares no default and no backfill() value');
+        $this->connection->modifyColumn($desired);
+    }
+
+    /**
+     * A rebuild (triggered by a NOT NULL add) renders the FULL desired
+     * shape — which already excludes the dropped columns and includes the
+     * added ones. A sibling DropColumn/AddColumn that applies AFTER the
+     * rebuild on the same table must no-op, never double-apply (a second
+     * drop of an already-absent column would fail with "no such column").
+     */
+    public function testRebuildSubsumesSiblingColumnChanges(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'legacy_flag', length: 10, nullable: true);
+        $this->connection->create($blueprint);
+        $this->connection->statement("INSERT INTO users (name, legacy_flag) VALUES ('Alice', 'y')");
+
+        // Add a NOT NULL column (forces the rebuild) AND drop a column in
+        // the same plan. The differ emits add → drop; the add's rebuild
+        // already excludes legacy_flag, so the drop must no-op. The added
+        // column declares no default, so an explicit backfill() supplies
+        // the existing row's value.
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'shipping_address', length: 500) // NOT NULL, no default
+            ->backfill('shipping_address', 'pending')
+            ->dropColumn('legacy_flag');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::AddColumn, SchemaOperation::DropColumn], $operations);
+
+        // Every change applies cleanly — the drop no-ops after the rebuild.
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        $live = $this->connection->schemaInspector->table('users');
+        $names = array_column($live->columns, 'name');
+        self::assertContains('shipping_address', $names);
+        self::assertNotContains('legacy_flag', $names);
+        self::assertSame(1, $this->connection->table('users')->count());
+
+        // The existing row carries the explicit backfill value.
+        $row = $this->connection->selectSql('SELECT shipping_address FROM users')->first();
+        self::assertNotNull($row);
+        self::assertSame('pending', $row->shipping_address);
+    }
+
+    /**
+     * A multi-column add on SQLite compiles one statement per column (its
+     * ALTER TABLE accepts a single ADD COLUMN clause) — and every column
+     * lands when the statements execute.
+     */
+    public function testSqliteMultiColumnAddExecutesEveryStatement(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($blueprint);
+
+        $add = (new Blueprint('users'))
+            ->column(ColumnType::String, 'email', length: 255, nullable: true)
+            ->column(ColumnType::Int, 'age', nullable: true);
+
+        // The grammar emits one statement per column.
+        $statements = $this->connection->schemaGrammar->compileAddColumns($add);
+        self::assertCount(2, $statements);
+
+        $this->connection->alter(SchemaOperation::AddColumn, $add);
+
+        $live = $this->connection->schemaInspector->table('users');
+        $names = array_column($live->columns, 'name');
+        self::assertContains('email', $names);
+        self::assertContains('age', $names);
+    }
+
+    /**
+     * The full rename + reshape stress scenario on SQLite: a sloppy
+     * all-TEXT legacy table is renamed and brought to a properly-typed
+     * shape covering every change kind at once — table rename, column
+     * rename, adds (incl. NOT NULL), modifies and a drop — and the seeded
+     * rows survive. The SQLite twin of the integration regression test.
+     */
+    public function testRenameAndReshapeSyncAppliesEveryChangeKind(): void
+    {
+        $this->connection->create(
+            (new Blueprint('legacy_orders'))
+                ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+                ->column(ColumnType::Text, 'order_ref')
+                ->column(ColumnType::Text, 'customer_email')
+                ->column(ColumnType::Text, 'total_amount')
+                ->column(ColumnType::Text, 'legacy_flag', nullable: true)
+                ->column(ColumnType::Text, 'created_at'),
+        );
+
+        $this->connection->table('legacy_orders')->insert([
+            ['order_ref' => 'ORD-1', 'customer_email' => 'a@b.com', 'total_amount' => '199.99', 'legacy_flag' => 'gold', 'created_at' => '2026-01-01 10:00:00'],
+            ['order_ref' => 'ORD-2', 'customer_email' => 'c@d.com', 'total_amount' => '49.50', 'legacy_flag' => null, 'created_at' => '2026-02-01 10:00:00'],
+        ]);
+
+        $desired = (new Blueprint('orders'))
+            ->renamedFrom('legacy_orders')
+            ->renameColumn('order_ref', 'order_number')
+            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+            ->column(ColumnType::String, 'order_number', length: 64)
+            ->column(ColumnType::String, 'customer_email', length: 255)
+            ->column(ColumnType::Decimal, 'total_amount', precision: 10, scale: 2)
+            ->column(ColumnType::DateTime, 'created_at')
+            ->column(ColumnType::Int, 'priority', default: 0)
+            ->column(ColumnType::String, 'discount_code', length: 32, nullable: true);
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $changes = $synchronizer->plan([$desired]);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        $live = $this->connection->schemaInspector->table('orders');
+        $liveNames = array_column($live->columns, 'name');
+        $desiredNames = array_map(fn (array $c) => $c['name'], $desired->getColumns());
+
+        self::assertSame([], array_diff($desiredNames, $liveNames), 'all desired columns must be present');
+        self::assertSame([], array_diff($liveNames, $desiredNames), 'no extra live columns (legacy_flag dropped)');
+        self::assertSame(2, $this->connection->table('orders')->count(), 'the seeded rows must survive');
+
+        // A re-diff converges.
+        $converged = (new Blueprint('orders'))
+            ->column(ColumnType::BigInt, 'id', primaryKey: true, autoIncrement: true)
+            ->column(ColumnType::String, 'order_number', length: 64)
+            ->column(ColumnType::String, 'customer_email', length: 255)
+            ->column(ColumnType::Decimal, 'total_amount', precision: 10, scale: 2)
+            ->column(ColumnType::DateTime, 'created_at')
+            ->column(ColumnType::Int, 'priority', default: 0)
+            ->column(ColumnType::String, 'discount_code', length: 32, nullable: true);
+        self::assertSame([], $synchronizer->plan([$converged]), 'a second plan must be empty');
+    }
+
+    /**
      * A morph keyType switch (bigint → uuid) is detected as a
      * ModifyColumn drift — the DDL side of the switch is handled by the
      * differ; migrating the stored values is the host's concern.
@@ -493,7 +766,10 @@ final class MigrationSyncTest extends DatabaseTestCase
         $desired = (new Blueprint('posts'))
             ->id()
             ->column(ColumnType::String, 'name', length: 50)
-            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id');
+            ->column(ColumnType::BigInt, 'author_id', foreign: 'users.id')
+            // The added NOT NULL column declares no default — an explicit
+            // backfill() fills the (empty) existing rows.
+            ->backfill('author_id', 0);
 
         $changes = $differ->diff([$users, $desired]);
         // The new column (add) plus the FK (add_foreign_key) — two changes.

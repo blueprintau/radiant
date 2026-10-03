@@ -152,27 +152,50 @@ abstract class SchemaGrammar
     }
 
     /**
-     * Compile an `ALTER TABLE ... ADD COLUMN` statement.
+     * Compile the `ALTER TABLE ... ADD COLUMN` statement(s).
+     *
+     * The base joins every column into one statement; SQLite overrides to
+     * emit one statement per column.
      *
      * @param  Blueprint  $blueprint
-     * @return string
+     * @return list<string>
      * @throws \InvalidArgumentException
      */
-    final public function compileAddColumns(Blueprint $blueprint): string
+    public function compileAddColumns(Blueprint $blueprint): array
     {
-        return $this->compileAddColumn($blueprint);
+        $columns = $blueprint->getColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
+        }
+
+        return ['ALTER TABLE ' . $this->wrap($blueprint->getTable()) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
+            fn (array $column) => $this->compileAddColumn($column),
+            $columns,
+        ))];
     }
 
     /**
-     * Compile an `ALTER TABLE ... DROP COLUMN` statement.
+     * Compile the `ALTER TABLE ... DROP COLUMN` statement(s).
+     *
+     * The base joins every column into one statement; SQLite overrides to
+     * emit one statement per column.
      *
      * @param  Blueprint  $blueprint
-     * @return string
+     * @return list<string>
+     * @throws \InvalidArgumentException
      * @throws UnsupportedFeatureException
      */
-    final public function compileDropColumns(Blueprint $blueprint): string
+    public function compileDropColumns(Blueprint $blueprint): array
     {
-        return $this->compileDropColumn($blueprint);
+        $columns = $blueprint->getDropColumns();
+        if ($columns === []) {
+            throw new \InvalidArgumentException('Cannot drop columns with no columns defined.');
+        }
+
+        return ['ALTER TABLE ' . $this->wrap($blueprint->getTable()) . ' DROP COLUMN ' . implode(', DROP COLUMN ', array_map(
+            fn (string $column) => $this->compileDropColumn($column),
+            $columns,
+        ))];
     }
 
     /**
@@ -405,33 +428,24 @@ abstract class SchemaGrammar
     abstract public function assertValidIdentifier(string $name): void;
 
     /**
-     * Compile an `ALTER TABLE ... ADD COLUMN` statement.
+     * Compile one column's `ADD COLUMN` definition.
      *
-     * @param  Blueprint  $blueprint
+     * @param  ColumnShape  $column
      * @return string
      */
-    protected function compileAddColumn(Blueprint $blueprint): string
+    protected function compileAddColumn(array $column): string
     {
-        $table = $blueprint->getTable();
-        $columns = $blueprint->getColumns();
-        if ($columns === []) {
-            throw new \InvalidArgumentException('Cannot add columns with no columns defined.');
-        }
-
-        return 'ALTER TABLE ' . $this->wrap($table) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
-            fn (array $column) => $this->compileColumnDefinition($column),
-            $columns,
-        ));
+        return $this->compileColumnDefinition($column);
     }
 
     /**
-     * Compile an `ALTER TABLE ... DROP COLUMN` statement.
+     * Compile one column's `DROP COLUMN` clause.
      *
-     * @param  Blueprint  $blueprint
+     * @param  string  $column
      * @return string
      * @throws UnsupportedFeatureException
      */
-    protected function compileDropColumn(Blueprint $blueprint): string
+    protected function compileDropColumn(string $column): string
     {
         throw new UnsupportedFeatureException('This dialect does not support dropping columns.');
     }
