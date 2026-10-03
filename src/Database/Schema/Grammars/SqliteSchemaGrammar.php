@@ -264,14 +264,14 @@ final class SqliteSchemaGrammar extends SchemaGrammar
         $tempBlueprint = $desired->forTable($tempName);
 
         // An added NOT NULL column has no source in the copy projection —
-        // the temp table must accept the copied rows. The temp definition
-        // relaxes such a column to nullable (the final shape is enforced
-        // from the next write; the rebuild itself never tightens data it
-        // just inserted), and the copy backfills the column's value so
-        // existing rows carry one. The value is the blueprint's explicit
-        // backfill(), else the column's declared default — never a guessed
-        // zero value. A NOT NULL added column with neither fails fast at
-        // compile time.
+        // the copy supplies its value for every surviving row: the
+        // blueprint's explicit backfill(), else the column's declared
+        // default — never a guessed zero value. A NOT NULL added column
+        // with neither fails fast at compile time. A column WITH a value
+        // keeps its NOT NULL in the temp definition (its copy projection
+        // can never produce NULL), so the rebuild lands the final shape in
+        // one apply; only a nullable added column copies as its natural
+        // NULL and needs no relaxation at all.
         $declaredBackfills = $desired->getBackfills();
         $backfills = [];
 
@@ -300,10 +300,6 @@ final class SqliteSchemaGrammar extends SchemaGrammar
             $backfills[$column['name']] = $value;
         }
 
-        if ($backfills !== []) {
-            $tempBlueprint = $this->relaxColumns($tempBlueprint, array_keys($backfills));
-        }
-
         $statements = array_values(array_filter([
             $foreignKeyConstraintsEnabled ? 'PRAGMA foreign_keys = OFF' : null,
             'CREATE TABLE ' . $this->wrap($tempName) . ' (' . $this->compileTableBody($tempBlueprint) . ')',
@@ -314,56 +310,6 @@ final class SqliteSchemaGrammar extends SchemaGrammar
         ]));
 
         return $statements;
-    }
-
-    /**
-     * A copy of the blueprint with the named columns relaxed to nullable.
-     *
-     * @param  Blueprint  $blueprint
-     * @param  list<string>  $names
-     * @return Blueprint
-     */
-    private function relaxColumns(Blueprint $blueprint, array $names): Blueprint
-    {
-        $relaxed = new Blueprint($blueprint->getTable());
-
-        foreach ($blueprint->getColumns() as $column) {
-            $relaxed = $relaxed->column(
-                $column['type'],
-                $column['name'],
-                primaryKey: $column['primaryKey'],
-                autoIncrement: $column['autoIncrement'],
-                nullable: in_array($column['name'], $names, true) ? true : $column['nullable'],
-                unique: $column['unique'],
-                index: $column['index'],
-                length: $column['length'],
-                precision: $column['precision'],
-                scale: $column['scale'] ?? null,
-                values: $column['values'] ?? null,
-                default: $column['default'],
-                foreign: $column['foreign'],
-                onDelete: $column['onDelete'],
-                onUpdate: $column['onUpdate'],
-            );
-        }
-
-        foreach ($blueprint->getForeignKeys() as $foreignKey) {
-            $relaxed = $relaxed->foreignKey(
-                $foreignKey['columns'],
-                $foreignKey['references'][0],
-                array_slice($foreignKey['references'], 1),
-                $foreignKey['onDelete'],
-                $foreignKey['onUpdate'],
-                $foreignKey['deferrable'],
-                $foreignKey['initiallyDeferred'],
-            );
-        }
-
-        foreach ($blueprint->getChecks() as $check) {
-            $relaxed = $relaxed->check($check['expression'], $check['name']);
-        }
-
-        return $relaxed;
     }
 
     /**
