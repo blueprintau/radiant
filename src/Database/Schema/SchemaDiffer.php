@@ -798,7 +798,63 @@ final class SchemaDiffer
             return (string) $liveDefault === $declaredDefault->value;
         }
 
+        // Inspectors pass the default through as text, and every dialect
+        // reports a string default as its quoted SQL literal (`''`, `'x'` —
+        // Postgres appends a `::type` cast). Compare the unquoted literal,
+        // so a converged column does not re-plan as a ModifyColumn forever.
+        if (is_string($liveDefault)) {
+            return $this->unquoteLiteral($liveDefault) == $declaredDefault;
+        }
+
         return $liveDefault == $declaredDefault;
+    }
+
+    /**
+     * Strip the SQL literal quoting a dialect wraps a string default in.
+     *
+     * @param  string  $value
+     * @return string
+     */
+    private function unquoteLiteral(string $value): string
+    {
+        $quote = $value[0] ?? '';
+
+        if ($quote !== "'" && $quote !== '"') {
+            return $value;
+        }
+
+        // Find the literal's closing quote (a doubled quote is an escape),
+        // so a `::` INSIDE the literal is never mistaken for a cast.
+        $length = strlen($value);
+        $end = null;
+
+        for ($i = 1; $i < $length; $i++) {
+            if ($value[$i] !== $quote) {
+                continue;
+            }
+
+            if (($i + 1) < $length && $value[$i + 1] === $quote) {
+                $i++; // escaped quote — keep scanning.
+                continue;
+            }
+
+            $end = $i;
+            break;
+        }
+
+        if ($end === null) {
+            return $value; // unbalanced — never guess.
+        }
+
+        $rest = substr($value, $end + 1);
+
+        // A Postgres type cast (`'x'::character varying`) rides AFTER the
+        // literal; anything else means this is not a plain literal.
+        if ($rest !== '' && !str_starts_with($rest, '::')) {
+            return $value;
+        }
+
+        return str_replace($quote . $quote, $quote, substr($value, 1, $end - 1));
     }
 
     /**
