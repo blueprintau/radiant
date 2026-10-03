@@ -62,6 +62,34 @@ final class PostgresSchemaInspector extends SchemaInspector
     }
 
     /**
+     * Postgres' strict modify-cast classification — it rejects casts no
+     * USING clause can perform (jsonb/bytea/timestamp/bool to a number)
+     * and treats text-to-number/date as a data-dependent Risky cast.
+     *
+     * @param  string  $liveType
+     * @param  \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType  $desiredType
+     * @return \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety
+     */
+    #[\Override]
+    public function castSafety(string $liveType, \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType $desiredType): \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety
+    {
+        $from = $this->liveTypeFamily($liveType);
+        $to = $this->desiredTypeFamily($desiredType);
+
+        // A structured/temporal/bool source has no meaningful numeric cast.
+        if (in_array($from, ['json', 'binary', 'temporal', 'bool'], true) && $to === 'number') {
+            return \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Uncastable;
+        }
+
+        // Text to a number or a date parses each value — it can fail.
+        if ($from === 'string' && in_array($to, ['number', 'temporal'], true)) {
+            return \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Risky;
+        }
+
+        return parent::castSafety($liveType, $desiredType);
+    }
+
+    /**
      * Compose a column's type text from its udt name plus its information_
      * schema size — the udt name alone never carries one.
      *

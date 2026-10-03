@@ -744,6 +744,24 @@ final class SchemaDiffer
             if ($column['nullable'] === false && $liveColumn['nullable'] === true) {
                 $modifyDestructive = true; // nullability tightened.
             }
+
+            // A type change must be a cast the dialect can perform: fail
+            // fast on an impossible one, flag a data-dependent one.
+            $safety = $this->inspector->castSafety($liveColumn['type'], $column['type']);
+
+            if ($safety === \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Uncastable) {
+                throw new \LogicException(sprintf(
+                    'Cannot modify [%s].[%s]: the live type [%s] cannot be cast to [%s].',
+                    $table,
+                    $name,
+                    $liveColumn['type'],
+                    $column['type']->value,
+                ));
+            }
+
+            if ($safety === \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Risky) {
+                $modifyDestructive = true; // the cast may lose data or fail on some values.
+            }
         }
 
         return new SchemaChange(
