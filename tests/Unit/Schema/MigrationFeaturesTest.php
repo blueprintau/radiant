@@ -128,7 +128,8 @@ final class MigrationFeaturesTest extends DatabaseTestCase
 
     /**
      * Postgres splits the facets into separate ALTER COLUMN statements,
-     * in the fixed order TYPE → NOT NULL → DEFAULT.
+     * in the fixed order TYPE → NOT NULL → DEFAULT. The TYPE carries a
+     * USING clause so non-implicit casts convert the existing values.
      */
     public function testCompileModifyColumnPostgres(): void
     {
@@ -137,7 +138,7 @@ final class MigrationFeaturesTest extends DatabaseTestCase
 
         self::assertSame(
             [
-                'ALTER TABLE "users" ALTER COLUMN "name" TYPE varchar(100)',
+                'ALTER TABLE "users" ALTER COLUMN "name" TYPE varchar(100) USING "name"::varchar(100)',
                 'ALTER TABLE "users" ALTER COLUMN "name" SET NOT NULL',
                 'ALTER TABLE "users" ALTER COLUMN "name" SET DEFAULT \'unknown\'',
             ],

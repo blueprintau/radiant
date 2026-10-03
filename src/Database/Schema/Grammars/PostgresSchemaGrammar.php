@@ -182,7 +182,11 @@ final class PostgresSchemaGrammar extends SchemaGrammar
 
             // TYPE first: the type text is the identity of the change, and
             // a type change must land before constraints that depend on it.
-            $statements[] = $base . ' TYPE ' . $this->type($column['type'], $column['length']);
+            // The USING clause casts the existing values explicitly —
+            // Postgres only auto-casts implicitly-castable pairs, so a
+            // text→numeric / text→timestamp reshape needs the explicit cast.
+            $type = $this->type($column['type'], $column['length']);
+            $statements[] = $base . ' TYPE ' . $type . ' USING ' . $name . '::' . $type;
 
             // Nullability second: SET NOT NULL validates existing rows, so
             // it must come after the type conversion.
