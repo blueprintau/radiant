@@ -23,6 +23,7 @@ final class PropertyMapping
      * @param  \ReflectionProperty|null  $property
      * @param  string  $owner
      * @param  string|null  $propertyType
+     * @param  mixed  $backfill  The #[Backfill] value for the column's add, or null when none is declared.
      */
     public function __construct(
         public readonly string $propertyName,
@@ -31,6 +32,7 @@ final class PropertyMapping
         public readonly \ReflectionProperty|null $property,
         public readonly string $owner,
         public readonly string|null $propertyType = null,
+        public readonly mixed $backfill = null,
     ) {
     }
 }

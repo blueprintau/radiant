@@ -105,6 +105,12 @@ The attribute is designed to grow other table-level settings later, so
 - `unique:`, `index:`, `foreign:` — single-column flags (see below).
 - `default:` — a scalar or SQL expression default.
 
+A separate `#[Backfill]` attribute on the same property declares the
+one-time value existing rows receive when the column is added — see
+[Backfilling existing rows](schema.md#backfilling-existing-rows) in
+Schema sync. It is deliberately not a `#[Column]` option: a backfill
+is transient, the column declaration is permanent.
+
 **Synthetic columns.** A column may exist in the metadata without a
 property backing it — useful for columns the model reads and writes but
 doesn't want as a typed field. Read it with

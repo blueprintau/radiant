@@ -11,6 +11,7 @@ use BlueprintAU\Radiant\Metadata\PropertyMapping;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Admin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\AlignedDefaultModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ArityMismatchModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BackfilledModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteBase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ConcreteUser;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\JsonPrimaryKey;
@@ -30,6 +31,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiRedeclaredKey;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\MtiSuperAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\NonDatetimeSoftDeletePost;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\OrphanBackfillModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Shipment;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\SoftDeletingPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\TableRedeclaringAdmin;
@@ -157,6 +159,28 @@ final class MetadataFactoryTest extends TestCase
 
         self::assertSame('anon', $properties['name']->column->default);
         self::assertSame(0, $properties['hits']->column->default);
+    }
+
+    /**
+     * A #[Backfill] on a declared column is carried on the mapping — the
+     * one-time value existing rows receive when the column is added.
+     */
+    public function testCarriesBackfillOnMapping(): void
+    {
+        $properties = MetadataFactory::for(BackfilledModel::class)->properties;
+
+        self::assertSame('unknown', $properties['displayName']->backfill);
+    }
+
+    /**
+     * A #[Backfill] without a #[Column] can never be consumed — a backfill
+     * rides the column's ADD — so it fails fast at metadata build.
+     */
+    public function testOrphanBackfillThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('declares #[Backfill] without a #[Column]');
+        MetadataFactory::for(OrphanBackfillModel::class);
     }
 
     // ---- Table resolution (rules 1–5) ----

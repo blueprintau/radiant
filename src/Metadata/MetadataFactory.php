@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Metadata;
 
+use BlueprintAU\Radiant\Attributes\Backfill;
 use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Hook;
@@ -366,6 +367,16 @@ final class MetadataFactory
             $columnAttr = $property->getAttributes(Column::class)[0] ?? null;
 
             if ($columnAttr === null) {
+                // A #[Backfill] without a #[Column] can never be consumed —
+                // a backfill rides the column's ADD. Fail fast here.
+                if ($property->getAttributes(Backfill::class) !== []) {
+                    throw new \InvalidArgumentException(
+                        "Model [{$class}] property [{$property->getName()}] declares #[Backfill] "
+                        . 'without a #[Column]; a backfill only applies to a declared column — '
+                        . 'add #[Column] or drop #[Backfill].'
+                    );
+                }
+
                 continue;
             }
 
@@ -430,6 +441,8 @@ final class MetadataFactory
                 onUpdate: $column->onUpdate,
             );
 
+            $backfillAttr = $property->getAttributes(Backfill::class)[0] ?? null;
+
             $mapping = new PropertyMapping(
                 propertyName: $property->getName(),
                 columnName: $columnName,
@@ -437,6 +450,7 @@ final class MetadataFactory
                 property: $property,
                 owner: $property->getDeclaringClass()->getName(),
                 propertyType: $propertyType,
+                backfill: $backfillAttr === null ? null : $backfillAttr->newInstance()->value,
             );
 
             $properties[$mapping->propertyName] = $mapping;

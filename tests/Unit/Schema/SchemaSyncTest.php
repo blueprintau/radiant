@@ -8,7 +8,9 @@ use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\SchemaDiffer;
+use BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\BackfilledUser;
 use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\CheckedModel;
 use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\DeferrableFk;
 use BlueprintAU\Radiant\Tests\Unit\Schema\Fixtures\DuplicateConstraint;
@@ -757,5 +759,121 @@ final class SchemaSyncTest extends DatabaseTestCase
         $live = $this->connection->schemaInspector->table('sync_rebuild');
         $index = array_values(array_filter($live->indexes, fn (array $i) => $i['name'] === 'sync_rebuild_email_unique'))[0];
         self::assertSame('email IS NOT NULL', $index['where']);
+    }
+
+    // ---- Model-declared backfills (#[Backfill]) ----
+
+    /**
+     * The model-driven backfill: fromMetadata() a fixture that adds a NOT
+     * NULL column with #[Backfill] to a seeded table → plan() → apply() →
+     * the existing rows carry the value and a second plan() is empty.
+     */
+    public function testModelDeclaredBackfillAppliesAndConverges(): void
+    {
+        // The table exists WITHOUT the backfilled column (the pre-migration
+        // shape), seeded with rows.
+        $this->connection->create(
+            (new Blueprint('sync_backfill_users'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255, unique: true),
+        );
+        $this->connection->table('sync_backfill_users')->insert([
+            ['email' => 'a@x.io'],
+            ['email' => 'b@x.io'],
+        ]);
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $desired = [Blueprint::fromMetadata(BackfilledUser::class)];
+
+        $plan = $synchronizer->plan($desired);
+        self::assertCount(1, $plan);
+        self::assertSame(SchemaOperation::AddColumn, $plan[0]->operation);
+
+        $applied = $synchronizer->apply($plan);
+        self::assertCount(1, $applied);
+
+        // The existing rows carry the backfill value.
+        $rows = $this->connection->selectSql('SELECT display_name FROM sync_backfill_users ORDER BY id')->all();
+        self::assertSame(['unknown', 'unknown'], array_map(fn ($row) => $row->display_name, $rows));
+
+        // The column landed NOT NULL.
+        $live = $this->connection->schemaInspector->table('sync_backfill_users');
+        $column = array_values(array_filter($live->columns, fn (array $c) => $c['name'] === 'display_name'))[0];
+        self::assertFalse($column['nullable']);
+
+        // Converged: a second plan is empty.
+        self::assertSame([], $synchronizer->plan($desired));
+    }
+
+    // ---- Default convergence ----
+
+    /**
+     * A string column default converges: plan → apply → plan is empty.
+     * The live default reads back as the quoted SQL literal (`''`), which
+     * must compare equal to the declared plain value — a quoted-vs-plain
+     * mismatch would re-plan a ModifyColumn forever.
+     */
+    public function testStringDefaultConverges(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_defaults'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255),
+        );
+        $this->connection->table('sync_defaults')->insert(['email' => 'a@x.io']);
+
+        $desired = (new Blueprint('sync_defaults'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->column(ColumnType::String, 'password_hash', length: 255, default: '');
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $plan = $synchronizer->plan([$desired]);
+        self::assertCount(1, $plan);
+        self::assertSame(SchemaOperation::AddColumn, $plan[0]->operation);
+
+        $synchronizer->apply($plan);
+
+        // The column landed with its declared default — the inspector
+        // passes it through as the raw SQL literal (`''`), which the
+        // differ's default comparison unquotes.
+        $live = $this->connection->schemaInspector->table('sync_defaults');
+        $column = array_values(array_filter($live->columns, fn (array $c) => $c['name'] === 'password_hash'))[0];
+        self::assertSame("''", $column['default']);
+
+        // Converged: a second plan is empty.
+        self::assertSame([], $synchronizer->plan([$desired]));
+    }
+
+    /**
+     * A non-empty string default converges the same way — and a divergent
+     * default still drifts (the unquoting must not mask real drift).
+     */
+    public function testStringDefaultDriftStillDetected(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_defaults_drift'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255),
+        );
+
+        $desired = (new Blueprint('sync_defaults_drift'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->column(ColumnType::String, 'status', length: 32, default: 'active');
+
+        $synchronizer = new SchemaSynchronizer($this->connection);
+        $synchronizer->apply($synchronizer->plan([$desired]));
+        self::assertSame([], $synchronizer->plan([$desired]));
+
+        // The declared default changes → real drift → ModifyColumn.
+        $changed = (new Blueprint('sync_defaults_drift'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->column(ColumnType::String, 'status', length: 32, default: 'inactive');
+
+        $plan = $synchronizer->plan([$changed]);
+        self::assertCount(1, $plan);
+        self::assertSame(SchemaOperation::ModifyColumn, $plan[0]->operation);
     }
 }

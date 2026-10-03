@@ -1071,6 +1071,13 @@ final class Blueprint
                 onDelete: $column->onDelete,
                 onUpdate: $column->onUpdate,
             );
+
+            // A model-declared backfill rides the column's ADD — inert on
+            // a fresh create (backfills are consulted only for added
+            // columns) and inert once the column exists live.
+            if ($mapping->backfill !== null) {
+                $blueprint = $blueprint->backfill($mapping->columnName, $mapping->backfill);
+            }
         }
 
         // Class-level composite constraints. For an MTI child, only

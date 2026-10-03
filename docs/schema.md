@@ -246,13 +246,42 @@ How the backfill lands depends on the dialect:
   (`DROP DEFAULT`). No full-table scan.
 - **SQLite (rebuild)** — a NOT NULL add via `apply()` routes through
   the table rebuild, which backfills in the copy projection and
-  produces the no-final-default shape.
+  produces the no-final-default shape in one apply.
 - **SQLite (in-place nullable add)** — the column is added, then an
   `UPDATE ... SET col = value WHERE col IS NULL` fills the existing
   rows (SQLite cannot `SET`/`DROP DEFAULT` in place).
 - **SQLite (in-place NOT NULL add, no default)** — a direct `alter()`
   renders the backfill as a temporary inline `DEFAULT` so the `ADD
   COLUMN` succeeds and fills the existing rows (no separate `UPDATE`).
+
+#### The #[Backfill] attribute
+
+A backfill is a one-time instruction for the rows that exist when the
+column is added — not part of the column's permanent shape. So it gets
+its own attribute instead of a `#[Column]` param, which would put a
+dead value in the model forever:
+
+```php
+use BlueprintAU\Radiant\Attributes\Backfill;
+use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+
+class User extends Model
+{
+    #[Column(type: ColumnType::String, length: 255, name: 'display_name')]
+    #[Backfill('unknown')]
+    public string $displayName;
+}
+```
+
+`#[Backfill]` must ride a property that also declares `#[Column]` (an
+orphan fails fast at metadata build — it could never be consumed), and
+its value is a scalar or an SQL `Expression`, the same vocabulary
+`backfill()` takes. `Blueprint::fromMetadata()` attaches it to the
+column, so a model-driven sync (`fromMetadata()` per model →
+`plan()` → `apply()`) backfills without hand-building blueprints. The
+attribute is consulted only when the column is being added — on a
+fresh create it is inert.
 
 ### FK and CHECK drift
 
