@@ -211,8 +211,13 @@ desired shape (a full-shape compile would restate the primary key and
 re-ALTER unchanged columns). **SQLite has no in-place form**, so the
 change routes through a **table rebuild** — the data-preserving
 sequence (create temp → copy rows → drop old → rename → re-create
-indexes → `foreign_key_check` gate), executed inside a transaction so
-a failure rolls the whole rebuild back.
+indexes → `foreign_key_check` gate), executed inside its own
+transaction so a failure rolls the whole rebuild back. A rebuild whose
+table is FK-involved (the table declares foreign keys, or other tables
+reference it) needs the `PRAGMA foreign_keys` toggle around that
+transaction — and that toggle is a no-op inside a transaction, so a
+rebuild that needs it must run as its own standalone transaction; see
+"Atomicity vs SQLite rebuilds" below.
 
 ### Adds and drops: separate changes, never merged
 
@@ -335,6 +340,44 @@ $applied = $synchronizer->sync(
 A throwing `onChange` aborts the run (and rolls it back when
 `transactional: true`).
 
+### Atomicity vs SQLite rebuilds
+
+A `transactional: true` apply is one transaction around the whole
+loop — but on SQLite a change that routes through the table rebuild
+with FK involvement cannot live inside it: the rebuild toggles
+`PRAGMA foreign_keys`, and that PRAGMA is a no-op inside a transaction
+(SQLite semantics — the toggle must run outside any transaction). The
+synchronizer detects such a change (via
+`SqlConnection::changeRequiresStandaloneTransaction()`, overridden on
+`SqliteConnection`) and **degrades the apply to non-transactional**:
+
+- every change that does not need the toggle still applies normally;
+- the rebuild itself keeps its own atomicity — its internal
+  transaction, the `foreign_key_check` gate (any FK violation rolls
+  the whole rebuild back, leaving the table untouched), and the PRAGMA
+  restore on both success and failure paths;
+- `sync()` plans and applies under the `'radiant:schema'` lock — one
+  cross-process section. When the plan carries an FK-involved rebuild,
+  the apply defers until after the lock transaction closes (the lock
+  is itself a transaction on SQLite, and the PRAGMA toggle cannot run
+  inside any transaction). A two-phase plan→apply host must do the
+  same: hold the lock for the plan, release it, then apply.
+
+The trade-off, stated plainly: a multi-change plan containing an
+FK-involved rebuild is atomic **per change**, not across the whole
+plan. A later change can still fail after the rebuild committed. The
+plan-read window between lock release and apply is fenced by the
+rebuild itself — it re-reads the live table per change, and its
+`foreign_key_check` gate fails loud on drift it cannot reconcile. On
+MySQL and Postgres — and on SQLite plans without an FK-involved
+rebuild — the apply stays under the lock and `transactional: true`
+remains all-or-nothing.
+
+`PRAGMA defer_foreign_keys` is not a workaround: deferral postpones
+the constraint *check*, but the `ON DELETE CASCADE` actions still fire
+on the rebuild's implicit `DELETE FROM` during `DROP TABLE` — child
+rows would still be lost.
+
 ### Two-phase sync: plan() + apply()
 
 A host that wants to *display* the plan before applying it can split the
@@ -342,27 +385,31 @@ loop into two phases — the shown plan is then exactly what gets applied,
 with no second diff pass:
 
 ```php
-$conn->withLock(function () use ($synchronizer, $desired): void {
+$plan = $conn->withLock(function () use ($synchronizer, $desired): array {
     $plan = $synchronizer->plan($desired);
 
     foreach ($plan as $change) {
         render($change->description, destructive: $change->destructive);
     }
 
-    if (!confirmDestructive()) {
-        return;
-    }
-
-    $synchronizer->apply($plan, confirm: ...);
+    return confirmDestructive() ? $plan : [];
 }, 'radiant:schema');
+
+if ($plan !== []) {
+    $synchronizer->apply($plan, confirm: ...);
+}
 ```
 
 `plan()` computes the changes and touches nothing; `apply()` applies
 exactly the given changes — no re-diff — with the same confirm gate and
 transactional semantics as `sync()`. Neither takes a lock itself: the
-caller holds the `'radiant:schema'` lock across the whole flow, which is
-also what guarantees no drift between the shown and applied plan.
-`sync()` remains the one-shot form (plan + apply under its own lock).
+caller takes the `'radiant:schema'` lock around the plan phase, which
+is what guarantees no drift between the shown and applied plan. The
+apply runs AFTER the lock releases — on SQLite, a plan containing an
+FK-involved rebuild cannot run inside the lock's transaction (see
+"Atomicity vs SQLite rebuilds" above). `sync()` is the one-shot form:
+plan and apply under its own lock, deferring the apply only when a
+rebuild in the plan requires it.
 
 ### Protected tables
 
@@ -434,8 +481,8 @@ schema, then executes DDL including `DROP TABLE`, and two overlapping
 instances race on stale snapshots.
 
 `SqlConnection::withLock()` takes the dialect's native lock — MySQL
-`GET_LOCK` · Postgres advisory lock · SQLite `BEGIN IMMEDIATE` — with the
-mutual-exclusion *name* supplied at call time: one name is one lock
+`GET_LOCK` · Postgres advisory lock · SQLite a write transaction — with
+the mutual-exclusion *name* supplied at call time: one name is one lock
 domain, so distinct jobs use distinct names and never wait on each
 other. The schema-sync convention is the name `'radiant:schema'`:
 
@@ -446,6 +493,15 @@ $conn->withLock(function () use ($differ, $desired, $conn): void {
     }
 }, 'radiant:schema');
 ```
+
+On SQLite the lock is a write transaction. That is fine for ordinary
+DDL — but a plan that carries an FK-involved SQLite rebuild (content
+drift, FK/CHECK changes, or a NOT NULL add that rebuilds) cannot run
+inside it: the rebuild's `PRAGMA foreign_keys` toggle is a no-op inside
+a transaction. The raw loop above then throws loudly. The
+`SchemaSynchronizer` handles it (it plans under the lock and applies
+outside it); a hand-rolled loop must release the lock before
+applying such a plan — see "Atomicity vs SQLite rebuilds" above.
 
 The same gate covers any other serialized work — cron jobs that must not
 overlap, cache warmups:

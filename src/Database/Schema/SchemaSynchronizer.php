@@ -49,6 +49,13 @@ final class SchemaSynchronizer
      * Takes no lock: the caller must hold the `radiant:schema` lock across
      * the whole plan → display → apply flow.
      *
+     * When the plan carries a change whose apply needs a transaction-free
+     * connection (an FK-involved SQLite table rebuild), a `transactional:
+     * true` apply degrades to a non-transactional loop — each such change
+     * keeps its own internal atomicity. Run the apply OUTSIDE a held lock
+     * transaction in that case: release the lock between planning and
+     * applying.
+     *
      * @param  list<SchemaChange>  $plan
      * @param  (callable(SchemaChange): bool)|null  $confirm  The destructive-change gate; null means fail-fast.
      * @param  (callable(SchemaChange): void)|null  $onChange  Invoked after each change is applied successfully.
@@ -71,6 +78,13 @@ final class SchemaSynchronizer
     /**
      * Sync the desired state to the live schema.
      *
+     * Plans and applies under the `radiant:schema` lock — one
+     * cross-process section. When the plan carries a change whose apply
+     * needs a transaction-free connection (an FK-involved SQLite table
+     * rebuild), the apply runs after the lock transaction closes: the
+     * lock is itself a transaction on SQLite, and the change cannot run
+     * inside any transaction.
+     *
      * @param  list<Blueprint>  $desired
      * @param  (callable(SchemaChange): bool)|null  $confirm  The destructive-change gate; null means fail-fast.
      * @param  (callable(SchemaChange): void)|null  $onChange  Invoked after each change is applied successfully.
@@ -87,11 +101,38 @@ final class SchemaSynchronizer
     ): array {
         $this->assertTransactionalSupport($transactional);
 
-        return $this->connection->withLock(function () use ($desired, $confirm, $onChange, $transactional): array {
-            $changes = $this->plan($desired);
+        ['applied' => $applied, 'deferred' => $deferred] = $this->connection->withLock(
+            function () use ($desired, $confirm, $onChange, $transactional): array {
+                $changes = $this->plan($desired);
 
-            return $this->applyChanges($changes, $confirm, $onChange, $transactional);
-        }, 'radiant:schema');
+                // A change the dialect cannot apply inside a transaction
+                // (an FK-involved SQLite rebuild needs the foreign_keys
+                // PRAGMA toggle outside one) defers the apply past the
+                // lock transaction — the lock IS a transaction on SQLite.
+                // The race window is fenced by the rebuild itself: it
+                // re-reads the live table per change and its
+                // foreign_key_check gate fails loud on drift it cannot
+                // reconcile.
+                if (array_any(
+                    $changes,
+                    fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change),
+                )) {
+                    return ['applied' => [], 'deferred' => $changes];
+                }
+
+                return [
+                    'applied' => $this->applyChanges($changes, $confirm, $onChange, $transactional),
+                    'deferred' => null,
+                ];
+            },
+            'radiant:schema',
+        );
+
+        if ($deferred !== null) {
+            return $this->applyChanges($deferred, $confirm, $onChange, $transactional, standalone: true);
+        }
+
+        return $applied;
     }
 
     /**
@@ -119,6 +160,8 @@ final class SchemaSynchronizer
      * @param  (callable(SchemaChange): bool)|null  $confirm
      * @param  (callable(SchemaChange): void)|null  $onChange
      * @param  bool  $transactional
+     * @param  bool  $standalone  Force the non-transactional loop — the caller
+     *        verified a change needs a transaction-free connection.
      * @return list<SchemaChange>
      * @throws \LogicException
      * @throws \Throwable
@@ -128,6 +171,7 @@ final class SchemaSynchronizer
         callable|null $confirm,
         callable|null $onChange,
         bool $transactional,
+        bool $standalone = false,
     ): array {
         $applied = [];
 
@@ -157,7 +201,16 @@ final class SchemaSynchronizer
             }
         };
 
-        if ($transactional) {
+        // A change the dialect cannot apply inside a transaction (a SQLite
+        // table rebuild needs the foreign_keys PRAGMA toggle outside one)
+        // skips the wrapper: each such change stays internally atomic on
+        // its own. Checking once up front keeps the loop's per-change
+        // atomicity boundary uniform for the whole plan.
+        $degrade = $standalone
+            || ($transactional
+                && array_any($changes, fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change)));
+
+        if ($transactional && !$degrade) {
             // The connection's transaction() helper: commit on success,
             // roll back on any exception (a failed rollback never
             // replaces the original exception).

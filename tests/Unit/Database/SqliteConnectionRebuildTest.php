@@ -142,7 +142,9 @@ final class SqliteConnectionRebuildTest extends TestCase
     /**
      * A rebuild that needs the foreign_keys PRAGMA toggle cannot run inside
      * a transaction — the toggle is a no-op there and the drop would
-     * cascade-delete child rows.
+     * cascade-delete child rows. The synchronizer degrades its own apply
+     * for such plans; what reaches this guard is a DIRECT caller that
+     * opened the transaction itself.
      */
     public function testRebuildInsideTransactionThrowsWhenPragmaNeeded(): void
     {

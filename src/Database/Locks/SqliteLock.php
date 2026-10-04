@@ -8,13 +8,16 @@ use BlueprintAU\Radiant\Database\Connections\SqliteConnection;
 use BlueprintAU\Radiant\Database\Exceptions\ConnectionException;
 
 /**
- * SQLite lock: a write transaction (`BEGIN IMMEDIATE`).
+ * SQLite lock: a write transaction.
  *
- * SQLite serializes writers database-wide; an `IMMEDIATE` transaction
- * takes the RESERVED lock up front, so concurrent workers block instead
- * of racing. The nested-transaction machinery already knows how to
- * participate (savepoints), so the adapter opens the immediate transaction
- * through the connection's public API — no raw PDO poking.
+ * SQLite serializes writers database-wide; a writer holds the RESERVED
+ * lock for its transaction's duration, so concurrent workers block
+ * instead of racing. The transaction is opened through the connection's
+ * public API (`PDO::beginTransaction()`), which on pdo_sqlite issues a
+ * DEFERRED `BEGIN` — the RESERVED lock is taken on the first write, not
+ * at begin. A plan→apply flow writes early, and any concurrent writer
+ * blocks the whole transaction anyway, so the serialization holds; the
+ * up-front acquire of a literal `BEGIN IMMEDIATE` is not relied on.
  *
  * Unlike the SQL-statement adapters, this is NOT an advisory lock — it is
  * a write transaction, so it serializes *all* database mutation for its
@@ -30,7 +33,7 @@ final class SqliteLock implements Lock
     public function __construct(protected readonly SqliteConnection $connection) {}
 
     /**
-     * Run the callback inside a `BEGIN IMMEDIATE` transaction.
+     * Run the callback inside a write transaction.
      *
      * @template TReturn
      *

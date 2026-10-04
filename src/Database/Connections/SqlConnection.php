@@ -546,6 +546,21 @@ abstract class SqlConnection implements ConnectionInterface
         return false;
     }
 
+    /**
+     * Whether applying a change needs a transaction-free connection.
+     *
+     * Dialects route changes that cannot run inside a transaction through
+     * this predicate; the synchronizer consults it before wrapping the
+     * apply loop in a transaction.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return bool
+     */
+    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    {
+        return false;
+    }
+
     // ---- Schema operations (SQL-only) ----
 
     /**

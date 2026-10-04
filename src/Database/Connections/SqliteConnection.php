@@ -211,6 +211,70 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
+     * Whether applying the change needs a transaction-free connection.
+     *
+     * A change routed through a table rebuild whose sequence carries the
+     * `PRAGMA foreign_keys` toggle is the only one: the toggle is a no-op
+     * inside a transaction. The synchronizer consults this before wrapping
+     * its apply loop, so a planned rebuild degrades the transactional
+     * apply instead of failing inside it.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return bool
+     */
+    #[Override]
+    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    {
+        if (!$this->changeRoutesThroughRebuild($change)) {
+            return false;
+        }
+
+        // FK involvement alone decides: the PRAGMA toggle appears in the
+        // compiled sequence exactly when the table declares FKs or is a
+        // parent. Compile with enforcement assumed ON to detect the
+        // toggle WITHOUT executing it.
+        return $this->involvesForeignKeys($change->blueprint->getTable());
+    }
+
+    /**
+     * Whether a schema change routes through the table rebuild on
+     * SQLite.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return bool
+     */
+    private function changeRoutesThroughRebuild(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    {
+        if ($change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn) {
+            return $this->addRequiresRebuild($change);
+        }
+
+        return match ($change->operation) {
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddForeignKey,
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropForeignKey,
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddCheck,
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropCheck => true,
+            default => false,
+        };
+    }
+
+    /**
+     * Whether the table's rebuild sequence carries the foreign_keys PRAGMA
+     * toggle — it declares FKs, or any live table references it.
+     *
+     * @param  string  $table
+     * @return bool
+     */
+    private function involvesForeignKeys(string $table): bool
+    {
+        $live = $this->schemaInspector->table($table);
+
+        return $live->foreignKeys !== []
+            || $this->schemaInspector->referencingTables($table) !== [];
+    }
+
+    /**
      * Rebuild a table — the data-preserving answer to every change SQLite
      * cannot make in place (content drift, FK/CHECK changes).
      *
@@ -229,9 +293,7 @@ final class SqliteConnection extends SqlConnection
         // FK involvement decides the PRAGMA toggle: the table itself
         // declares FKs, OR any live table references it (it is a parent —
         // one inspector query, not an N+1 loop over full snapshots).
-        $live = $this->schemaInspector->table($table);
-        $involvesForeignKeys = $live->foreignKeys !== []
-            || $this->schemaInspector->referencingTables($table) !== [];
+        $involvesForeignKeys = $this->involvesForeignKeys($table);
 
         $foreignKeyConstraintsEnabled = false;
 
@@ -258,7 +320,10 @@ final class SqliteConnection extends SqlConnection
 
         // The live column names — the copy projection is the INTERSECTION
         // with the desired shape (computed by the grammar's compile).
-        $liveColumns = array_map(fn (array $column) => $column['name'], $live->columns);
+        $liveColumns = array_map(
+            fn (array $column) => $column['name'],
+            $this->schemaInspector->table($table)->columns,
+        );
 
         $statements = $this->schemaGrammar->compileRebuildTable(
             $desired,
@@ -270,11 +335,11 @@ final class SqliteConnection extends SqlConnection
         // The PRAGMA toggle MUST run OUTSIDE the transaction — it is a
         // no-op inside one (SQLite docs). The compiled list carries the
         // PRAGMAs at its edges; peel them off and run them around the
-        // transaction straddle. A rebuild that NEEDS the toggle but is
-        // ALREADY inside a transaction (e.g. the synchronizer's
-        // transactional apply) cannot toggle — fail fast rather than
-        // silently running the drop under enforcement (CASCADE children
-        // would lose rows).
+        // transaction straddle. The synchronizer consults
+        // changeRequiresStandaloneTransaction() and defers its apply
+        // past the lock transaction, so what reaches this guard is a
+        // caller that opened its OWN transaction around the rebuild —
+        // the toggle cannot happen there, fail loud.
         $pragmaOff = null;
         $pragmaOn = null;
 
@@ -290,7 +355,11 @@ final class SqliteConnection extends SqlConnection
             throw new \LogicException(sprintf(
                 'Cannot rebuild [%s] inside a transaction: the foreign_keys PRAGMA toggle is a no-op '
                 . 'inside a transaction, and dropping the table under enforcement would cascade-delete '
-                . 'child rows. Run the rebuild outside a transactional apply.',
+                . 'child rows. On SQLite the schema lock (SqliteLock) is itself a transaction, so the '
+                . 'rebuild cannot run under a lock-held transactional apply either — SchemaSynchronizer::sync() '
+                . 'and apply() degrade to a non-transactional apply automatically; run a direct-connection '
+                . 'rebuild outside any transaction instead (the rebuild stays internally atomic and '
+                . 'fail-fast on FK violations).',
                 $table,
             ));
         }
@@ -402,8 +471,8 @@ final class SqliteConnection extends SqlConnection
     }
 
     /**
-     * Run the callback inside a `BEGIN IMMEDIATE` write transaction —
-     * SQLite's native cross-process serialization.
+     * Run the callback inside a write transaction — SQLite's native
+     * cross-process serialization.
      *
      * @template TReturn
      *
