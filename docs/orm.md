@@ -85,12 +85,14 @@ a timestamp column is a Unix-timestamp cast.
 The cast is owned by the property type — read back exactly the type you
 declared:
 
-- `int` on a Timestamp column — a Unix-timestamp integer. Cells arrive
-  both as integers (SQLite) and datetime strings (MySQL's native
-  TIMESTAMP columns); both storages decode to the integer, and an
+- `int` on a Timestamp column — a Unix-timestamp integer in PHP. The
+  encoder binds a datetime string (the only form every dialect's native
+  temporal column accepts); the decoder parses it back to the integer,
+  and still accepts legacy cells that store bare unix seconds. An
   unparseable cell throws naming the column (never a silent `0`).
-- `Carbon`/`DateTime` on a Timestamp column — decoded from epoch
-  seconds on numeric cells and parsed on datetime-string cells.
+- `Carbon`/`DateTime` on a Timestamp or DateTime column — the value
+  round-trips as a datetime string through the connection's codec; the
+  re-fetched instance is a `Carbon` (re-based to the property's class).
 - `string` on a Date column — the property keeps the stored `Y-m-d`
   form verbatim. Declare a `Carbon`/`DateTime` property instead when you
   want the value decoded to a datetime object.

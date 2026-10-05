@@ -347,7 +347,8 @@ final class Column
      *
      * Driven by the PHP property type; the column type disambiguates and
      * validates. Null passes through. A Timestamp column accepts both
-     * storages — numeric cells cast directly, datetime-string cells parse.
+     * storages — datetime strings (the bound form) and legacy integer
+     * cells written before the encoder converted them.
      *
      * @param  mixed  $value
      * @param  string|null  $propertyType
@@ -368,33 +369,7 @@ final class Column
             && !in_array($propertyType, ['int', 'float', 'bool', 'string', 'array'], true)
             && is_a($propertyType, \DateTimeInterface::class, true)
         ) {
-            // A Timestamp column stores Unix timestamps — SQLite delivers
-            // the cell as a number, so `Carbon::parse()` (which rejects
-            // bare timestamp digits) must never see it. Reconstitute from
-            // the epoch seconds; non-numeric cells stay datetime strings
-            // (the MySQL driver's form) and flow to the parser below.
-            if ($this->type === ColumnType::Timestamp && is_numeric($value)) {
-                return \Carbon\Carbon::createFromTimestamp((int) $value);
-            }
-
-            // Any DateTimeInterface implementation: Carbon::parse returns
-            // a Carbon, which IS a DateTimeInterface — the model layer
-            // re-bases when the property's concrete class differs. Parse
-            // failures (corrupt cells, legacy zero-dates like
-            // '0000-00-00', garbage) fail LOUDLY with the column named —
-            // an un-actionable Carbon exception from deep inside hydration
-            // violates the fail-fast contract.
-            try {
-                return \Carbon\Carbon::parse($value);
-            } catch (\Throwable $e) {
-                throw new \RuntimeException(
-                    'Column [' . ($this->name ?? $propertyType) . '] could not decode the value ['
-                    . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
-                    . '] as a datetime: ' . $e->getMessage(),
-                    0,
-                    $e,
-                );
-            }
+            return $this->decodeDatetime($value, $propertyType);
         }
 
         return match ($propertyType) {
@@ -402,20 +377,60 @@ final class Column
             'float' => (float) $value,
             'bool' => (bool) $value,
             'array' => $this->decodeJson($value),
-            default => $this->type === ColumnType::Json && $propertyType !== null && class_exists($propertyType)
+            // A string property (or an undeclared one) keeps the cell
+            // verbatim — the property type drives the cast, and the
+            // stored form IS the property's form. A re-parse here would
+            // hand a Carbon back to a string-typed slot and dirty the
+            // snapshot.
+            'string', null => $value,
+            default => $this->type === ColumnType::Json && class_exists($propertyType)
                 ? $this->decodeJsonObject($value, $propertyType)
-                : $this->decodeString($value),
+                : $value,
         };
+    }
+
+    /**
+     * Decode a temporal column cell to a Carbon — the DateTimeInterface
+     * arm.
+     *
+     * A Timestamp column may deliver the cell as unix seconds (SQLite's
+     * integer storage), which `Carbon::parse` rejects — numeric cells
+     * reconstitute from the epoch. Datetime-string cells (the MySQL
+     * driver's form) parse; failures throw with the column named — an
+     * un-actionable Carbon exception from deep inside hydration violates
+     * the fail-fast contract.
+     *
+     * @param  mixed  $value
+     * @param  string  $propertyType
+     * @return \Carbon\Carbon
+     * @throws \RuntimeException
+     */
+    private function decodeDatetime(mixed $value, string $propertyType): \Carbon\Carbon
+    {
+        if ($this->type === ColumnType::Timestamp && is_numeric($value)) {
+            return \Carbon\Carbon::createFromTimestamp((int) $value);
+        }
+
+        try {
+            return \Carbon\Carbon::parse($value);
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? $propertyType) . '] could not decode the value ['
+                . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+                . '] as a datetime: ' . $e->getMessage(),
+                0,
+                $e,
+            );
+        }
     }
 
     /**
      * Decode a Timestamp column cell for an int-typed property.
      *
-     * Numeric cells (SQLite stores its timestamp column as integers)
-     * pass through the cast; datetime-string cells (the MySQL driver
-     * delivers native TIMESTAMP columns as `'Y-m-d H:i:s'` strings)
-     * parse through `strtotime` — both storages decode to the same
-     * integer.
+     * Numeric cells (legacy storage — the encoder used to bind unix
+     * seconds untouched) cast directly; datetime strings (the form every
+     * dialect's native temporal type delivers) parse through `strtotime`
+     * — both storages decode to the same integer.
      *
      * @param  mixed  $value
      * @return int
@@ -438,24 +453,6 @@ final class Column
         }
 
         return $timestamp;
-    }
-
-    /**
-     * Decode a string-typed property value — the column type
-     * disambiguates the stored form.
-     *
-     * A Date column stores `Y-m-d` — the property's string IS the stored
-     * form, so the cell passes through untouched; the property type
-     * drives the cast, and a `string` property opts out of Carbon
-     * parsing entirely (a re-parse here would also hand a Carbon back to
-     * a string-typed slot and dirty the snapshot).
-     *
-     * @param  mixed  $value
-     * @return mixed
-     */
-    private function decodeString(mixed $value): mixed
-    {
-        return $value;
     }
 
     /**
@@ -595,38 +592,62 @@ final class Column
             return null;
         }
 
-        if ($value instanceof \DateTimeInterface) {
-            if ($this->type === ColumnType::Date) {
-                // A date column stores the calendar day — UTC midnight,
-                // `Y-m-d`, no time component.
-                return \DateTimeImmutable::createFromInterface($value)
-                    ->setTimezone(new \DateTimeZone('UTC'))
-                    ->format('Y-m-d');
-            }
-
-            if ($this->precision !== null) {
-                return $this->encodePrecisionDatetime($value);
-            }
-
-            return $value;
-        }
-
         if ($propertyType !== null && $this->isEnumPropertyType($propertyType)) {
             return $this->encodeEnum($value, $propertyType);
         }
 
-        if ($propertyType !== null && $this->type === ColumnType::Json && class_exists($propertyType)) {
-            return $this->encodeJsonObject($value, $propertyType);
-        }
+        return match ($this->type) {
+            ColumnType::Date => $value instanceof \DateTimeInterface
+                // A date column stores the calendar day — UTC midnight,
+                // `Y-m-d`, no time component.
+                ? \DateTimeImmutable::createFromInterface($value)
+                    ->setTimezone(new \DateTimeZone('UTC'))
+                    ->format('Y-m-d')
+                : $value,
+            ColumnType::DateTime, ColumnType::Timestamp => match (true) {
+                $value instanceof \DateTimeInterface && $this->precision !== null
+                    => $this->encodePrecisionDatetime($value),
+                // A Timestamp column binds a datetime string — the cell
+                // form every dialect accepts (SQLite's NUMERIC affinity
+                // would store a raw unix int, but MySQL and Postgres
+                // reject one on a temporal column). Numeric values
+                // (int-typed Unix-timestamp properties) convert to the
+                // instant and format; DateTimeInterface values pass
+                // through — the connection's codec formats both to the
+                // dialect's datetime string.
+                //
+                // The int arm formats HERE (not in the codec) because the
+                // write-path snapshots compare encoded values strictly —
+                // a Carbon instance never equals another instance, so
+                // every save would flag the column dirty.
+                $this->type === ColumnType::Timestamp && is_numeric($value)
+                    => \Carbon\Carbon::createFromTimestamp((int) $value)
+                        ->format('Y-m-d H:i:s'),
+                default => $value,
+            },
+            ColumnType::Json => $propertyType !== null && class_exists($propertyType)
+                ? $this->encodeJsonObject($value, $propertyType)
+                : $this->encodeJson($value),
+            ColumnType::Uuid => $this->encodeUuid($value),
+            default => $value,
+        };
+    }
 
-        if ($this->type === ColumnType::Uuid && is_string($value)) {
+    /**
+     * Encode a Uuid column cell — a string value passes the RFC 4122
+     * guard and binds verbatim.
+     *
+     * @param  mixed  $value
+     * @return mixed
+     * @throws \InvalidArgumentException
+     */
+    private function encodeUuid(mixed $value): mixed
+    {
+        if (is_string($value)) {
             $this->assertUuid($value);
         }
 
-        return match ($propertyType) {
-            'array' => $this->encodeJson($value),
-            default => $value,
-        };
+        return $value;
     }
 
     /**

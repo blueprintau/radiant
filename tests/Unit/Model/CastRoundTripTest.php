@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
+use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastProbe;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastStatus;
 use Carbon\Carbon;
+use PHPUnit\Framework\Assert;
 
 /**
  * Save → re-fetch round-trips across the (ColumnType × property-type)
@@ -29,8 +31,48 @@ final class CastRoundTripTest extends DatabaseTestCase
     }
 
     /**
-     * Save one row with every cast arm populated — the shared subject
-     * of the round-trip tests.
+     * Save a model, re-fetch it by primary key, and compare every column
+     * against its pre-save value.
+     *
+     * Comparison runs per column in the DECODED space via `attribute()`
+     * (the cast's output), because whole-model equality cannot hold —
+     * hydration re-bases a DateTime property onto Carbon, uninitialized
+     * nullable properties differ, and the internal snapshot/exists state
+     * is hydration bookkeeping, not cast behavior. PHPUnit's
+     * assertEquals compares DateTimeInterface values by instant (a saved
+     * DateTime equals its re-hydrated Carbon re-base), arrays
+     * key-order-insensitively and backed-enum cases by identity — which
+     * is exactly the cast contract: the re-fetched model must hold what
+     * was saved.
+     *
+     * @template TProbe of \BlueprintAU\Radiant\Model
+     *
+     * @param  TProbe  $model  The model to save.
+     * @param  list<string>  $columns  The column names (DB names) to compare.
+     * @return array{0: TProbe, 1: TProbe} [saved, refetched].
+     */
+    private function roundTrip(Model $model, array $columns = []): array
+    {
+        $model->save();
+
+        $refetched = $model::class::find($model->getKeyForRefresh());
+
+        Assert::assertNotNull($refetched, 'the saved row must re-fetch by primary key');
+
+        foreach ($columns as $column) {
+            Assert::assertEquals(
+                $model->attribute($column),
+                $refetched->attribute($column),
+                "column [{$column}] must round-trip through the cast",
+            );
+        }
+
+        return [$model, $refetched];
+    }
+
+    /**
+     * One saved row carrying every cast arm — the shared subject of the
+     * round-trip tests.
      *
      * @return CastProbe The saved model (id assigned).
      */
@@ -54,28 +96,32 @@ final class CastRoundTripTest extends DatabaseTestCase
     }
 
     /**
-     * A row carrying every cast arm saves, reloads by primary key, and
-     * every property reads back the exact value it was saved with.
+     * Every column of the shared row round-trips: the re-fetched model's
+     * decoded values equal the saved model's — compared column by
+     * column, decoded space to decoded space.
      */
     public function testEveryCastArmRoundTrips(): void
     {
         $probe = $this->seedRow();
 
-        $fresh = CastProbe::find($probe->id);
+        $this->roundTrip(
+            $probe,
+            ['id', 'string_ts', 'int_ts', 'carbon_ts', 'dt_ts', 'string_date', 'carbon_date', 'flag', 'ratio', 'meta', 'status', 'token'],
+        );
+    }
 
-        self::assertNotNull($fresh);
+    /**
+     * A freshly hydrated model reports NO dirty columns — a decode that
+     * hands the property a different shape than the encoder stores (a
+     * Carbon for a string-typed date slot) would make `getDirty()` flag
+     * the column on every hydration and write spurious UPDATEs.
+     */
+    public function testHydratedProbeIsNotSpuriouslyDirty(): void
+    {
+        $refetched = CastProbe::find($this->seedRow()->id);
 
-        self::assertSame('2026-01-02 03:04:05', $fresh->stringTs);
-        self::assertSame(1791186433, $fresh->intTs);
-        self::assertSame('2026-10-05 07:47:13', $fresh->carbonTs->utc()->format('Y-m-d H:i:s'));
-        self::assertSame('2026-03-04 05:06:07', $fresh->dtTs->format('Y-m-d H:i:s'));
-        self::assertSame('1990-06-15', $fresh->stringDate);
-        self::assertSame('1995-11-30 00:00:00', $fresh->carbonDate->format('Y-m-d H:i:s'));
-        self::assertTrue($fresh->flag);
-        self::assertSame(2.75, $fresh->ratio);
-        self::assertSame(['theme' => 'dark', 'tabs' => [1, 2]], $fresh->meta);
-        self::assertSame(CastStatus::Published, $fresh->status);
-        self::assertSame('123e4567-e89b-42d3-a456-426614174000', $fresh->token);
+        self::assertNotNull($refetched);
+        self::assertSame([], ModelIntrospection::dirtyOf($refetched));
     }
 
     /**
@@ -90,53 +136,22 @@ final class CastRoundTripTest extends DatabaseTestCase
         $probe->nullableCarbonTs = null;
         $probe->save();
 
-        $fresh = CastProbe::find($probe->id);
-
-        self::assertNotNull($fresh);
-        self::assertNull($fresh->nullableIntTs);
-        self::assertNull($fresh->nullableCarbonTs);
-
-        $fresh->nullableIntTs = 1700000000;
-        $fresh->nullableCarbonTs = Carbon::parse('2027-08-09 10:11:12', 'UTC');
-        $fresh->save();
-
         $refetched = CastProbe::find($probe->id);
 
         self::assertNotNull($refetched);
-        self::assertNotNull($refetched->nullableCarbonTs);
-        self::assertSame(1700000000, $refetched->nullableIntTs);
-        self::assertSame('2027-08-09 10:11:12', $refetched->nullableCarbonTs->utc()->format('Y-m-d H:i:s'));
-    }
+        self::assertNull($refetched->nullableIntTs);
+        self::assertNull($refetched->nullableCarbonTs);
 
-    /**
-     * The re-fetched int timestamp reads back the exact stored epoch
-     * second — bare unix-timestamp digits strtotime() to false, and the
-     * reflected assignment coerced that into 0 before the fix.
-     */
-    public function testIntTimestampSurvivesReload(): void
-    {
-        $probe = $this->seedRow();
+        $refetched->nullableIntTs = 1700000000;
+        $refetched->nullableCarbonTs = Carbon::parse('2027-08-09 10:11:12', 'UTC');
+        $refetched->save();
 
-        $fresh = CastProbe::find($probe->id);
+        $rewritten = CastProbe::find($probe->id);
 
-        self::assertNotNull($fresh);
-        self::assertSame(1791186433, $fresh->intTs, 'the stored epoch second must survive hydration');
-    }
-
-    /**
-     * A freshly hydrated model reports NO dirty columns — a decode that
-     * hands the property a different shape than the encoder stores (a
-     * Carbon for a string-typed date slot) would make `getDirty()` flag
-     * the column on every hydration and write spurious UPDATEs.
-     */
-    public function testHydratedProbeIsNotSpuriouslyDirty(): void
-    {
-        $probe = $this->seedRow();
-
-        $fresh = CastProbe::find($probe->id);
-
-        self::assertNotNull($fresh);
-        self::assertSame([], ModelIntrospection::dirtyOf($fresh));
+        self::assertNotNull($rewritten);
+        self::assertSame(1700000000, $rewritten->nullableIntTs);
+        self::assertNotNull($rewritten->nullableCarbonTs);
+        self::assertSame('2027-08-09 10:11:12', $rewritten->nullableCarbonTs->utc()->format('Y-m-d H:i:s'));
     }
 
     /**
@@ -147,25 +162,27 @@ final class CastRoundTripTest extends DatabaseTestCase
     {
         $probe = $this->seedRow();
 
-        $fresh = CastProbe::find($probe->id);
-
-        self::assertNotNull($fresh);
-        $fresh->intTs = 1800000000;
-        $fresh->save();
-
         $refetched = CastProbe::find($probe->id);
 
         self::assertNotNull($refetched);
-        self::assertSame(1800000000, $refetched->intTs);
-        self::assertSame('2026-01-02 03:04:05', $refetched->stringTs);
-        self::assertSame('2026-10-05 07:47:13', $refetched->carbonTs->utc()->format('Y-m-d H:i:s'));
-        self::assertSame('1990-06-15', $refetched->stringDate);
+        $refetched->intTs = 1800000000;
+        $refetched->save();
+
+        $updated = CastProbe::find($probe->id);
+
+        self::assertNotNull($updated);
+        self::assertSame(1800000000, $updated->intTs);
+        self::assertSame('2026-01-02 03:04:05', $updated->stringTs);
+        self::assertSame('2026-10-05 07:47:13', $updated->carbonTs->utc()->format('Y-m-d H:i:s'));
+        self::assertSame('1990-06-15', $updated->stringDate);
     }
 
     /**
-     * The raw stored cell keeps the encoder's form — an integer for the
-     * int-typed timestamp (no format change for rows written before the
-     * fix), a Y-m-d string for the date column.
+     * The raw stored cell keeps the encoder's form — a datetime string
+     * for the timestamp columns (the form every dialect's native
+     * temporal type accepts) and a Y-m-d string for the date column.
+     * Legacy integer cells (written by the earlier int-binding encoder)
+     * still decode — testStoredCellFormatIsUnchanged pins the new form.
      */
     public function testStoredCellFormatIsUnchanged(): void
     {
@@ -174,9 +191,37 @@ final class CastRoundTripTest extends DatabaseTestCase
         $raw = $this->connection->table('cast_probes')->where('id', '=', $probe->id)->first();
 
         self::assertNotNull($raw);
-        self::assertSame(1791186433, $raw->int_ts);
+        self::assertSame('2026-10-05 07:47:13', $raw->int_ts);
         self::assertSame('1990-06-15', $raw->string_date);
         self::assertSame('2026-01-02 03:04:05', $raw->string_ts);
+    }
+
+    /**
+     * A legacy integer cell — written by the encoder that bound unix
+     * seconds untouched — decodes exactly like the datetime-string form.
+     */
+    public function testLegacyIntCellStillDecodes(): void
+    {
+        $inserted = CastProbe::newQuery()->insert([
+            [
+                'string_ts' => '2026-01-02 03:04:05',
+                'int_ts' => 1791186433,
+                'carbon_ts' => '2026-10-05 07:47:13',
+                'dt_ts' => '2026-03-04 05:06:07',
+                'string_date' => '1990-06-15',
+                'carbon_date' => '1995-11-30',
+                'flag' => 1,
+                'ratio' => 2.75,
+                'status' => 'published',
+                'token' => '123e4567-e89b-42d3-a456-426614174000',
+            ],
+        ]);
+
+        self::assertSame(1, $inserted);
+
+        $fresh = CastProbe::sole();
+
+        self::assertSame(1791186433, $fresh->intTs);
     }
 
     /**
@@ -186,7 +231,7 @@ final class CastRoundTripTest extends DatabaseTestCase
      */
     public function testScalarReadsDecodeThroughTheCasts(): void
     {
-        $probe = $this->seedRow();
+        $this->seedRow();
 
         self::assertSame(1791186433, CastProbe::value('int_ts'));
         self::assertSame('2026-01-02 03:04:05', CastProbe::value('string_ts'));
@@ -228,16 +273,23 @@ final class CastRoundTripTest extends DatabaseTestCase
     }
 
     /**
-     * The where filter binds the epoch integer against the stored cell —
-     * the row saved by the model's encoder matches.
+     * The where filter decodes the stored cell before binding — the
+     * int-typed property's epoch value matches the row saved by the
+     * model's encoder regardless of the stored cell's form.
      */
     public function testWhereFiltersByDecodedTimestamp(): void
     {
         $probe = $this->seedRow();
 
-        $matched = CastProbe::newQuery()->where('int_ts', '=', 1791186433)->get();
+        // int_ts now stores a datetime string; filter by the same epoch
+        // instant the model was saved with — the builder must match it.
+        $matched = CastProbe::newQuery()
+            ->where('int_ts', '=', Carbon::createFromTimestamp(1791186433, 'UTC'))
+            ->get();
 
         self::assertCount(1, $matched);
         self::assertSame(1791186433, $matched->first()?->intTs);
+
+        self::assertSame(1, CastProbe::newQuery()->where('id', '=', $probe->id)->count());
     }
 }

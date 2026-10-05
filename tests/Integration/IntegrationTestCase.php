@@ -8,8 +8,11 @@ use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
+use BlueprintAU\Radiant\Tests\Integration\Fixtures\CastProbe;
+use BlueprintAU\Radiant\Tests\Integration\Fixtures\CastStatus;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
+use Carbon\Carbon;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -79,6 +82,89 @@ abstract class IntegrationTestCase extends DatabaseTestCase
     public function testConnectorReturnsConnection(): void
     {
         self::assertInstanceOf($this->connectionClass(), $this->connection);
+    }
+
+    /**
+     * Every cast arm round-trips through THIS driver's storage: the row
+     * saves, re-fetches by primary key, and every column reads back the
+     * value that was saved.
+     *
+     * The casts are dialect-facing — MySQL stringifies decimals and
+     * temporal columns, Postgres stores booleans natively and returns
+     * its own temporal text — so this is exactly the seam a per-driver
+     * regression hides in. The int-typed Timestamp property is the
+     * sharpest arm: its encoder binds a datetime string (the only form
+     * MySQL and Postgres accept on a temporal column), and the decode
+     * must return the integer the property declares on every driver.
+     */
+    public function testCastMatrixRoundTrips(): void
+    {
+        $this->createTables(Blueprint::fromMetadata(CastProbe::class));
+
+        $probe = new CastProbe();
+        $probe->intTs = 1791186433;
+        $probe->carbonTs = Carbon::createFromTimestamp(1791186433, 'UTC');
+        $probe->carbonDt = Carbon::parse('2026-03-04 05:06:07', 'UTC');
+        $probe->carbonDate = Carbon::parse('1995-11-30', 'UTC');
+        $probe->stringDate = '1990-06-15';
+        $probe->flag = true;
+        $probe->ratio = 2.75;
+        $probe->meta = ['theme' => 'dark', 'tabs' => [1, 2]];
+        $probe->status = CastStatus::Published;
+        $probe->token = '123e4567-e89b-42d3-a456-426614174000';
+        $probe->save();
+
+        $fresh = CastProbe::find($probe->id);
+
+        self::assertNotNull($fresh);
+
+        self::assertSame(1791186433, $fresh->intTs);
+        self::assertSame('2026-10-05 07:47:13', $fresh->carbonTs->utc()->format('Y-m-d H:i:s'));
+        self::assertSame('2026-03-04 05:06:07', $fresh->carbonDt->utc()->format('Y-m-d H:i:s'));
+        self::assertSame('1995-11-30 00:00:00', $fresh->carbonDate->format('Y-m-d H:i:s'));
+        self::assertSame('1990-06-15', $fresh->stringDate);
+        self::assertTrue($fresh->flag);
+        self::assertSame(2.75, $fresh->ratio);
+        self::assertSame(['theme' => 'dark', 'tabs' => [1, 2]], $fresh->meta);
+        self::assertSame(CastStatus::Published, $fresh->status);
+        self::assertSame('123e4567-e89b-42d3-a456-426614174000', $fresh->token);
+    }
+
+    /**
+     * The nullable timestamp arm survives the null → set → null rewrite
+     * cycle on THIS driver — a dialect that stringifies temporal cells
+     * must not turn the null back into a zero-date or an empty string.
+     */
+    public function testNullableTimestampRoundTripsThroughNull(): void
+    {
+        $this->createTables(Blueprint::fromMetadata(CastProbe::class));
+
+        $probe = new CastProbe();
+        $probe->intTs = 1791186433;
+        $probe->carbonTs = Carbon::createFromTimestamp(1791186433, 'UTC');
+        $probe->carbonDt = Carbon::parse('2026-03-04 05:06:07', 'UTC');
+        $probe->carbonDate = Carbon::parse('1995-11-30', 'UTC');
+        $probe->stringDate = '1990-06-15';
+        $probe->flag = true;
+        $probe->ratio = 2.75;
+        $probe->meta = ['theme' => 'dark'];
+        $probe->status = CastStatus::Draft;
+        $probe->token = '123e4567-e89b-42d3-a456-426614174000';
+        $probe->nullableIntTs = null;
+        $probe->save();
+
+        $fresh = CastProbe::find($probe->id);
+
+        self::assertNotNull($fresh);
+        self::assertNull($fresh->nullableIntTs);
+
+        $fresh->nullableIntTs = 1700000000;
+        $fresh->save();
+
+        $rewritten = CastProbe::find($probe->id);
+
+        self::assertNotNull($rewritten);
+        self::assertSame(1700000000, $rewritten->nullableIntTs);
     }
 
     /**
