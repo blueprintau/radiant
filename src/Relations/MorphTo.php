@@ -226,6 +226,21 @@ final class MorphTo extends Relation
     }
 
     /**
+     * The related model class — the fail-fast exceptions' identity.
+     *
+     * The resolved alias when the morph pair resolves; the parent's own
+     * class when it does not (a null pair has no related class — the
+     * no-match query builds on the parent for the same reason).
+     *
+     * @return class-string<Model>
+     */
+    #[\Override]
+    protected function relatedClass(): string
+    {
+        return $this->aliasOf($this->parent) ?? $this->parent::class;
+    }
+
+    /**
      * Build the constrained query for ONE resolved type.
      *
      * @param  class-string<Model>  $alias

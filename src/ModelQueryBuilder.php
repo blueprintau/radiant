@@ -373,7 +373,9 @@ final class ModelQueryBuilder extends QueryBuilder
      * One extra query per relation path — an `IN` on the FK, no joins, no
      * row multiplication.
      *
-     * @param  Collection<Model>  $models
+     * @template TLoaded of Model
+     *
+     * @param  Collection<TLoaded>  $models
      * @return void
      */
     protected function eagerLoadRelations(Collection $models): void
@@ -386,7 +388,9 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Load one dotted relation path onto the models.
      *
-     * @param  Collection<Model>  $models
+     * @template TLoaded of Model
+     *
+     * @param  Collection<TLoaded>  $models
      * @param  string  $path
      * @return void
      */

@@ -76,11 +76,14 @@ the constrained set. The scalar reads (`value()`, `pluck()`,
 aggregates (`aggregateBy()`, `countBy()`) run against the constrained
 query too.
 
-`get()` and the fail-fast reads differ in one way: `get()`
-is cache-aware (see [Eager loading](#eager-loading) — after `with()`, the
-unfiltered read returns the loaded result), while `firstOrFail()` and
-`sole()` always execute against the database. Pass `fresh: true` to
-bypass the cache and always run the query.
+The row reads share `get()`'s cache-awareness: after `with()`, an
+unfiltered `first()`/`find()`/`sole()`/`count()`/`exists()`/`cursor()` is
+served from the loaded snapshot without a query, and the fail-fasts
+answer from it too (an empty snapshot throws
+`ModelNotFoundException`, a snapshot with two rows throws
+`MultipleRecordsFoundException`). Every row read takes `fresh: true` to
+bypass the snapshot and always run the query. The scalar reads never
+consult the snapshot — an aggregate is a live question.
 
 On `morphTo()` the row reads (`first()`, `find()`, `count()`,
 `exists()`, the fail-fast family) resolve the related class per row and
@@ -166,7 +169,10 @@ disengages when it must: a composed chain (`$user->posts()->where(...)`,
 or `withPivot()` on a many-to-many) executes fresh (the cache was loaded
 unfiltered, and pivot columns change the select shape), and a relation
 not loaded on the instance always executes (lazy access is never stale).
-The fail-fast reads `firstOrFail()`/`sole()` never consult the cache.
+The whole row-read family (`first()`, `find()`, the fail-fasts,
+`count()`, `exists()`, `cursor()`) shares this path — a snapshot read is
+fixed at load time, so rows deleted after `with()` are still in it until
+a `fresh: true` read (or a fresh `get()`) re-queries.
 
 Result shapes: eager-loaded `HasOne`/`BelongsTo` results are a single
 model or `null`; `HasMany` results are a `Collection`. Dot-notation nests

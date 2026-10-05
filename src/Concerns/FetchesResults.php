@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Concerns;
 
 use BlueprintAU\Collections\Collection as BaseCollection;
+use BlueprintAU\Radiant\Collection;
+use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
@@ -36,12 +39,43 @@ trait FetchesResults
     abstract protected function compositionQuery(): ModelQueryBuilder;
 
     /**
+     * The eagerly-loaded result — the row reads' cache path.
+     *
+     * @return Collection<TRelated>
+     */
+    abstract protected function eagerCache(): Collection;
+
+    /**
+     * Whether the eagerly-loaded result can serve the row reads.
+     *
+     * @return bool
+     */
+    abstract protected function servesCache(): bool;
+
+    /**
+     * The related model class — the fail-fast exceptions' identity.
+     *
+     * @return class-string<TRelated>
+     */
+    abstract protected function relatedClass(): string;
+
+    /**
      * Run the query and hydrate the first related model.
      *
+     * Served from an eagerly-loaded result when one applies — the
+     * relation was named, no filter composed, and the parent carries the
+     * relation loaded. Pass `fresh: true` to always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated|null
      */
-    final public function first(): ?Model
+    final public function first(bool $fresh = false): ?Model
     {
+        if (!$fresh && $this->servesCache()) {
+            /** @var TRelated|null */
+            return $this->eagerCache()->first();
+        }
+
         return $this->readQuery()->first();
     }
 
@@ -49,11 +83,21 @@ trait FetchesResults
      * Find a related model by its primary key, scoped to the relation's
      * constraint.
      *
+     * Served from an eagerly-loaded result when one applies (the lookup
+     * is then membership of the loaded set). Pass `fresh: true` to
+     * always run the query.
+     *
      * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated|null
      */
-    final public function find(int|string|null|array $id): ?Model
+    final public function find(int|string|null|array $id, bool $fresh = false): ?Model
     {
+        if (!$fresh && $this->servesCache()) {
+            /** @var TRelated|null */
+            return $this->eagerCache()->find($id);
+        }
+
         return $this->readQuery()->find($id);
     }
 
@@ -61,69 +105,142 @@ trait FetchesResults
      * Find a related model by its primary key or throw if it does not
      * exist.
      *
+     * Served from an eagerly-loaded result when one applies — a miss is
+     * then the loaded set holding no match. Pass `fresh: true` to
+     * always run the query.
+     *
      * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
-    final public function findOrFail(int|string|null|array $id): Model
+    final public function findOrFail(int|string|null|array $id, bool $fresh = false): Model
     {
-        return $this->readQuery()->findOrFail($id);
+        $model = $this->find($id, $fresh);
+
+        if ($model === null) {
+            throw new ModelNotFoundException($this->relatedClass(), $id);
+        }
+
+        return $model;
     }
 
     /**
      * Get the first related model or throw if no related models exist.
      *
+     * Served from an eagerly-loaded result when one applies — a miss is
+     * then the loaded set being empty. Pass `fresh: true` to always run
+     * the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      */
-    final public function firstOrFail(): Model
+    final public function firstOrFail(bool $fresh = false): Model
     {
-        return $this->readQuery()->firstOrFail();
+        $model = $this->first($fresh);
+
+        if ($model === null) {
+            throw new ModelNotFoundException($this->relatedClass());
+        }
+
+        return $model;
     }
 
     /**
      * Require the relation to match exactly one related model.
      *
+     * Served from an eagerly-loaded result when one applies — the loaded
+     * set's size decides (zero throws, more than one throws). Pass
+     * `fresh: true` to always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
      * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
      * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
      */
-    final public function sole(): Model
+    final public function sole(bool $fresh = false): Model
     {
+        if (!$fresh && $this->servesCache()) {
+            $models = $this->eagerCache();
+            $count = $models->count();
+
+            if ($count === 0) {
+                throw new ModelNotFoundException($this->relatedClass());
+            }
+
+            if ($count > 1) {
+                throw new MultipleRecordsFoundException($count, $this->relatedClass());
+            }
+
+            /** @var TRelated */
+            return $models->first();
+        }
+
         return $this->readQuery()->sole();
     }
 
     /**
      * Count the related rows matching the relation's constraint.
      *
+     * Served from an eagerly-loaded result when one applies — the count
+     * is then the loaded set's size (a snapshot). Pass `fresh: true` to
+     * always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return int
      */
-    final public function count(): int
+    final public function count(bool $fresh = false): int
     {
+        if (!$fresh && $this->servesCache()) {
+            return $this->eagerCache()->count();
+        }
+
         return $this->readQuery()->count();
     }
 
     /**
      * Whether any related row matches the relation's constraint.
      *
+     * Served from an eagerly-loaded result when one applies. Pass
+     * `fresh: true` to always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return bool
      */
-    final public function exists(): bool
+    final public function exists(bool $fresh = false): bool
     {
+        if (!$fresh && $this->servesCache()) {
+            return $this->eagerCache()->count() !== 0;
+        }
+
         return $this->readQuery()->exists();
     }
 
     /**
      * Stream the related models, hydrating each row as it arrives.
      *
+     * Served from an eagerly-loaded result when one applies. Pass
+     * `fresh: true` to always run the query.
+     *
+     * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return \Generator<int, TRelated>
      */
-    final public function cursor(): \Generator
+    final public function cursor(bool $fresh = false): \Generator
     {
-        return $this->readQuery()->cursor();
+        if (!$fresh && $this->servesCache()) {
+            yield from $this->eagerCache();
+
+            return;
+        }
+
+        // A body holding yield makes this a generator — the live path
+        // forwards the builder's stream item by item (a plain return
+        // would terminate this generator empty).
+        yield from $this->readQuery()->cursor();
     }
 
     /**

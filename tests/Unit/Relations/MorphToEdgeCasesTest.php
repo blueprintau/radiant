@@ -222,9 +222,13 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         // Two results, ONE pair — the second row has no (alias, key) slot
         // and must be skipped, not dispatched to a guessed parent.
         $relation = $comment->commentable();
+        // match() takes Collection<Model> and the item template is not
+        // covariant — both fixtures ARE Models.
+        /** @var \BlueprintAU\Radiant\Collection<\BlueprintAU\Radiant\Model> $results */
+        $results = \BlueprintAU\Radiant\Collection::make([$post, $video]);
         $relation->match(
             [$comment],
-            \BlueprintAU\Radiant\Collection::make([$post, $video]),
+            $results,
             'commentable',
             [[PolyPost::class, '1']],
         );

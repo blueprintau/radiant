@@ -171,6 +171,30 @@ abstract class Relation
     }
 
     /**
+     * Whether an eagerly-loaded result can serve this relation's reads.
+     *
+     * @return bool
+     */
+    final protected function servesCache(): bool
+    {
+        return $this->name !== null && !$this->composed && $this->parent->relationLoaded($this->name);
+    }
+
+    /**
+     * The eagerly-loaded result as a collection.
+     *
+     * @return Collection<TRelated>
+     */
+    protected function eagerCache(): Collection
+    {
+        if ($this->name === null) {
+            return Collection::make([]);
+        }
+
+        return $this->wrapCached($this->parent->cachedRelation($this->name));
+    }
+
+    /**
      * The query builder that filters are added to.
      *
      * @return ModelQueryBuilder<TRelated>
@@ -195,6 +219,16 @@ abstract class Relation
     protected function readQuery(): ModelQueryBuilder
     {
         return $this->getQuery();
+    }
+
+    /**
+     * The related model class — the fail-fast exceptions' identity.
+     *
+     * @return class-string<TRelated>
+     */
+    protected function relatedClass(): string
+    {
+        return $this->related;
     }
 
     /**
@@ -335,8 +369,8 @@ abstract class Relation
      */
     final public function get(bool $fresh = false): Collection
     {
-        if (!$fresh && $this->name !== null && !$this->composed && $this->parent->relationLoaded($this->name)) {
-            return self::wrapCached($this->parent->cachedRelation($this->name));
+        if (!$fresh && $this->servesCache()) {
+            return $this->eagerCache();
         }
 
         return $this->executeResults();

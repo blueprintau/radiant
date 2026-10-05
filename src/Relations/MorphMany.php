@@ -55,7 +55,12 @@ final class MorphMany extends MorphOneOrMany
 
         foreach ($parents as $parent) {
             $key = self::serializeKey($parent->attribute($this->getLocalKey()));
-            $parent->setRelation($name, Collection::make($grouped[$key] ?? []));
+            // The bag's items came off $results (TRelated) — every one IS
+            // a Model; setRelation accepts Collection<Model> and the item
+            // template is not covariant.
+            /** @var Collection<Model> $bag */
+            $bag = Collection::make($grouped[$key] ?? []);
+            $parent->setRelation($name, $bag);
         }
     }
 }

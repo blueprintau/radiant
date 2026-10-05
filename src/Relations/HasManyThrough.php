@@ -467,7 +467,12 @@ class HasManyThrough extends Relation
             $key = $this->isComposite()
                 ? self::tupleValues($parent, $localKeys)
                 : $parent->attribute($localKeys[0]);
-            $parent->setRelation($name, Collection::make($grouped[self::serializeKey($key)] ?? []));
+            // The bag's items came off $results (TRelated) — every one IS
+            // a Model; setRelation accepts Collection<Model> and the item
+            // template is not covariant.
+            /** @var Collection<Model> $bag */
+            $bag = Collection::make($grouped[self::serializeKey($key)] ?? []);
+            $parent->setRelation($name, $bag);
         }
     }
 }
