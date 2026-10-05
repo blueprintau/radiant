@@ -10,6 +10,7 @@ use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Tests\Integration\Fixtures\CastProbe;
 use BlueprintAU\Radiant\Tests\Integration\Fixtures\CastStatus;
+use BlueprintAU\Radiant\Tests\Support\CastRoundTrips;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
 use Carbon\Carbon;
@@ -39,6 +40,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
  */
 abstract class IntegrationTestCase extends DatabaseTestCase
 {
+    use CastRoundTrips;
     /**
      * The concrete connection class the driver's connector builds.
      *
@@ -112,22 +114,11 @@ abstract class IntegrationTestCase extends DatabaseTestCase
         $probe->meta = ['theme' => 'dark', 'tabs' => [1, 2]];
         $probe->status = CastStatus::Published;
         $probe->token = '123e4567-e89b-42d3-a456-426614174000';
-        $probe->save();
 
-        $fresh = CastProbe::find($probe->id);
-
-        self::assertNotNull($fresh);
-
-        self::assertSame(1791186433, $fresh->intTs);
-        self::assertSame('2026-10-05 07:47:13', $fresh->carbonTs->utc()->format('Y-m-d H:i:s'));
-        self::assertSame('2026-03-04 05:06:07', $fresh->carbonDt->utc()->format('Y-m-d H:i:s'));
-        self::assertSame('1995-11-30 00:00:00', $fresh->carbonDate->format('Y-m-d H:i:s'));
-        self::assertSame('1990-06-15', $fresh->stringDate);
-        self::assertTrue($fresh->flag);
-        self::assertSame(2.75, $fresh->ratio);
-        self::assertSame(['theme' => 'dark', 'tabs' => [1, 2]], $fresh->meta);
-        self::assertSame(CastStatus::Published, $fresh->status);
-        self::assertSame('123e4567-e89b-42d3-a456-426614174000', $fresh->token);
+        $this->roundTrip($probe, [
+            'id', 'int_ts', 'carbon_ts', 'carbon_dt', 'carbon_date', 'string_date',
+            'flag', 'ratio', 'meta', 'status', 'token',
+        ]);
     }
 
     /**
@@ -151,12 +142,11 @@ abstract class IntegrationTestCase extends DatabaseTestCase
         $probe->status = CastStatus::Draft;
         $probe->token = '123e4567-e89b-42d3-a456-426614174000';
         $probe->nullableIntTs = null;
-        $probe->save();
 
-        $fresh = CastProbe::find($probe->id);
+        [$saved, $fresh] = $this->roundTrip($probe);
 
-        self::assertNotNull($fresh);
         self::assertNull($fresh->nullableIntTs);
+        self::assertSame(1791186433, $saved->intTs);
 
         $fresh->nullableIntTs = 1700000000;
         $fresh->save();

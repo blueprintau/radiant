@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Support\CastRoundTrips;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastProbe;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastStatus;
 use Carbon\Carbon;
-use PHPUnit\Framework\Assert;
 
 /**
  * Save → re-fetch round-trips across the (ColumnType × property-type)
@@ -21,6 +21,8 @@ use PHPUnit\Framework\Assert;
  */
 final class CastRoundTripTest extends DatabaseTestCase
 {
+    use CastRoundTrips;
+
     /**
      * Build the probe table straight from the fixture's metadata — the
      * attribute declarations ARE the schema contract under test.
@@ -28,46 +30,6 @@ final class CastRoundTripTest extends DatabaseTestCase
     protected function setUpDatabase(): void
     {
         $this->createTables(CastProbe::class);
-    }
-
-    /**
-     * Save a model, re-fetch it by primary key, and compare every column
-     * against its pre-save value.
-     *
-     * Comparison runs per column in the DECODED space via `attribute()`
-     * (the cast's output), because whole-model equality cannot hold —
-     * hydration re-bases a DateTime property onto Carbon, uninitialized
-     * nullable properties differ, and the internal snapshot/exists state
-     * is hydration bookkeeping, not cast behavior. PHPUnit's
-     * assertEquals compares DateTimeInterface values by instant (a saved
-     * DateTime equals its re-hydrated Carbon re-base), arrays
-     * key-order-insensitively and backed-enum cases by identity — which
-     * is exactly the cast contract: the re-fetched model must hold what
-     * was saved.
-     *
-     * @template TProbe of \BlueprintAU\Radiant\Model
-     *
-     * @param  TProbe  $model  The model to save.
-     * @param  list<string>  $columns  The column names (DB names) to compare.
-     * @return array{0: TProbe, 1: TProbe} [saved, refetched].
-     */
-    private function roundTrip(Model $model, array $columns = []): array
-    {
-        $model->save();
-
-        $refetched = $model::class::find($model->getKeyForRefresh());
-
-        Assert::assertNotNull($refetched, 'the saved row must re-fetch by primary key');
-
-        foreach ($columns as $column) {
-            Assert::assertEquals(
-                $model->attribute($column),
-                $refetched->attribute($column),
-                "column [{$column}] must round-trip through the cast",
-            );
-        }
-
-        return [$model, $refetched];
     }
 
     /**
