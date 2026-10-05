@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecKind;
+use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecIntStatus;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecProbe;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecStatus;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UserPreferences;
@@ -51,7 +52,7 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'declares a [boolean] column, which cannot store the field type [int].'
-            . ' Compatible column types for [int]: int, bigint, timestamp.',
+                . ' Compatible column types for [int]: int, bigint, timestamp.',
         );
 
         (new Column(type: ColumnType::Boolean))
@@ -81,7 +82,7 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'declares datetime precision [7], which is out of range; use null for whole seconds'
-            . ' or an integer between 1 and 6 for fractional seconds.',
+                . ' or an integer between 1 and 6 for fractional seconds.',
         );
 
         (new Column(type: ColumnType::DateTime, precision: 7))
@@ -147,7 +148,7 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'The enum [' . EmptyEnumForCodec::class . '] declares no cases;'
-            . ' an enum column needs at least one value.',
+                . ' an enum column needs at least one value.',
         );
 
         $column->resolvedEnumValues();
@@ -235,7 +236,7 @@ final class ColumnCodecTest extends TestCase
 
     /**
      * A Timestamp column decodes a datetime string through strtotime —
-     * the int arm.
+     * the int arm (the MySQL driver's storage form).
      */
     public function testTimestampDecodesDatetimeStringThroughStrtotime(): void
     {
@@ -245,6 +246,67 @@ final class ColumnCodecTest extends TestCase
             strtotime('2026-01-02 03:04:05'),
             $column->decode('2026-01-02 03:04:05', 'int'),
         );
+    }
+
+    /**
+     * A Timestamp column decodes a numeric cell through the cast — the
+     * storage SQLite returns for its integer timestamp cells. Bare
+     * timestamp digits would strtotime() to false (silently 0 on the
+     * typed property).
+     */
+    public function testTimestampDecodesNumericCellThroughCast(): void
+    {
+        $column = new Column(type: ColumnType::Timestamp);
+
+        self::assertSame(1791186433, $column->decode(1791186433, 'int'));
+        self::assertSame(1791186433, $column->decode('1791186433', 'int'));
+    }
+
+    /**
+     * A Timestamp column fails loudly — with the column named — on a
+     * non-numeric, unparseable cell instead of silently decoding to 0.
+     */
+    public function testTimestampGarbageCellThrowsWithColumnName(): void
+    {
+        $column = new Column(type: ColumnType::Timestamp, name: 'expires_at');
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageIsOrContains(
+            "Column [expires_at] could not decode the value ['not-a-timestamp'] as a Unix timestamp.",
+        );
+
+        $column->decode('not-a-timestamp', 'int');
+    }
+
+    /**
+     * The timestamp garbage throw names the literal 'timestamp' when the
+     * column carries no name.
+     */
+    public function testTimestampGarbageCellUnnamedColumnFallsBackToLiteralName(): void
+    {
+        $column = new Column(type: ColumnType::Timestamp);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageIsOrContains(
+            "Column [timestamp] could not decode the value ['not-a-timestamp'] as a Unix timestamp.",
+        );
+
+        $column->decode('not-a-timestamp', 'int');
+    }
+
+    /**
+     * A Timestamp column decodes a numeric cell to Carbon for a
+     * datetime-typed property — Carbon::parse rejects bare timestamp
+     * digits, so the numeric form must be reconstituted from the epoch.
+     */
+    public function testTimestampNumericCellDecodesToCarbon(): void
+    {
+        $column = new Column(type: ColumnType::Timestamp, name: 'fired_at');
+
+        $decoded = $column->decode(1791186433, \Carbon\Carbon::class);
+
+        self::assertInstanceOf(\Carbon\Carbon::class, $decoded);
+        self::assertSame('2026-10-05 07:47:13', $decoded->utc()->format('Y-m-d H:i:s'));
     }
 
     /**
@@ -258,47 +320,29 @@ final class ColumnCodecTest extends TestCase
     }
 
     /**
-     * A Date column decodes a Y-m-d string to Carbon at start of day.
+     * A Date column passes the stored Y-m-d cell through to a
+     * string-typed property verbatim — the property type drives the
+     * cast, so the property keeps the storage format it declared.
      */
-    public function testDateDecodesToStartOfDay(): void
+    public function testDateStringPropertyPassesCellThrough(): void
     {
         $column = new Column(type: ColumnType::Date, name: 'd');
 
-        $decoded = $column->decode('2026-01-02', 'string');
+        self::assertSame('2026-01-02', $column->decode('2026-01-02', 'string'));
+    }
+
+    /**
+     * A Date column decodes to Carbon for a DateTimeInterface-typed
+     * property — pinned at start of day by the stored form.
+     */
+    public function testDateDecodesToStartOfDayForCarbonProperty(): void
+    {
+        $column = new Column(type: ColumnType::Date, name: 'd');
+
+        $decoded = $column->decode('2026-01-02', \Carbon\Carbon::class);
 
         self::assertInstanceOf(\Carbon\Carbon::class, $decoded);
         self::assertSame('2026-01-02 00:00:00', $decoded->format('Y-m-d H:i:s'));
-    }
-
-    /**
-     * A corrupt date cell fails loudly with the column named.
-     */
-    public function testCorruptDateThrowsWithColumnName(): void
-    {
-        $column = new Column(type: ColumnType::Date, name: 'd');
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessageIsOrContains(
-            "Column [d] could not decode the value ['not-a-date'] as a date:",
-        );
-
-        $column->decode('not-a-date', 'string');
-    }
-
-    /**
-     * A corrupt date on an unnamed column falls back to the literal
-     * 'date' name in the throw.
-     */
-    public function testCorruptDateUnnamedColumnFallsBackToLiteralName(): void
-    {
-        $column = new Column(type: ColumnType::Date);
-
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessageIsOrContains(
-            "Column [date] could not decode the value ['not-a-date'] as a date:",
-        );
-
-        $column->decode('not-a-date', 'string');
     }
 
     /**
@@ -380,7 +424,7 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             "Column [status] holds the value ['bogus'], which is not a case of the enum ["
-            . CodecStatus::class . '].',
+                . CodecStatus::class . '].',
         );
 
         $column->decode('bogus', CodecStatus::class);
@@ -397,10 +441,68 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             "Column [kind] holds the value ['Nope'], which is not a case of the enum ["
-            . CodecKind::class . '].',
+                . CodecKind::class . '].',
         );
 
         $column->decode('Nope', CodecKind::class);
+    }
+
+    /**
+     * An int-backed enum decodes a numeric-STRING cell — drivers that
+     * stringify integer columns (CSV, emulated prepares) must not reach
+     * the typed tryFrom() and TypeError instead of the named throw.
+     */
+    public function testDecodeIntBackedEnumFromNumericStringCell(): void
+    {
+        $column = new Column(type: ColumnType::Int, name: 'level');
+
+        self::assertSame(CodecIntStatus::High, $column->decode('5', CodecIntStatus::class));
+        self::assertSame(CodecIntStatus::Low, $column->decode(1, CodecIntStatus::class));
+    }
+
+    /**
+     * A string-backed enum decodes a non-numeric int cell with the named
+     * throw — never a TypeError from the typed tryFrom().
+     */
+    public function testDecodeStringBackedEnumFromIntCellThrows(): void
+    {
+        $column = new Column(type: ColumnType::String, length: 9, name: 'status');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'Column [status] holds the value [0], which is not a case of the enum ['
+                . CodecStatus::class . '].',
+        );
+
+        $column->decode(0, CodecStatus::class);
+    }
+
+    /**
+     * An int-backed enum re-encodes an already-encoded numeric-string
+     * value — the builder's write path may feed a stored cell back in.
+     */
+    public function testEncodeIntBackedEnumFromNumericString(): void
+    {
+        $column = new Column(type: ColumnType::Int, name: 'level');
+
+        self::assertSame(5, $column->encode('5', CodecIntStatus::class));
+    }
+
+    /**
+     * An int-backed enum rejects a non-numeric string with the named
+     * throw — never a TypeError from the typed tryFrom().
+     */
+    public function testDecodeIntBackedEnumFromGarbageStringThrows(): void
+    {
+        $column = new Column(type: ColumnType::Int, name: 'level');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            "Column [level] holds the value ['bogus'], which is not a case of the enum ["
+                . CodecIntStatus::class . '].',
+        );
+
+        $column->decode('bogus', CodecIntStatus::class);
     }
 
     /**
@@ -432,7 +534,7 @@ final class ColumnCodecTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'declares an enum column without values; declare `values:` with the allowed strings '
-            . 'or an enum class-string.',
+                . 'or an enum class-string.',
         );
 
         $column->assertTypeCompatible(CodecStatus::class, self::PROBE, 'name');

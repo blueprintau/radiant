@@ -80,6 +80,21 @@ union, and intersection types fail at metadata build. A `?Carbon` property
 on a DateTime column round-trips `Carbon` instances; an `int` property on
 a timestamp column is a Unix-timestamp cast.
 
+### Casts by property type
+
+The cast is owned by the property type — read back exactly the type you
+declared:
+
+- `int` on a Timestamp column — a Unix-timestamp integer. Cells arrive
+  both as integers (SQLite) and datetime strings (MySQL's native
+  TIMESTAMP columns); both storages decode to the integer, and an
+  unparseable cell throws naming the column (never a silent `0`).
+- `Carbon`/`DateTime` on a Timestamp column — decoded from epoch
+  seconds on numeric cells and parsed on datetime-string cells.
+- `string` on a Date column — the property keeps the stored `Y-m-d`
+  form verbatim. Declare a `Carbon`/`DateTime` property instead when you
+  want the value decoded to a datetime object.
+
 ## Table naming
 
 A model's table defaults to the snake-cased plural of its class name —

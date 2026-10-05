@@ -416,9 +416,8 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Split a dotted path into its first segment and the nested remainder.
      *
-     * @param string $path The full path.
-     * @return array{string, string|null} The first segment + the remainder
-     *         (null when the path has one segment).
+     * @param  string  $path  The full path.
+     * @return array{string, string|null} The first segment plus the remainder, or null when the path has one segment.
      */
     protected function splitPath(string $path): array
     {

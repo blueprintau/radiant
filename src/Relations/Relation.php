@@ -22,20 +22,13 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
  * A relation is a lazily-executed query: constructing it runs nothing;
  * {@see Relation::get()} runs it. The FK constraint against the
  * parent's key is applied in the constructor, so any filters you add are
- * on top of it.
- *
- * Eager loading runs the same FK match as an `IN` over many parents' keys
- * once, then {@see Relation::match()} distributes the results back onto
- * each parent — no joins, no row multiplication.
+ * on top of it. Eager loading matches all parents' keys in one `IN` query
+ * instead of joining.
  *
  * Keys are scalar by default. A relation over a composite key declares
- * BOTH sides as column lists (`['region_id', 'country']`) — the constraint
+ * both sides as column lists (`['region_id', 'country']`) — the constraint
  * compiles as per-column `=` wheres and the eager load as an OR of AND
  * groups. Scalar and composite are mutually exclusive.
- *
- * **Relations are immutable.** Every filter and configurator returns a
- * NEW relation — the original is never modified, and a discarded call is
- * a no-op.
  *
  * @template TRelated of Model
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model

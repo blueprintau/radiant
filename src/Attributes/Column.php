@@ -346,7 +346,8 @@ final class Column
      * Bindable value → typed property value (read path; DB-agnostic).
      *
      * Driven by the PHP property type; the column type disambiguates and
-     * validates. Null passes through.
+     * validates. Null passes through. A Timestamp column accepts both
+     * storages — numeric cells cast directly, datetime-string cells parse.
      *
      * @param  mixed  $value
      * @param  string|null  $propertyType
@@ -367,6 +368,15 @@ final class Column
             && !in_array($propertyType, ['int', 'float', 'bool', 'string', 'array'], true)
             && is_a($propertyType, \DateTimeInterface::class, true)
         ) {
+            // A Timestamp column stores Unix timestamps — SQLite delivers
+            // the cell as a number, so `Carbon::parse()` (which rejects
+            // bare timestamp digits) must never see it. Reconstitute from
+            // the epoch seconds; non-numeric cells stay datetime strings
+            // (the MySQL driver's form) and flow to the parser below.
+            if ($this->type === ColumnType::Timestamp && is_numeric($value)) {
+                return \Carbon\Carbon::createFromTimestamp((int) $value);
+            }
+
             // Any DateTimeInterface implementation: Carbon::parse returns
             // a Carbon, which IS a DateTimeInterface — the model layer
             // re-bases when the property's concrete class differs. Parse
@@ -388,7 +398,7 @@ final class Column
         }
 
         return match ($propertyType) {
-            'int' => $this->type === ColumnType::Timestamp ? strtotime((string) $value) : (int) $value,
+            'int' => $this->type === ColumnType::Timestamp ? $this->decodeUnixTimestamp($value) : (int) $value,
             'float' => (float) $value,
             'bool' => (bool) $value,
             'array' => $this->decodeJson($value),
@@ -399,34 +409,53 @@ final class Column
     }
 
     /**
+     * Decode a Timestamp column cell for an int-typed property.
+     *
+     * Numeric cells (SQLite stores its timestamp column as integers)
+     * pass through the cast; datetime-string cells (the MySQL driver
+     * delivers native TIMESTAMP columns as `'Y-m-d H:i:s'` strings)
+     * parse through `strtotime` — both storages decode to the same
+     * integer.
+     *
+     * @param  mixed  $value
+     * @return int
+     * @throws \RuntimeException
+     */
+    private function decodeUnixTimestamp(mixed $value): int
+    {
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        $timestamp = strtotime((string) $value);
+
+        if ($timestamp === false) {
+            throw new \RuntimeException(
+                'Column [' . ($this->name ?? 'timestamp') . '] could not decode the value ['
+                . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+                . '] as a Unix timestamp.',
+            );
+        }
+
+        return $timestamp;
+    }
+
+    /**
      * Decode a string-typed property value — the column type
      * disambiguates the stored form.
      *
-     * A Date column stores `Y-m-d`; decoding re-parses it so a corrupt
-     * cell fails loudly with the column named (mirroring the datetime
-     * path). Other string-family columns pass through untouched — the
-     * DB's string IS the property's string.
+     * A Date column stores `Y-m-d` — the property's string IS the stored
+     * form, so the cell passes through untouched; the property type
+     * drives the cast, and a `string` property opts out of Carbon
+     * parsing entirely (a re-parse here would also hand a Carbon back to
+     * a string-typed slot and dirty the snapshot).
      *
      * @param  mixed  $value
      * @return mixed
-     * @throws \RuntimeException
      */
     private function decodeString(mixed $value): mixed
     {
-        if ($this->type !== ColumnType::Date || !is_string($value)) {
-            return $value;
-        }
-
-        try {
-            return \Carbon\Carbon::parse($value)->startOfDay();
-        } catch (\Throwable $e) {
-            throw new \RuntimeException(
-                'Column [' . ($this->name ?? 'date') . '] could not decode the value ['
-                . var_export($value, true) . '] as a date: ' . $e->getMessage(),
-                0,
-                $e,
-            );
-        }
+        return $value;
     }
 
     /**
@@ -631,7 +660,21 @@ final class Column
                 return $value->value;
             }
 
-            if (is_string($value) || is_int($value)) {
+            // An int-backed enum's already-encoded value may arrive as a
+            // numeric string (a caller passing a stored cell back in);
+            // coerce to the backing type before tryFrom(), else the typed
+            // method TypeErrors instead of the named throw.
+            $backing = $propertyType::cases()[0]->value;
+
+            if (is_int($backing)) {
+                if (is_int($value) || (is_string($value) && is_numeric($value))) {
+                    $value = (int) $value;
+
+                    if ($propertyType::tryFrom($value) !== null) {
+                        return $value;
+                    }
+                }
+            } elseif (is_string($value)) {
                 if ($propertyType::tryFrom($value) !== null) {
                     return $value;
                 }
@@ -668,17 +711,31 @@ final class Column
     private function decodeEnum(mixed $value, string $propertyType): \BackedEnum|\UnitEnum
     {
         if (is_a($propertyType, \BackedEnum::class, true)) {
-            $case = $propertyType::tryFrom($value);
+            // A string-backed enum may receive an int cell and an
+            // int-backed enum a numeric-string cell (driver stringification
+            // on the read path) — coerce to the backing type before
+            // tryFrom(), else the typed method TypeErrors instead of the
+            // named throw.
+            $backing = $propertyType::cases()[0]->value;
 
-            if ($case === null) {
-                throw new \InvalidArgumentException(
-                    'Column [' . ($this->name ?? $propertyType) . '] holds the value ['
-                    . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
-                    . '], which is not a case of the enum [' . $propertyType . '].'
-                );
+            $coerced = match (true) {
+                is_int($backing) => is_numeric($value) ? (int) $value : null,
+                default => is_scalar($value) || $value === null ? (string) $value : null,
+            };
+
+            if ($coerced !== null) {
+                $case = $propertyType::tryFrom($coerced);
+
+                if ($case !== null) {
+                    return $case;
+                }
             }
 
-            return $case;
+            throw new \InvalidArgumentException(
+                'Column [' . ($this->name ?? $propertyType) . '] holds the value ['
+                . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
+                . '], which is not a case of the enum [' . $propertyType . '].'
+            );
         }
 
         foreach ($propertyType::cases() as $case) {
