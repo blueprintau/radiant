@@ -392,4 +392,220 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
             'a nullable in-place add never needs a standalone transaction',
         );
     }
+
+    /**
+     * A rename-led plan applies in one transactional call: the alters
+     * target a table the plan's own rename brings into existence, and the
+     * up-front degrade scan must answer through the rename instead of
+     * crashing on the not-yet-existing name.
+     */
+    public function testRenameLedPlanAppliesTransactionally(): void
+    {
+        $this->connection->create(
+            (new Blueprint('users_legacy'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255),
+        );
+        $this->connection->statement(
+            "INSERT INTO users_legacy (email) VALUES ('alice@example.com')",
+        );
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('users_legacy')
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->column(ColumnType::String, 'status', length: 20, nullable: true);
+
+        $plan = $this->synchronizer->plan([$desired]);
+
+        $applied = $this->synchronizer->apply($plan, transactional: true);
+
+        self::assertSame(
+            [
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::RenameTable,
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
+            ],
+            array_map(fn ($change) => $change->operation, $applied),
+            'the rename leads, the alter lands on the renamed table',
+        );
+
+        // The data travelled with the rename, and the alter landed.
+        $rows = $this->connection->selectSql('SELECT email, status FROM users')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('alice@example.com', $rows[0]->email);
+        self::assertNull($rows[0]->status);
+
+        self::assertFalse($this->connection->schemaInspector->hasTable('users_legacy'));
+        self::assertTrue($this->connection->schemaInspector->hasTable('users'));
+    }
+
+    /**
+     * The issue's exact shape — rename + modify on a NON-FK table under a
+     * transactional apply: no FK state anywhere, so no degrade fires and
+     * the whole plan applies inside one transaction.
+     */
+    public function testRenameLedModifyPlanAppliesTransactionallyWithoutDegrade(): void
+    {
+        $this->connection->statement(
+            'CREATE TABLE users_legacy (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL)',
+        );
+        $this->connection->statement(
+            "INSERT INTO users_legacy (email) VALUES ('alice@example.com')",
+        );
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('users_legacy')
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255);
+
+        $plan = $this->synchronizer->plan([$desired]);
+        self::assertSame(
+            [
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::RenameTable,
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            ],
+            array_map(fn ($change) => $change->operation, $plan),
+        );
+
+        $applied = $this->synchronizer->apply(
+            $plan,
+            confirm: fn () => true,
+            transactional: true,
+        );
+
+        self::assertCount(2, $applied);
+
+        $rows = $this->connection->selectSql('SELECT email FROM users')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('alice@example.com', $rows[0]->email, 'the data travelled with the rename');
+
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertSame('varchar(255)', array_values(array_filter(
+            $live->columns,
+            fn (array $column) => $column['name'] === 'email',
+        ))[0]['type'], 'the modify landed on the renamed table');
+    }
+
+    /**
+     * A rename-led plan carrying an FK-involved modify still degrades to
+     * the standalone apply — FK state resolves through the rename's source
+     * table, so the deferred-apply decision fires before anything runs.
+     */
+    public function testRenameLedPlanWithFkModifyDegrades(): void
+    {
+        $teams = (new Blueprint('teams'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($teams);
+
+        // The rename source declares a FK — the plan's alters for the
+        // renamed table must be seen as FK-involved.
+        $usersLegacy = (new Blueprint('users_legacy'))
+            ->id()
+            ->column(ColumnType::BigInt, 'team_id', nullable: true)
+            ->column(ColumnType::String, 'name', length: 50)
+            ->foreignKey(['team_id'], 'teams', ['id'], onDelete: 'set null');
+        $this->connection->create($usersLegacy);
+
+        $this->connection->statement("INSERT INTO teams (name) VALUES ('Core')");
+        $this->connection->statement("INSERT INTO users_legacy (team_id, name) VALUES (1, 'Alice')");
+
+        $desired = (new Blueprint('users'))
+            ->renamedFrom('users_legacy')
+            ->id()
+            ->column(ColumnType::BigInt, 'team_id', nullable: true)
+            ->column(ColumnType::String, 'name', length: 120)
+            ->foreignKey(['team_id'], 'teams', ['id'], onDelete: 'set null');
+        $teamsDesired = (new Blueprint('teams'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        // Rename-led plan with an FK-involved ModifyColumn — its predicate
+        // must NOT throw on the live-missing new name.
+        $plan = $this->connection->withLock(
+            fn (): array => $this->synchronizer->plan([$desired, $teamsDesired]),
+            'radiant:schema',
+        );
+
+        $modify = array_values(array_filter(
+            $plan,
+            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+        ));
+        self::assertNotSame([], $modify, 'the plan carries the FK-involved modify');
+        self::assertTrue(
+            $this->connection->changeRequiresStandaloneTransaction($modify[0], $plan),
+            'the FK state resolves through the rename source',
+        );
+
+        // sync() defers past the lock transaction, then applies standalone.
+        $applied = $this->synchronizer->sync([$desired, $teamsDesired]);
+
+        $rows = $this->connection->selectSql('SELECT name FROM users ORDER BY id')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('Alice', $rows[0]->name, 'the row travelled with the rename');
+
+        $constraints = $this->connection->selectSql('PRAGMA foreign_key_list(users)')->all();
+        self::assertNotSame([], $constraints, 'the foreign key survives the rename-led rebuild');
+
+        $violations = $this->connection->selectSql('PRAGMA foreign_key_check(users)')->all();
+        self::assertSame([], $violations);
+
+        $pragma = $this->connection->selectSql('PRAGMA foreign_keys');
+        $row = $pragma->first();
+        self::assertNotNull($row);
+        self::assertSame(1, $row->{'foreign_keys'});
+    }
+
+    /**
+     * A create-led plan applies in one transactional call: the create's
+     * declared FKs land with it, and the predicate reads FKs from the
+     * blueprint when the table does not exist live yet.
+     */
+    public function testCreateLedPlanAppliesTransactionally(): void
+    {
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->foreignKey(['id'], 'users', ['id']);
+        $orders = (new Blueprint('orders'))
+            ->id()
+            ->column(ColumnType::BigInt, 'user_id', foreign: 'users.id');
+
+        // Plain creates: the blueprint's declared FKs land with the
+        // create — no follow-up alters are needed on a fresh table.
+        $plan = $this->synchronizer->plan([$users, $orders]);
+
+        self::assertSame(
+            [
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::CreateTable,
+                \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::CreateTable,
+            ],
+            array_map(fn ($change) => $change->operation, $plan),
+            'creates only — the declared shape is folded into each create',
+        );
+
+        // A rebuild-routed modify against a table the plan creates reads
+        // its FK state from the blueprint — the live table does not exist
+        // yet, and the predicate must not consult (or crash on) it.
+        $modify = new \BlueprintAU\Radiant\Database\Schema\SchemaChange(
+            'users',
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            $users,
+            false,
+            'modify column(s) on [users]',
+        );
+        self::assertTrue(
+            $this->connection->changeRequiresStandaloneTransaction($modify, $plan),
+            'a rebuild-routed modify on a created table reads the blueprint FKs',
+        );
+
+        $applied = $this->synchronizer->apply($plan, transactional: true);
+
+        self::assertCount(2, $applied);
+
+        self::assertNotSame([], $this->connection->selectSql('PRAGMA foreign_key_list(users)')->all(), 'the declared FK landed with the create');
+        self::assertNotSame([], $this->connection->selectSql('PRAGMA foreign_key_list(orders)')->all(), 'the order FK landed with the create');
+
+        self::assertSame(0, $this->connection->transactionLevel(), 'the apply must close cleanly');
+    }
 }

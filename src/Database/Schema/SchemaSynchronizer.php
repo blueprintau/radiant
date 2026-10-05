@@ -115,7 +115,7 @@ final class SchemaSynchronizer
                 // reconcile.
                 if (array_any(
                     $changes,
-                    fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change),
+                    fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change, $changes),
                 )) {
                     return ['applied' => [], 'deferred' => $changes];
                 }
@@ -129,7 +129,7 @@ final class SchemaSynchronizer
         );
 
         if ($deferred !== null) {
-            return $this->applyChanges($deferred, $confirm, $onChange, $transactional, standalone: true);
+            return $this->applyChanges($deferred, $confirm, $onChange, $transactional);
         }
 
         return $applied;
@@ -160,8 +160,6 @@ final class SchemaSynchronizer
      * @param  (callable(SchemaChange): bool)|null  $confirm
      * @param  (callable(SchemaChange): void)|null  $onChange
      * @param  bool  $transactional
-     * @param  bool  $standalone  Force the non-transactional loop — the caller
-     *        verified a change needs a transaction-free connection.
      * @return list<SchemaChange>
      * @throws \LogicException
      * @throws \Throwable
@@ -171,7 +169,6 @@ final class SchemaSynchronizer
         callable|null $confirm,
         callable|null $onChange,
         bool $transactional,
-        bool $standalone = false,
     ): array {
         $applied = [];
 
@@ -205,10 +202,11 @@ final class SchemaSynchronizer
         // table rebuild needs the foreign_keys PRAGMA toggle outside one)
         // skips the wrapper: each such change stays internally atomic on
         // its own. Checking once up front keeps the loop's per-change
-        // atomicity boundary uniform for the whole plan.
-        $degrade = $standalone
-            || ($transactional
-                && array_any($changes, fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change)));
+        // atomicity boundary uniform for the whole plan. The deferred leg
+        // of sync() re-derives the verdict here — the plan-aware predicate
+        // answers rename-led batches on its own.
+        $degrade = $transactional
+            && array_any($changes, fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change, $changes));
 
         if ($transactional && !$degrade) {
             // The connection's transaction() helper: commit on success,

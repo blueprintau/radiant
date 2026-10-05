@@ -220,10 +220,11 @@ final class SqliteConnection extends SqlConnection
      * apply instead of failing inside it.
      *
      * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @param  list<\BlueprintAU\Radiant\Database\Schema\SchemaChange>  $plan  The whole plan, for rename resolution.
      * @return bool
      */
     #[Override]
-    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change, array $plan = []): bool
     {
         if (!$this->changeRoutesThroughRebuild($change)) {
             return false;
@@ -232,8 +233,11 @@ final class SqliteConnection extends SqlConnection
         // FK involvement alone decides: the PRAGMA toggle appears in the
         // compiled sequence exactly when the table declares FKs or is a
         // parent. Compile with enforcement assumed ON to detect the
-        // toggle WITHOUT executing it.
-        return $this->involvesForeignKeys($change->blueprint->getTable());
+        // toggle WITHOUT executing it. The plan supplies the rename
+        // context — an alter for a rename-led plan targets a table the
+        // plan itself brings into existence, so the FK state is read
+        // from the rename's source table, not the not-yet-existing name.
+        return $this->changeInvolvesForeignKeys($change->blueprint->getTable(), $change->blueprint, $plan);
     }
 
     /**
@@ -257,6 +261,61 @@ final class SqliteConnection extends SqlConnection
             \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropCheck => true,
             default => false,
         };
+    }
+
+    /**
+     * Whether the change's rebuild sequence would carry the foreign_keys
+     * PRAGMA toggle — answered at predicate time, from plan-aware state.
+     *
+     * The change's table may not exist live yet: an alter in a rename-led
+     * plan targets the name the plan's own rename brings into existence,
+     * so the FK state is read from the rename's source table. The rebuild
+     * itself re-reads the live table at apply time, when the rename has
+     * already run.
+     *
+     * @param  string  $table
+     * @param  Blueprint  $blueprint
+     * @param  list<\BlueprintAU\Radiant\Database\Schema\SchemaChange>  $plan
+     * @return bool
+     */
+    private function changeInvolvesForeignKeys(string $table, Blueprint $blueprint, array $plan = []): bool
+    {
+        // The rename source, when the plan (or the change's own blueprint)
+        // declares one — otherwise the table reads under its own name.
+        $liveName = $blueprint->getRenamedFrom()
+            ?? $this->renameSourceInPlan($table, $plan)
+            ?? $table;
+
+        if ($this->schemaInspector->hasTable($liveName)) {
+            $live = $this->schemaInspector->table($liveName);
+
+            return $live->foreignKeys !== []
+                || $this->schemaInspector->referencingTables($liveName) !== [];
+        }
+
+        // Nothing can reference a table that does not exist yet — the FKs
+        // the rebuild will compile come from the blueprint alone.
+        return $blueprint->getForeignKeys() !== [];
+    }
+
+    /**
+     * The rename source a plan's RenameTable declares for the table.
+     *
+     * @param  string  $table
+     * @param  list<\BlueprintAU\Radiant\Database\Schema\SchemaChange>  $plan
+     * @return string|null
+     */
+    private function renameSourceInPlan(string $table, array $plan): string|null
+    {
+        foreach ($plan as $entry) {
+            if ($entry->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::RenameTable
+                && $entry->table === $table
+                && $entry->blueprint->getRenamedFrom() !== null) {
+                return $entry->blueprint->getRenamedFrom();
+            }
+        }
+
+        return null;
     }
 
     /**

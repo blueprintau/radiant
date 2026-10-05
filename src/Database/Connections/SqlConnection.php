@@ -554,9 +554,10 @@ abstract class SqlConnection implements ConnectionInterface
      * apply loop in a transaction.
      *
      * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @param  list<\BlueprintAU\Radiant\Database\Schema\SchemaChange>  $plan  The whole plan, for rename resolution.
      * @return bool
      */
-    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    public function changeRequiresStandaloneTransaction(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change, array $plan = []): bool
     {
         return false;
     }
