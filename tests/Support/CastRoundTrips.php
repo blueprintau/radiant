@@ -41,6 +41,29 @@ trait CastRoundTrips
     {
         $model->save();
 
+        return [$model, $this->refetch($model, $columns)];
+    }
+
+    /**
+     * Re-fetch a saved model by primary key and compare every named
+     * column against its current in-memory value.
+     *
+     * The verify half of {@see roundTrip()} for rows saved earlier in
+     * the test (or rewritten mid-test): pass the columns whose values
+     * the model still holds and that the re-fetched row must match.
+     *
+     * Note the comparison is PHPUnit assertEquals — LOOSE for scalars —
+     * so do not use it to pin a NULL pole; assert `null` explicitly with
+     * assertSame on the returned model instead.
+     *
+     * @template TModel of Model
+     *
+     * @param  TModel  $model  The saved model to re-fetch.
+     * @param  list<string>  $columns  The column names (DB names) to compare.
+     * @return TModel The re-fetched model.
+     */
+    protected function refetch(Model $model, array $columns = []): Model
+    {
         /** @var TModel|null $refetched */
         $refetched = $model::class::find($model->getKeyForRefresh());
 
@@ -54,6 +77,6 @@ trait CastRoundTrips
             );
         }
 
-        return [$model, $refetched];
+        return $refetched;
     }
 }

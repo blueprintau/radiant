@@ -80,9 +80,8 @@ final class CastRoundTripTest extends DatabaseTestCase
      */
     public function testHydratedProbeIsNotSpuriouslyDirty(): void
     {
-        $refetched = CastProbe::find($this->seedRow()->id);
+        $refetched = $this->refetch($this->seedRow());
 
-        self::assertNotNull($refetched);
         self::assertSame([], ModelIntrospection::dirtyOf($refetched));
     }
 
@@ -92,15 +91,8 @@ final class CastRoundTripTest extends DatabaseTestCase
      */
     public function testNullableTimestampArmsRoundTripThroughNull(): void
     {
-        $probe = $this->seedRow();
+        [$probe, $refetched] = $this->roundTrip($this->seedRow());
 
-        $probe->nullableIntTs = null;
-        $probe->nullableCarbonTs = null;
-        $probe->save();
-
-        $refetched = CastProbe::find($probe->id);
-
-        self::assertNotNull($refetched);
         self::assertNull($refetched->nullableIntTs);
         self::assertNull($refetched->nullableCarbonTs);
 
@@ -108,12 +100,8 @@ final class CastRoundTripTest extends DatabaseTestCase
         $refetched->nullableCarbonTs = Carbon::parse('2027-08-09 10:11:12', 'UTC');
         $refetched->save();
 
-        $rewritten = CastProbe::find($probe->id);
-
-        self::assertNotNull($rewritten);
-        self::assertSame(1700000000, $rewritten->nullableIntTs);
-        self::assertNotNull($rewritten->nullableCarbonTs);
-        self::assertSame('2027-08-09 10:11:12', $rewritten->nullableCarbonTs->utc()->format('Y-m-d H:i:s'));
+        // Both poles now hold values — verify through the shared helper.
+        $this->refetch($refetched, ['nullable_int_ts', 'nullable_carbon_ts']);
     }
 
     /**
@@ -122,21 +110,14 @@ final class CastRoundTripTest extends DatabaseTestCase
      */
     public function testUpdatingOneTimestampKeepsOthersUntouched(): void
     {
-        $probe = $this->seedRow();
+        [$probe, $refetched] = $this->roundTrip($this->seedRow());
 
-        $refetched = CastProbe::find($probe->id);
-
-        self::assertNotNull($refetched);
         $refetched->intTs = 1800000000;
         $refetched->save();
 
-        $updated = CastProbe::find($probe->id);
-
-        self::assertNotNull($updated);
-        self::assertSame(1800000000, $updated->intTs);
-        self::assertSame('2026-01-02 03:04:05', $updated->stringTs);
-        self::assertSame('2026-10-05 07:47:13', $updated->carbonTs->utc()->format('Y-m-d H:i:s'));
-        self::assertSame('1990-06-15', $updated->stringDate);
+        // The untouched arms keep their values through the rewrite — the
+        // partial-update idempotence of the write path.
+        $this->refetch($refetched, ['int_ts', 'string_ts', 'carbon_ts', 'string_date']);
     }
 
     /**

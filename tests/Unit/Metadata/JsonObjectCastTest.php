@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Metadata;
 
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
+use BlueprintAU\Radiant\Tests\Support\CastRoundTrips;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\JsonObjectPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UserPreferences;
@@ -17,6 +18,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UserPreferences;
  */
 final class JsonObjectCastTest extends DatabaseTestCase
 {
+    use CastRoundTrips;
     /**
      * Create the json_object_posts table from the model's attributes.
      */
@@ -33,14 +35,8 @@ final class JsonObjectCastTest extends DatabaseTestCase
         $post = new JsonObjectPost();
         $post->title = 'hello';
         $post->preferences = new UserPreferences(theme: 'light', locale: 'de');
-        $post->save();
 
-        $found = JsonObjectPost::find($post->id);
-
-        self::assertNotNull($found);
-        self::assertInstanceOf(UserPreferences::class, $found->preferences);
-        self::assertSame('light', $found->preferences->theme);
-        self::assertSame('de', $found->preferences->locale);
+        $this->roundTrip($post, ['title', 'preferences']);
     }
 
     /**
@@ -68,9 +64,8 @@ final class JsonObjectCastTest extends DatabaseTestCase
         $post->title = 'empty';
         $post->save();
 
-        $found = JsonObjectPost::find($post->id);
+        $found = $this->refetch($post);
 
-        self::assertNotNull($found);
         self::assertNull($found->preferences);
     }
 

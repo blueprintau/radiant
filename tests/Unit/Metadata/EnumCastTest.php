@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Metadata;
 
 use \BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Tests\Support\CastRoundTrips;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\EnumPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\IntLevel;
@@ -17,6 +18,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UnitKind;
  */
 final class EnumCastTest extends DatabaseTestCase
 {
+    use CastRoundTrips;
     /**
      * Create the enum_posts table from the model's attributes.
      */
@@ -34,14 +36,8 @@ final class EnumCastTest extends DatabaseTestCase
         $post->status = StringStatus::Published;
         $post->level = IntLevel::High;
         $post->kind = UnitKind::Beta;
-        $post->save();
 
-        $found = EnumPost::find($post->id);
-
-        self::assertNotNull($found);
-        self::assertSame(StringStatus::Published, $found->status);
-        self::assertSame(IntLevel::High, $found->level);
-        self::assertSame(UnitKind::Beta, $found->kind);
+        $this->roundTrip($post, ['status', 'level', 'kind']);
     }
 
     /**
