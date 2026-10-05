@@ -41,6 +41,7 @@ trait CastRoundTrips
     {
         $model->save();
 
+        /** @var TModel|null $refetched */
         $refetched = $model::class::find($model->getKeyForRefresh());
 
         Assert::assertNotNull($refetched, 'the saved row must re-fetch by primary key');
