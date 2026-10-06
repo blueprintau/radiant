@@ -53,6 +53,12 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
 - Aggregate arguments fail closed on non-column shapes.
 - A corrupt JSON or datetime cell throws with the column named, instead of
   silently loading wrong data into the model.
+- A where value that is invalid for its column's type throws naming the
+  column — a malformed UUID against a Uuid column included. Hosts binding
+  user-supplied identifiers (route params, request bodies) should validate
+  the format BEFORE querying and render their own not-found semantics
+  (e.g. a 404), since a well-formed id that matches no row and a malformed
+  id are different failure modes the ORM deliberately distinguishes.
 - A query carrying a row lock (`lockForUpdate()`/`sharedLock()`) is
   rejected outside a transaction — the lock would be released the moment
   it was acquired.

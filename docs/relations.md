@@ -227,6 +227,22 @@ class Mechanic extends Model
 }
 ```
 
+**Key conventions.** `firstKey` is the **through table's** FK pointing
+back at the parent (`cars.mechanic_id`); `secondKey` is the **related
+table's** FK pointing at the through table (`owners.car_id`). The join
+compiles `related.<secondKey> = through.<primary key>` — the second
+hop's FK must therefore live on the RELATED table. A shape whose
+second-hop FK lives on the THROUGH table instead (parent → through →
+related where the through row carries `related_id`) cannot be expressed
+as a through relation — declare a `belongsToMany` with the through
+table (or a pivot model class-string) as the pivot, since both FKs
+already live on it. When both hop keys are omitted they derive by
+convention: `firstKey` `{parent-short-name}_id` on the through table,
+`secondKey` `{through-short-name}_id` on the related table — a through
+model whose class name doesn't match its FK column naming needs both
+keys declared explicitly, and a `secondKey` naming a column that
+doesn't exist on the related model throws at construction.
+
 The join INNER JOINs the intermediate table — a parent with no
 intermediate row legitimately has no through-result. Composite keys are
 supported on both hops; the two hop keys must agree in shape (both scalar
