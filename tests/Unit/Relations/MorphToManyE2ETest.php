@@ -75,7 +75,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
      */
     public function testEagerMorphToMany(): void
     {
-        $posts = MtmPost::newQuery()->with(['tags'])->get();
+        $posts = MtmPost::newQuery()->with('tags')->get();
 
         $post = $posts->first();
         self::assertNotNull($post);
@@ -122,7 +122,7 @@ final class MorphToManyE2ETest extends DatabaseTestCase
      */
     public function testMorphedByManyEager(): void
     {
-        $tags = MtmTag::newQuery()->with(['posts'])->get();
+        $tags = MtmTag::newQuery()->with('posts')->get();
 
         $db = null;
         foreach ($tags as $tag) {

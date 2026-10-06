@@ -649,14 +649,14 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testClearRelationCacheNullClearsEverything(): void
     {
         // Populate the cache for two classes.
-        OfUser::newQuery()->with(['posts']);
-        CollUser::newQuery()->with(['posts']);
+        OfUser::newQuery()->with('posts');
+        CollUser::newQuery()->with('posts');
 
         ModelQueryBuilder::clearRelationCache();
 
         // Repopulate one class and verify the cache serves it again.
-        OfUser::newQuery()->with(['posts']);
-        $rows = OfUser::newQuery()->with(['posts'])->get();
+        OfUser::newQuery()->with('posts');
+        $rows = OfUser::newQuery()->with('posts')->get();
         self::assertCount(0, $rows);
     }
 
@@ -667,16 +667,16 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testClearRelationCacheClassClearsOnlyThatClass(): void
     {
         // Populate the cache for two classes.
-        OfUser::newQuery()->with(['posts']);
-        CollUser::newQuery()->with(['posts']);
+        OfUser::newQuery()->with('posts');
+        CollUser::newQuery()->with('posts');
 
         ModelQueryBuilder::clearRelationCache(OfUser::class);
 
         // The cleared class re-resolves fine; the untouched class's cache
         // entry is still present (no error, no re-resolution needed).
-        OfUser::newQuery()->with(['posts']);
-        CollUser::newQuery()->with(['posts']);
-        self::assertCount(0, OfUser::newQuery()->with(['posts'])->get());
+        OfUser::newQuery()->with('posts');
+        CollUser::newQuery()->with('posts');
+        self::assertCount(0, OfUser::newQuery()->with('posts')->get());
     }
 
     // ---- sole() ----
@@ -797,10 +797,86 @@ final class BuilderParityTest extends DatabaseTestCase
         $post->title = 'first';
         $post->save();
 
-        $user = OfUser::newQuery()->where('name', '=', 'ada')->with(['posts'])->sole();
+        $user = OfUser::newQuery()->where('name', '=', 'ada')->with('posts')->sole();
 
         $posts = $user->cachedRelation('posts');
         self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $posts);
         self::assertCount(1, $posts);
+    }
+
+    // ---- Signature parity: string-variadic with() on both surfaces ----
+
+    /**
+     * The builder's with() is string-variadic — the SAME shape as
+     * Model::with(). Multiple paths eagerly load every named relation;
+     * the legacy array shape is gone (a list spreads in via ...$paths).
+     */
+    public function testWithVariadicLoadsEachRelation(): void
+    {
+        $user = new OfUser();
+        $user->name = 'ada';
+        $user->save();
+
+        $post = new OfPost();
+        $post->authorId = $user->id;
+        $post->title = 'first';
+        $post->save();
+
+        $loaded = OfUser::newQuery()->with('posts', 'featuredPost')->sole();
+
+        self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $loaded->cachedRelation('posts'));
+        self::assertNotNull($loaded->cachedRelation('featuredPost'));
+    }
+
+    /**
+     * A computed list rides the variadic through the spread — the
+     * programmatic shape with(...$paths) matches the explicit form.
+     */
+    public function testWithSpreadListMatchesVariadic(): void
+    {
+        $user = new OfUser();
+        $user->name = 'ada';
+        $user->save();
+
+        $post = new OfPost();
+        $post->authorId = $user->id;
+        $post->title = 'first';
+        $post->save();
+
+        $paths = ['posts'];
+
+        $spread = OfUser::newQuery()->where('name', '=', 'ada')->with(...$paths)->sole();
+        $explicit = OfUser::newQuery()->where('name', '=', 'ada')->with('posts')->sole();
+
+        $spreadPosts = $spread->cachedRelation('posts');
+        $explicitPosts = $explicit->cachedRelation('posts');
+
+        self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $spreadPosts);
+        self::assertInstanceOf(\BlueprintAU\Radiant\Collection::class, $explicitPosts);
+        self::assertCount(1, $spreadPosts);
+        self::assertCount(1, $explicitPosts);
+        // `first()` is mixed-typed in the collections package — the
+        // instanceof guards the read (the assertion guards the runtime
+        // type, not the PHPDoc).
+        $spreadFirst = $spreadPosts->first();
+        $explicitFirst = $explicitPosts->first();
+        self::assertInstanceOf(OfPost::class, $spreadFirst);
+        self::assertInstanceOf(OfPost::class, $explicitFirst);
+        self::assertSame($spreadFirst->id, $explicitFirst->id);
+    }
+
+    /**
+     * An empty variadic call registers nothing and returns a builder
+     * that queries normally — the degenerate arm stays harmless.
+     */
+    public function testWithNoArgumentsRegistersNothing(): void
+    {
+        $user = new OfUser();
+        $user->name = 'ada';
+        $user->save();
+
+        $rows = OfUser::newQuery()->with()->get();
+
+        self::assertCount(1, $rows);
     }
 }

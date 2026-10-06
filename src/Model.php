@@ -379,14 +379,14 @@ abstract class Model
     /**
      * Start a model query with a where clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  WhereOperator|string  $operator
      * @param  mixed  $value
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
     final public static function where(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         WhereOperator|string $operator,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
@@ -411,12 +411,12 @@ abstract class Model
     /**
      * Start a model query with an order-by clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  SortDirection|string  $direction
      * @return ModelQueryBuilder<static>
      */
     final public static function orderBy(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         SortDirection|string $direction = SortDirection::Asc,
     ): ModelQueryBuilder {
         return static::newQuery()->orderBy($column, $direction);
@@ -486,7 +486,8 @@ abstract class Model
      * Start a model query with eager-loaded relations.
      *
      * Dot-notation nests: `'posts.comments'` eager-loads posts, then each
-     * post's comments.
+     * post's comments. Spread a computed list through the variadic:
+     * `User::with(...$paths)`.
      *
      * @param  string  ...$relations
      * @return ModelQueryBuilder<static>
@@ -494,9 +495,7 @@ abstract class Model
      */
     final public static function with(string ...$relations): ModelQueryBuilder
     {
-        // Variadics are already a list — the @param on with() narrows it.
-        /** @var list<string> $relations */
-        return static::newQuery()->with($relations);
+        return static::newQuery()->with(...$relations);
     }
 
     // ---- Persistence ----

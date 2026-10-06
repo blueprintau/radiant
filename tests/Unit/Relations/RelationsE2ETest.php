@@ -278,36 +278,17 @@ final class RelationsE2ETest extends DatabaseTestCase
     }
 
     /**
-     * with() rejects non-string and empty paths at the call site. The
-     * builder method takes an array (Model::with() is string-variadic), so
-     * the element-shape check lives there. The paths arrive through a
-     * mixed-typed helper — simulating a caller without a static analyzer.
-     *
-     * @param mixed $paths The paths as an untyped caller supplied them.
-     * @return void
-     * @throws \InvalidArgumentException When any path is invalid.
+     * with() rejects an empty path at the call site — the one violation
+     * the string-variadic parameter cannot type away natively (a
+     * non-string element now fails with a TypeError at the language
+     * level, so there is no mixed-caller boundary left to simulate).
      */
-    private function withUntyped(mixed $paths): void
+    public function testWithRejectsEmptyPath(): void
     {
-        RelUser::where('id', '=', 1)->with($paths);
-    }
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('got an empty path');
 
-    /**
-     * with() rejects non-string and empty paths at the call site.
-     */
-    public function testWithRejectsInvalidPaths(): void
-    {
-        Expectation::throwsWithMessage(
-            fn () => $this->withUntyped(['posts', 42]),
-            \InvalidArgumentException::class,
-            'must be non-empty strings; got int',
-        );
-
-        Expectation::throwsWithMessage(
-            fn () => $this->withUntyped(['posts', '']),
-            \InvalidArgumentException::class,
-            'got an empty path',
-        );
+        RelUser::where('id', '=', 1)->with('posts', '');
     }
 
     /**
@@ -743,7 +724,7 @@ final class RelationsE2ETest extends DatabaseTestCase
     {
         ['user' => $user] = $this->seed();
 
-        $users = RelUser::newQuery()->whereKey([$user->id])->with(['posts.author'])->get();
+        $users = RelUser::newQuery()->whereKey([$user->id])->with('posts.author')->get();
 
         self::assertCount(1, $users);
         $first = $users->first();

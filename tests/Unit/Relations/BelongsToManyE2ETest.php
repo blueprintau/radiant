@@ -106,7 +106,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
      */
     public function testEagerBelongsToMany(): void
     {
-        $posts = B2mPost::newQuery()->with(['tags'])->get();
+        $posts = B2mPost::newQuery()->with('tags')->get();
 
         self::assertCount(2, $posts);
 
@@ -298,7 +298,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
     {
         $this->connection->table('b2m_posts')->insert(['id' => 3, 'title' => 'Post Three']);
 
-        $post = B2mPost::newQuery()->with(['tags'])->find(3);
+        $post = B2mPost::newQuery()->with('tags')->find(3);
         self::assertNotNull($post);
 
         $tags = $post->tags()->get();

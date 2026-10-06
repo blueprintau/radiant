@@ -31,14 +31,14 @@ trait FiltersStaticQuery
      * Start a model query with a where clause — the single sink every
      * other static filter funnels into.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  WhereOperator|string  $operator
      * @param  mixed  $value
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
     abstract public static function where(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         WhereOperator|string $operator,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
@@ -48,13 +48,13 @@ trait FiltersStaticQuery
      * Start a model query with an equality where clause — sugar for
      * `where($column, '=', $value)`.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  mixed  $value
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
     public static function whereEq(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): ModelQueryBuilder {
@@ -64,12 +64,12 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an OR-connected equality where clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  mixed  $value
      * @return ModelQueryBuilder<static>
      */
     public static function orWhereEq(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         mixed $value,
     ): ModelQueryBuilder {
         return static::where($column, WhereOperator::Eq, $value, WhereBoolean::Or);
@@ -79,7 +79,7 @@ trait FiltersStaticQuery
      * Start a model query with a nested where group — the second static
      * sink; the `orWhereNested` default delegates here.
      *
-     * @param  callable(WhereBuilder): void  $callback
+     * @param  callable(WhereBuilder): WhereBuilder  $callback
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
@@ -113,13 +113,13 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an `or where` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  WhereOperator|string  $operator
      * @param  mixed  $value
      * @return ModelQueryBuilder<static>
      */
     public static function orWhere(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         WhereOperator|string $operator,
         mixed $value,
     ): ModelQueryBuilder {
@@ -129,13 +129,13 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where in` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  array<int, mixed>  $values
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
     public static function whereIn(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         array $values,
         WhereBoolean $boolean = WhereBoolean::And,
     ): ModelQueryBuilder {
@@ -145,13 +145,13 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where not in` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  array<int, mixed>  $values
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
     public static function whereNotIn(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         array $values,
         WhereBoolean $boolean = WhereBoolean::And,
     ): ModelQueryBuilder {
@@ -161,11 +161,11 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where null` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereNull(string $column, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereNull(string|\BlueprintAU\Radiant\Database\Query\Expression $column, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::Null, null, $boolean);
     }
@@ -173,11 +173,11 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where not null` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereNotNull(string $column, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereNotNull(string|\BlueprintAU\Radiant\Database\Query\Expression $column, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::NotNull, null, $boolean);
     }
@@ -185,12 +185,12 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where between` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  array{0: mixed, 1: mixed}  $range
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereBetween(string|\BlueprintAU\Radiant\Database\Query\Expression $column, array $range, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::Between, $range, $boolean);
     }
@@ -198,12 +198,12 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where not between` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  array{0: mixed, 1: mixed}  $range
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereNotBetween(string $column, array $range, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereNotBetween(string|\BlueprintAU\Radiant\Database\Query\Expression $column, array $range, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::NotBetween, $range, $boolean);
     }
@@ -212,12 +212,12 @@ trait FiltersStaticQuery
      * Start a model query with a `where like` clause — the pattern is a
      * bound value.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  string  $pattern
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereLike(string $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::Like, $pattern, $boolean);
     }
@@ -225,11 +225,11 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an OR-connected `where like` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  string  $pattern
      * @return ModelQueryBuilder<static>
      */
-    public static function orWhereLike(string $column, string $pattern): ModelQueryBuilder
+    public static function orWhereLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::Like, $pattern, WhereBoolean::Or);
     }
@@ -237,12 +237,12 @@ trait FiltersStaticQuery
     /**
      * Start a model query with a `where not like` clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  string  $pattern
      * @param  WhereBoolean  $boolean
      * @return ModelQueryBuilder<static>
      */
-    public static function whereNotLike(string $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    public static function whereNotLike(string|\BlueprintAU\Radiant\Database\Query\Expression $column, string $pattern, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
     {
         return static::where($column, WhereOperator::NotLike, $pattern, $boolean);
     }
@@ -250,12 +250,12 @@ trait FiltersStaticQuery
     /**
      * Start a model query with an order-by clause.
      *
-     * @param  string  $column
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression  $column
      * @param  SortDirection|string  $direction
      * @return ModelQueryBuilder<static>
      */
     abstract public static function orderBy(
-        string $column,
+        string|\BlueprintAU\Radiant\Database\Query\Expression $column,
         SortDirection|string $direction = SortDirection::Asc,
     ): ModelQueryBuilder;
 

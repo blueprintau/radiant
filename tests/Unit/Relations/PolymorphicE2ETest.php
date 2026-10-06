@@ -162,7 +162,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
      */
     public function testEagerMorphMany(): void
     {
-        $posts = PolyPost::newQuery()->with(['comments'])->get();
+        $posts = PolyPost::newQuery()->with('comments')->get();
 
         self::assertCount(1, $posts);
         $post = $posts->first();
@@ -177,7 +177,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
      */
     public function testEagerMorphOne(): void
     {
-        $post = PolyPost::newQuery()->with(['image'])->find(1);
+        $post = PolyPost::newQuery()->with('image')->find(1);
         self::assertNotNull($post);
 
         $image = $post->image()->get()->first();
@@ -191,7 +191,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
      */
     public function testEagerMorphToDispatchesPerType(): void
     {
-        $comments = PolyComment::newQuery()->with(['commentable'])->get();
+        $comments = PolyComment::newQuery()->with('commentable')->get();
 
         self::assertCount(3, $comments);
 
@@ -218,7 +218,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
             ['id' => 4, 'body' => 'orphan', 'commentable_type' => null, 'commentable_id' => null],
         ]);
 
-        $comment = PolyComment::newQuery()->with(['commentable'])->find(4);
+        $comment = PolyComment::newQuery()->with('commentable')->find(4);
         self::assertNotNull($comment);
 
         self::assertCount(0, $comment->commentable()->get());
@@ -236,7 +236,7 @@ final class PolymorphicE2ETest extends DatabaseTestCase
         // fail the path resolution (PolyVideo has no comments()).
         $comments = PolyComment::newQuery()
             ->where('commentable_type', '=', PolyPost::class)
-            ->with(['commentable.comments'])
+            ->with('commentable.comments')
             ->get();
 
         $first = $comments->first();

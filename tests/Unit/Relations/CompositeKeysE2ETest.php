@@ -583,7 +583,7 @@ class CompositeKeysE2ETest extends DatabaseTestCase
     {
         $this->seedTracked();
 
-        $shipments = CmpTrackedShipment::newQuery()->withTrashed()->with(['region'])->orderBy('id')->get();
+        $shipments = CmpTrackedShipment::newQuery()->withTrashed()->with('region')->orderBy('id')->get();
 
         self::assertCount(2, $shipments);
         self::assertNotNull($shipments[0]);

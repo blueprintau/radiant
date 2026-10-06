@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Concerns;
 
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
+use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Unit\Concerns\Fixtures\FvPost;
@@ -290,5 +291,48 @@ final class FilterSugarTest extends DatabaseTestCase
                 // Touch every row so the builder genuinely ran.
                 self::assertGreaterThan(0, $row->id);
             });
+    }
+
+    // ---- Static side accepts Expression columns ----
+
+    /**
+     * Static where() accepts a raw Expression column — the same width as
+     * the instance sink. The expression is spliced verbatim; the value
+     * still binds.
+     */
+    public function testStaticWhereAcceptsExpressionColumn(): void
+    {
+        $rows = FvUser::where(new Expression('length(name)'), '=', 4)
+            ->orderBy('id')
+            ->get();
+
+        self::assertSame(['cara'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
+     * Static orderBy() accepts a raw Expression column — the string-only
+     * narrowing of the static facade is gone. NULL ages sort last under
+     * SQLite's ASC nulls-last default, mirroring the instance surface.
+     */
+    public function testStaticOrderByAcceptsExpressionColumn(): void
+    {
+        $rows = FvUser::orderBy(new Expression('age is null'), 'asc')
+            ->orderBy('id')
+            ->get();
+
+        self::assertSame(['alicia', 'ben', 'cara'], $this->columnValues($rows, 'name'));
+    }
+
+    /**
+     * Static sugar keeps its delegation contract with a non-string
+     * column: whereNull() on an Expression compiles the IS NULL arm.
+     */
+    public function testStaticSugarAcceptsExpressionColumn(): void
+    {
+        $rows = FvUser::whereNull(new Expression('age'))
+            ->orderBy('id')
+            ->get();
+
+        self::assertSame(['cara'], $this->columnValues($rows, 'name'));
     }
 }

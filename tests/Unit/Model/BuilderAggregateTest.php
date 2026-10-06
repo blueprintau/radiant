@@ -512,7 +512,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
             'Unknown relation [ghosts] — model [' . OfUser::class . '] has no method [ghosts()].',
         );
 
-        OfUser::newQuery()->with(['ghosts']);
+        OfUser::newQuery()->with('ghosts');
     }
 
     /**
@@ -526,7 +526,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
             . ' relations must be callable.',
         );
 
-        OfUser::newQuery()->with(['hiddenPosts']);
+        OfUser::newQuery()->with('hiddenPosts');
     }
 
     /**
@@ -539,7 +539,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
             'does not return a Relation.',
         );
 
-        OfUser::newQuery()->with(['name']);
+        OfUser::newQuery()->with('name');
     }
 
     /**
@@ -552,7 +552,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
             'Relation paths must be non-empty strings; got an empty path.',
         );
 
-        OfUser::newQuery()->with(['']);
+        OfUser::newQuery()->with('');
     }
 
     /**
@@ -581,7 +581,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
     {
         $this->seed();
 
-        $users = OfUser::newQuery()->with(['posts'])->get();
+        $users = OfUser::newQuery()->with('posts')->get();
         self::assertCount(2, $users);
 
         // The nested path walks the cached posts of the loaded users.

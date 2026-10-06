@@ -257,15 +257,16 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Register relations to eager-load after hydration.
      *
-     * Validation happens HERE — an unknown relation is a typo and fails
+     * Validation happens here — an unknown relation is a typo and fails
      * fast at the with() call, not at hydration. Dot-notation nests:
-     * `'posts.comments'` loads posts, then each post's comments.
+     * `'posts.comments'` loads posts, then each post's comments. Spread a
+     * computed list through the variadic: `->with(...$paths)`.
      *
-     * @param  list<string>  $relations
+     * @param  string  ...$relations
      * @return static
      * @throws \InvalidArgumentException
      */
-    public function with(array $relations): static
+    public function with(string ...$relations): static
     {
         foreach ($relations as $path) {
             $this->assertRelationPath($path);
@@ -284,25 +285,21 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Assert one eager-load path is a non-empty string.
      *
-     * The `list<string>` element contract is PHPDoc-only — callers without
-     * a static analyzer can pass anything — so the shape is checked here,
-     * where the parameter is genuinely untyped and PHPStan cannot call the
-     * check redundant.
+     * The variadic types the elements at the language level — the empty
+     * path is the only violation a static analyzer cannot see, so it is
+     * the shape still checked at runtime.
      *
-     * @param  mixed  $path  Must be a non-empty string naming a relation path.
-     * @return string
+     * @param  string  $path  Must be a non-empty string naming a relation path.
+     * @return void
      * @throws \InvalidArgumentException
      */
-    private function assertRelationPath(mixed $path): string
+    private function assertRelationPath(string $path): void
     {
-        if (!is_string($path) || $path === '') {
+        if ($path === '') {
             throw new \InvalidArgumentException(
-                'Relation paths must be non-empty strings; got '
-                    . (is_string($path) ? 'an empty path' : get_debug_type($path)) . '.'
+                'Relation paths must be non-empty strings; got an empty path.'
             );
         }
-
-        return $path;
     }
 
     /**
