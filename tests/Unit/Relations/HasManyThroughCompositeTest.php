@@ -232,6 +232,25 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
     }
 
     /**
+     * The through family's lazy read shields the related columns: joining
+     * the intermediate table under the default `*` would let duplicate
+     * column names (e.g. both tables' `id`) collide last-wins in the
+     * fetched row, and hydration would decode the intermediate table's
+     * values through this model's casts. The constrained query's select
+     * is therefore `cmp_legs.*` — same join-time shield as every joined
+     * model read.
+     */
+    public function testLazyReadShieldsThroughJoinColumns(): void
+    {
+        ['us' => $us] = $this->seed();
+
+        $sql = (new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar())
+            ->compileSelect($us->legs()->getQuery());
+
+        self::assertStringContainsString('SELECT "cmp_legs".* FROM "cmp_legs"', $sql);
+    }
+
+    /**
      * A null component in the parent's tuple becomes IS NULL — matching
      * nothing, never a partial-tuple match.
      */

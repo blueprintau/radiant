@@ -143,6 +143,137 @@ final class BuilderParityTest extends DatabaseTestCase
         self::assertCount(2, $rows);
     }
 
+    /**
+     * The join-time shield covers every shape still holding a raw star —
+     * the untouched default and any hand-built state carrying a bare
+     * `'*'` alongside other specs. A raw star under a join would let the
+     * joined table's duplicate column names (both tables have `id`)
+     * collide last-wins in the fetched row — the SILENT hazard. Two
+     * shapes cannot hold a raw star: a bare `select('*')` expands to the
+     * model's columns (PK first) before any join lands, and the allowlist
+     * rejects a bare star MIXED with plain columns. Explicit caller specs
+     * (aggregates, qualified lists) pass through untouched — a duplicate
+     * BARE column there is a loud DB ambiguity error, not silent
+     * corruption.
+     */
+    public function testJoinShieldsEveryRawStarShape(): void
+    {
+        $sqlFor = static function (ModelQueryBuilder $builder): string {
+            return (new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar())
+                ->compileSelect($builder);
+        };
+
+        self::assertSame(
+            'SELECT "bp_users".* FROM "bp_users" INNER JOIN "bp_users" AS "other"'
+            . ' ON "bp_users"."id" = "other"."id"',
+            $sqlFor(BpUser::newQuery()->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            'the untouched default select shields',
+        );
+
+        // Caller-owned specs (an Aggregate marks the list) pass through,
+        // EXCEPT bare names still qualify — the ordering shield makes a
+        // bare column under a join name its table, same as every other
+        // ordering. The aggregate renders verbatim.
+        self::assertSame(
+            'SELECT count(*) AS "total", "bp_users"."name" FROM "bp_users"'
+            . ' INNER JOIN "bp_users" AS "other" ON "bp_users"."id" = "other"."id"',
+            $sqlFor(BpUser::newQuery()->select(Aggregate::count('*', 'total'), 'name')
+                ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            'an aggregate select passes through; bare names still qualify',
+        );
+
+        // select('*') expands to the model's columns (PK first) — no raw
+        // star remains, so the compiled list is the explicit expansion,
+        // collision-free by construction — and, with the join-aware
+        // qualification, now lands QUALIFIED.
+        self::assertSame(
+            'SELECT "bp_users"."id", "bp_users"."name", "bp_users"."signed_up_at", "bp_users"."meta"'
+            . ' FROM "bp_users" INNER JOIN "bp_users" AS "other"'
+            . ' ON "bp_users"."id" = "other"."id"',
+            $sqlFor(BpUser::newQuery()->select('*')
+                ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            'select(*) compiles its qualified expansion, not a raw star',
+        );
+
+        // A fully qualified list is caller-owned — no shield applies.
+        self::assertSame(
+            'SELECT "bp_users"."id" FROM "bp_users" INNER JOIN "bp_users" AS "other"'
+            . ' ON "bp_users"."id" = "other"."id"',
+            $sqlFor(BpUser::newQuery()->select('bp_users.id')
+                ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            'a qualified caller-owned select is untouched',
+        );
+    }
+
+    /**
+     * Bare select specs QUALIFY under a join, in both orderings.
+     *
+     * select('*') BEFORE the join compiles the same qualified list as a
+     * late select('*') AFTER the join — the expansion and the late bare
+     * names both ride the join-aware qualification, so neither ordering
+     * can compile ambiguous-column SQL. Before the qualification pass, a
+     * select('name') AFTER the join emitted bare `"name"` — ambiguous
+     * with the joined table's own column, failing at the driver.
+     */
+    public function testLateBareSelectsQualifyUnderJoin(): void
+    {
+        $sqlFor = static function (ModelQueryBuilder $builder): string {
+            return (new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar())
+                ->compileSelect($builder);
+        };
+
+        $join = static fn (ModelQueryBuilder $b): ModelQueryBuilder
+            => $b->join('bp_users as other', 'bp_users.id', '=', 'other.id');
+
+        // Late narrow select qualifies — the forced PK rides the merge
+        // (hydration always keeps the identity column).
+        self::assertSame(
+            'SELECT "bp_users"."id", "bp_users"."name" FROM "bp_users"'
+            . ' INNER JOIN "bp_users" AS "other" ON "bp_users"."id" = "other"."id"',
+            $sqlFor($join(BpUser::newQuery())->select('name')),
+            'a late bare name qualifies to the model table',
+        );
+
+        // select('*') AFTER the join: expansion (forced-keys first) then
+        // qualification — same per-column form as select-before-join.
+        self::assertSame(
+            'SELECT "bp_users"."id", "bp_users"."name", "bp_users"."signed_up_at", "bp_users"."meta"'
+            . ' FROM "bp_users" INNER JOIN "bp_users" AS "other"'
+            . ' ON "bp_users"."id" = "other"."id"',
+            $sqlFor($join(BpUser::newQuery())->select('*')),
+            'a late select(*) expands AND qualifies',
+        );
+
+        // Both orderings of select('*') land on the same SQL.
+        self::assertSame(
+            $sqlFor(BpUser::newQuery()->select('*')->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            $sqlFor($join(BpUser::newQuery())->select('*')),
+            'select ordering is irrelevant',
+        );
+
+        // ...and executes: hydration reads THIS table's values.
+        $rows = $join(BpUser::newQuery())->select('*')->orderBy('bp_users.id')->get();
+        self::assertCount(2, $rows);
+        self::assertSame('ada', $rows->first()?->attribute('name'));
+    }
+
+    /**
+     * Hydration stays correct when a JOINED table carries duplicate
+     * column names — the shield keeps the joined table's cells out of the
+     * row, so the hydrated model reads THIS table's values.
+     */
+    public function testJoinedHydrationKeepsModelValues(): void
+    {
+        $rows = BpUser::newQuery()
+            ->join('bp_users as other', 'bp_users.id', '=', 'other.id')
+            ->orderBy('bp_users.id')
+            ->get();
+
+        self::assertCount(2, $rows);
+        self::assertSame('ada', $rows->first()?->attribute('name'));
+        self::assertSame('ben', $rows->last()?->attribute('name'));
+    }
+
     // ---- Scalar reads decode through the casts ----
 
     /**

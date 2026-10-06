@@ -200,12 +200,12 @@ final class MorphToManyE2ETest extends DatabaseTestCase
 
         self::assertNotSame($relation, $composed);
         self::assertSame(
-            'SELECT * FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
+            'SELECT "mtm_tags".* FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
             . ' WHERE "taggable"."taggable_id" = ? AND "taggable"."taggable_type" = ?',
             $this->connection->grammar->compileSelect($relation->getQuery()),
         );
         self::assertSame(
-            'SELECT * FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
+            'SELECT "mtm_tags".* FROM "mtm_tags" INNER JOIN "taggable" ON "mtm_tags"."id" = "taggable"."mtm_tags_id"'
             . ' WHERE "taggable"."taggable_id" = ? AND "taggable"."taggable_type" = ? AND "label" = ?',
             $this->connection->grammar->compileSelect($composed->getQuery()),
         );

@@ -662,6 +662,88 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
+     * Add a join, shielding and qualifying the select for the second
+     * table the join introduces.
+     *
+     * A join turns previously-harmless select shapes ambiguous: under a
+     * raw `*`, duplicate names (every table has an `id`) collide last-wins
+     * in the fetched row — hydration would decode the joined table's
+     * values through THIS model's casts; under bare column names, the
+     * shared names fail at the driver as ambiguous columns. The clone's
+     * select is therefore QUALIFIED as join-aware: a raw star (the
+     * untouched default, or a hand-built bare star among specs) becomes
+     * `table.*`, bare column specs become `table.column` — producing the
+     * SAME compiled list whichever way the caller ordered `select()` and
+     * `join()` (select() applies the identical qualification once the
+     * joins exist). Qualified specs, Aliases, Aggregates and Expressions
+     * pass through untouched.
+     *
+     * @param  JoinType  $type
+     * @param  string  $table
+     * @param  string  $first
+     * @param  ColumnOperator|string  $operator
+     * @param  string  $second
+     * @return static
+     * @throws \InvalidArgumentException
+     */
+    #[\Override]
+    protected function addJoin(JoinType $type, string $table, string $first, ColumnOperator|string $operator, string $second): static
+    {
+        $clone = parent::addJoin($type, $table, $first, $operator, $second);
+
+        $starHeld = $clone->columns === ['*']
+            || in_array('*', $clone->columns, true);
+
+        if ($starHeld) {
+            // Same-class direct write — the scoped-instance idiom the MTI
+            // partition select and scalar-read clones already use.
+            $clone->columns = [$this->table . '.*'];
+        }
+
+        // Bare names selected BEFORE the join are already in `$columns` —
+        // qualify them now that a second table shares the row. (select()
+        // handles its OWN bare specs post-join; this closes the join-first
+        // half of the ordering.)
+        $clone->columns = $this->qualifyColumns($clone->columns);
+
+        return $clone;
+    }
+
+    /**
+     * Qualify bare specs in an arbitrary column list — the shared body
+     * of {@see qualifyForJoin()} and {@see addJoin()}'s ordering shield.
+     *
+     * Every plain-string spec without a `.` gets this model's table
+     * prefix; a raw `*` becomes `table.*` (join-read expansion in scalar
+     * form); Aggregate/Expression/qualified entries pass through.
+     *
+     * @param  list<string|Expression|Aggregate>  $columns
+     * @return list<string|Expression|Aggregate>
+     */
+    private function qualifyColumns(array $columns): array
+    {
+        $qualified = [];
+
+        foreach ($columns as $column) {
+            if (!$column instanceof Expression && !$column instanceof Aggregate) {
+                if ($column === '*') {
+                    $qualified[] = $this->table . '.*';
+                    continue;
+                }
+
+                if (!str_contains($column, '.')) {
+                    $qualified[] = $this->table . '.' . $column;
+                    continue;
+                }
+            }
+
+            $qualified[] = $column;
+        }
+
+        return $qualified;
+    }
+
+    /**
      * Append an ON condition to the last added join, with validation.
      *
      * @param  string  $first
@@ -1589,6 +1671,14 @@ final class ModelQueryBuilder extends QueryBuilder
      * and the trash-state reads work. An {@see Expression} bypasses
      * validation — raw SQL by contract.
      *
+     * When the builder already JOINs another table, every bare spec is
+     * QUALIFIED to this model's table (`table.column`) — unqualified
+     * names would compile to ambiguous-column SQL once a second table
+     * carries the same name. The expansion, the caller-owned passthrough
+     * and the forced-key merge all ride the qualification, so ordering is
+     * irrelevant: `select('*')` before or after `join()` lands on the
+     * same qualified list.
+     *
      * @param  string|Expression|Aggregate  ...$columns  Each column as its own argument, or none to reset to `*`.
      * @return static
      * @throws \InvalidArgumentException
@@ -1632,12 +1722,12 @@ final class ModelQueryBuilder extends QueryBuilder
             );
 
             if ($callerOwned) {
-                return parent::select(...$flat);
+                return parent::select(...$this->qualifyForJoin($flat));
             }
         }
 
         if ($this->getGroups() !== []) {
-            return parent::select(...$flat);
+            return parent::select(...$this->qualifyForJoin($flat));
         }
 
         // Merge forced keys (PK always selected), dedupe, preserve order.
@@ -1652,7 +1742,42 @@ final class ModelQueryBuilder extends QueryBuilder
         ));
         $merged = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
 
-        return parent::select(...$merged);
+        return parent::select(...$this->qualifyForJoin($merged));
+    }
+
+    /**
+     * Qualify bare column specs when the query joins another table.
+     *
+     * A bare name compiles unqualified — unambiguous for a single-table
+     * query, but AMBIGUOUS once the join adds a second table carrying the
+     * same column (`id` above all). Every string spec gets this model's
+     * table prefix; already-qualified specs, Aggregate and Expression
+     * entries pass through untouched. No-op when nothing is joined — bare
+     * names stay the join-less ergonomic default.
+     *
+     * @param  list<string|Expression|Aggregate>  $columns
+     * @return list<string|Expression|Aggregate>
+     */
+    private function qualifyForJoin(array $columns): array
+    {
+        if ($this->joins === []) {
+            return $columns;
+        }
+
+        $qualified = [];
+
+        foreach ($columns as $column) {
+            if ($column instanceof Expression || $column instanceof Aggregate) {
+                $qualified[] = $column;
+                continue;
+            }
+
+            $qualified[] = str_contains($column, '.')
+                ? $column
+                : $this->table . '.' . $column;
+        }
+
+        return $qualified;
     }
 
     /**

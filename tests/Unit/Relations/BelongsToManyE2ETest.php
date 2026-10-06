@@ -29,6 +29,7 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         );
 
         $pivot = (new Blueprint('b2m_posts_b2m_tags'))
+            ->id()
             ->foreignId('b2m_posts_id', 'b2m_posts.id')
             ->foreignId('b2m_tags_id', 'b2m_tags.id')
             ->column(ColumnType::String, 'position', nullable: true, length: 16)
@@ -63,6 +64,40 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
         $tags = $post->tags()->get();
         self::assertCount(2, $tags);
         self::assertSame(['php', 'db'], $tags->map(fn (B2mTag $m) => $m->attribute('label'))->all());
+    }
+
+    /**
+     * The pivot's own `id` column must not overwrite the RELATED model's
+     * `id` on the joined read.
+     *
+     * Regression: the lazy default read used to compile `SELECT *` over
+     * the unaliased pivot join; PDO's FETCH_OBJ collapses duplicate column
+     * names last-wins, so the pivot row's id replaced the tag's — and
+     * hydration decoded that value through the TAG's cast (an
+     * incorrect-type-for-column failure whenever the two tables' id
+     * declarations diverge). The join-time shield now compiles
+     * `SELECT "b2m_tags".*` instead, keeping this model's columns
+     * name-unique.
+     */
+    public function testLazyReadKeepsRelatedIdWhenPivotHasOwnId(): void
+    {
+        $post = B2mPost::newQuery()->find(1);
+        self::assertNotNull($post);
+
+        // Pivot rows for post 1 land AFTER tag 1+2's rows in the seed —
+        // their pivot ids (1, 2) coincide with tag ids too, but a NEW pivot
+        // row takes id 4 while tag ids stop at 3, making any crossover
+        // impossible to miss.
+        $post->tags()->attach(3);
+
+        $tags = $post->tags()->get();
+        self::assertCount(3, $tags);
+        self::assertSame([1, 2, 3], $tags->map(fn (B2mTag $m) => $m->attribute('id'))->all());
+
+        $first = $post->tags()->first();
+        self::assertNotNull($first);
+        self::assertSame(1, $first->attribute('id'));
+        self::assertSame('php', $first->attribute('label'));
     }
 
     /**
