@@ -239,6 +239,20 @@ without a re-fetch. Expression defaults (e.g. `CURRENT_TIMESTAMP`) are
 skipped — their DB-computed value is unknowable client-side, and the
 property stays honestly uninitialized.
 
+**Cast encoding in filters.** Every `where` value on a declared column
+encodes through the column's cast — the query-path twin of saving. An
+enum case filters by its backing value (a unit case, by its name), a
+`Carbon`/`DateTime` by the column's stored datetime or date form, and
+an int timestamp by the datetime string the column stores. Valid raw
+values pass through unchanged — `'active'`, or an int for an
+int-backed enum, binds as-is, so request-body call sites keep working;
+an invalid raw value (`'bogus'` against an enum column) fails fast
+naming the column instead of silently matching nothing. `having()`
+encodes identically — including over aggregates, where the comparison
+encodes by the aggregate's *inner* column (`max('level')` compares a
+level-cell value). Two shapes bypass encoding by contract: LIKE
+patterns (a match template, not a cell value) and raw SQL expressions.
+
 **Bulk writes on the builder.** `ModelQueryBuilder` exposes the same
 write methods as the plain builder — `insert()`, `insertGetId()`,
 `update()` — but model-aware: column names are validated against the

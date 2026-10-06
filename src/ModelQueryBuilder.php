@@ -18,6 +18,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
+use BlueprintAU\Radiant\Database\Query\ToSqlValue;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
@@ -1067,6 +1068,68 @@ final class ModelQueryBuilder extends QueryBuilder
         return $mapping->column->decode($raw, $mapping->propertyType);
     }
 
+    /**
+     * Encode one where value when the column is a declared model column
+     * — the where-path twin of {@see decodeScalar()}.
+     *
+     * The value routes through the column's cast — the same
+     * {@see Column::encode()} the write path uses — so every shape the
+     * write path accepts filters identically: enum cases, datetimes,
+     * Json arrays, int timestamps. Raw scalars pass through when valid
+     * (the cast's idempotence trade) and fail fast naming the column
+     * when not. Raw SQL expressions ({@see Expression}/{@see ToSqlValue})
+     * and LIKE patterns skip the cast: the former splice verbatim and
+     * must never be encoded; the latter is a match template, not a cell
+     * value. A value on an unknown (or joined, or synthetic) column is
+     * returned untouched too — the binding layer rejects non-bindables
+     * as before, and a raw scalar on a joined column has no model cast
+     * to consult.
+     *
+     * @param  string  $column
+     * @param  mixed  $value
+     * @param  WhereOperator|string|null  $operator  The clause operator, when known — the LIKE shapes bypass encoding.
+     * @return mixed
+     * @throws \InvalidArgumentException
+     */
+    private function encodeWhereValue(string $column, mixed $value, WhereOperator|string|null $operator = null): mixed
+    {
+        if ($value === null || $value instanceof Expression || $value instanceof ToSqlValue) {
+            return $value;
+        }
+
+        if ($operator instanceof WhereOperator
+            ? ($operator === WhereOperator::Like || $operator === WhereOperator::NotLike)
+            : ($operator === 'LIKE' || $operator === 'NOT LIKE')
+        ) {
+            return $value;
+        }
+
+        $bare = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
+        $metadata = MetadataFactory::for($this->modelClass);
+
+        if (!$metadata->hasColumn($bare)) {
+            return $value;
+        }
+
+        $mapping = $metadata->mappingFor($bare);
+        $propertyType = $mapping->propertyType;
+
+        // The enum identity guard: the cast's enum arm encodes ANY enum
+        // case to its backing value — it never needed a class check
+        // because the write path enforces the column's enum through the
+        // typed property. A where/having value has no property to enforce
+        // it, so a case of a DIFFERENT enum fails fast here instead of
+        // silently binding a value the column's enum may not allow.
+        if ($propertyType !== null && enum_exists($propertyType) && $value instanceof \UnitEnum && !is_a($value, $propertyType, true)) {
+            throw new \InvalidArgumentException(
+                'Column [' . $bare . '] expects an enum value of type ['
+                . $propertyType . ']; got ' . get_debug_type($value) . '.'
+            );
+        }
+
+        return $mapping->column->encode($value, $propertyType);
+    }
+
     // ---- Aggregates (decoded like every other scalar read) ----
 
     /**
@@ -1593,7 +1656,21 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Add a where clause with model-aware column validation.
+     * Add a where clause with model-aware column validation and cast
+     * encoding.
+     *
+     * Every where value encodes through the validated column's cast
+     * ({@see Column::encode()}) — the query-path twin of the write path:
+     * an enum case binds its backing value (a unit case, its name), a
+     * `Carbon`/DateTime binds the column's datetime or date form, an int
+     * timestamp binds the datetime string, a Json column accepts arrays
+     * and JsonStorable objects. Valid raw values pass through unchanged,
+     * so hosts passing backing values decoded from request bodies keep
+     * working, and an INVALID raw value ('bogus' against an enum column,
+     * a non-uuid on a Uuid column) fails fast naming the column instead
+     * of silently matching nothing. Two shapes bypass encoding by
+     * contract: a LIKE pattern (a match template, not a cell value —
+     * `'%og%'` is not an enum backing value) and raw SQL expressions.
      *
      * @param  string|Expression  $column
      * @param  WhereOperator|string  $operator
@@ -1608,11 +1685,40 @@ final class ModelQueryBuilder extends QueryBuilder
         mixed $value,
         WhereBoolean $boolean = WhereBoolean::And,
     ): static {
-        if (!$column instanceof Expression) {
-            $this->validateColumn($column);
+        if ($column instanceof Expression) {
+            return parent::where($column, $operator, $value, $boolean);
         }
 
-        return parent::where($column, $operator, $value, $boolean);
+        $this->validateColumn($column);
+
+        // Resolve the operator FIRST: list encoding is gated on the
+        // operators that legitimately take lists, so an illegal shape
+        // (a nested array under a comparison operator) reaches
+        // parent::where() UN-encoded and fails with its accurate
+        // declaration error, not a spurious cast error.
+        $resolved = $operator instanceof WhereOperator ? $operator : WhereOperator::fromChecked($operator);
+
+        $listShaped = $resolved === WhereOperator::In
+            || $resolved === WhereOperator::NotIn
+            || $resolved === WhereOperator::Between
+            || $resolved === WhereOperator::NotBetween;
+
+        // The list shapes (IN/NOT IN/BETWEEN) encode element-wise; every
+        // other operator carries at most one bindable value. Null and raw
+        // SQL expressions pass through untouched (the null-vs-comparison
+        // guard lives in parent::where()), and an ARRAY under a
+        // non-list operator passes through too — parent::where() owns
+        // that declaration error.
+        $encoded = match (true) {
+            $listShaped && is_array($value) => array_map(
+                fn($item) => $this->encodeWhereValue($column, $item),
+                $value,
+            ),
+            is_array($value) => $value,
+            default => $this->encodeWhereValue($column, $value, $resolved),
+        };
+
+        return parent::where($column, $resolved, $encoded, $boolean);
     }
 
     /**
@@ -1649,7 +1755,14 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
-     * Add a having clause with model-aware validation.
+     * Add a having clause with model-aware validation and cast encoding.
+     *
+     * The comparison value encodes through the compared column's cast —
+     * an enum case filters a grouped enum column by its backing value, a
+     * datetime by its stored form. An {@see Aggregate} encodes by its
+     * INNER column (`max('level')` compares a level-cell value, exactly
+     * how the aggregate decode reads the inner column); an {@see Expression}
+     * is raw SQL by contract and skips both validation and encoding.
      *
      * @param  string|Expression|Aggregate  $column
      * @param  WhereOperator|string  $operator
@@ -1665,6 +1778,8 @@ final class ModelQueryBuilder extends QueryBuilder
             // Expression argument is raw SQL by contract.
             if (!$column->column instanceof Expression && $column->column !== '*') {
                 $this->validateColumn($column->column);
+
+                $value = $this->encodeWhereValue($column->column, $value, $operator);
             }
 
             return parent::having($column, $operator, $value);
@@ -1672,6 +1787,7 @@ final class ModelQueryBuilder extends QueryBuilder
 
         if (!$column instanceof Expression) {
             $this->validateColumn($column);
+            $value = $this->encodeWhereValue($column, $value, $operator);
         }
 
         return parent::having($column, $operator, $value);
