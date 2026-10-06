@@ -396,9 +396,13 @@ final class Column
      * A Timestamp column may deliver the cell as unix seconds (SQLite's
      * integer storage), which `Carbon::parse` rejects — numeric cells
      * reconstitute from the epoch. Datetime-string cells (the MySQL
-     * driver's form) parse; failures throw with the column named — an
-     * un-actionable Carbon exception from deep inside hydration violates
-     * the fail-fast contract.
+     * driver's form) parse as UTC — the codec normalized the binding to
+     * UTC wall-clock on the way in, and the instant is timezone-tagged
+     * before it is interpreted, so the re-hydrated Carbon carries the
+     * offset instead of silently inheriting the host's `date.timezone`.
+     * Failures throw with the column named — an un-actionable Carbon
+     * exception from deep inside hydration violates the fail-fast
+     * contract.
      *
      * @param  mixed  $value
      * @param  string  $propertyType
@@ -412,7 +416,7 @@ final class Column
         }
 
         try {
-            return \Carbon\Carbon::parse($value);
+            return \Carbon\Carbon::parse($value, 'UTC');
         } catch (\Throwable $e) {
             throw new \RuntimeException(
                 'Column [' . ($this->name ?? $propertyType) . '] could not decode the value ['
@@ -429,8 +433,17 @@ final class Column
      *
      * Numeric cells (legacy storage — the encoder used to bind unix
      * seconds untouched) cast directly; datetime strings (the form every
-     * dialect's native temporal type delivers) parse through `strtotime`
-     * — both storages decode to the same integer.
+     * dialect's native temporal type delivers) parse as UTC — both
+     * storages decode to the same integer. The strings are UTC wall-clock
+     * by construction: the int arm of {@see encode()} formats them with
+     * `Carbon::createFromTimestamp()`, and the codec normalizes
+     * `DateTimeInterface` bindings the same way, so parsing them in the
+     * host's `date.timezone` would drift every round-trip by the host's
+     * UTC offset.
+     *
+     * Unparseable cells throw naming the column — the parser's own
+     * exception surfaces as the same RuntimeException the numeric arm's
+     * contract established.
      *
      * @param  mixed  $value
      * @return int
@@ -442,17 +455,17 @@ final class Column
             return (int) $value;
         }
 
-        $timestamp = strtotime((string) $value);
-
-        if ($timestamp === false) {
+        try {
+            return \Carbon\Carbon::parse((string) $value, 'UTC')->getTimestamp();
+        } catch (\Throwable $e) {
             throw new \RuntimeException(
                 'Column [' . ($this->name ?? 'timestamp') . '] could not decode the value ['
                 . (is_scalar($value) ? var_export($value, true) : get_debug_type($value))
                 . '] as a Unix timestamp.',
+                0,
+                $e,
             );
         }
-
-        return $timestamp;
     }
 
     /**

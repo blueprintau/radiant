@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Tests\Support\TimezoneSwap;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecKind;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecIntStatus;
 use BlueprintAU\Radiant\Tests\Unit\Attributes\Fixtures\CodecProbe;
@@ -235,16 +236,18 @@ final class ColumnCodecTest extends TestCase
     }
 
     /**
-     * A Timestamp column decodes a datetime string through strtotime —
-     * the int arm (the MySQL driver's storage form).
+     * A Timestamp column decodes a datetime string as UTC wall-clock —
+     * the int arm (the MySQL driver's storage form). The decoder writes
+     * UTC and reads UTC, so the epoch integer survives regardless of the
+     * host's `date.timezone`.
      */
-    public function testTimestampDecodesDatetimeStringThroughStrtotime(): void
+    public function testTimestampDecodesDatetimeStringAsUtc(): void
     {
         $column = new Column(type: ColumnType::Timestamp);
 
         self::assertSame(
-            strtotime('2026-01-02 03:04:05'),
-            $column->decode('2026-01-02 03:04:05', 'int'),
+            1791203400,
+            $column->decode('2026-10-05 12:30:00', 'int'),
         );
     }
 
@@ -260,6 +263,34 @@ final class ColumnCodecTest extends TestCase
 
         self::assertSame(1791186433, $column->decode(1791186433, 'int'));
         self::assertSame(1791186433, $column->decode('1791186433', 'int'));
+    }
+
+    /**
+     * The UTC decode contract holds on a non-UTC host: `date.timezone` is
+     * an environment property, not an API contract, and the decoder that
+     * parsed the UTC-written datetime string in the host zone drifted the
+     * round-trip by the host's UTC offset. Every Timestamp arm runs inside
+     * the shifted zone, restored unconditionally afterwards.
+     */
+    public function testTimestampRoundTripHoldsUnderNonUtcHostZone(): void
+    {
+        TimezoneSwap::under('Australia/Sydney', function (): void {
+            $column = new Column(type: ColumnType::Timestamp);
+            $ts = 1791203400;
+
+            $stored = $column->encode($ts, 'int');
+
+            self::assertSame('2026-10-05 12:30:00', $stored);
+            self::assertSame($ts, $column->decode($stored, 'int'));
+
+            $carbon = $column->decode($stored, \Carbon\Carbon::class);
+
+            self::assertSame($ts, $carbon->getTimestamp());
+
+            $immutable = $column->decode($stored, \DateTimeImmutable::class);
+
+            self::assertSame($ts, $immutable->getTimestamp());
+        });
     }
 
     /**

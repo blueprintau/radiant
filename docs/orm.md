@@ -87,9 +87,11 @@ declared:
 
 - `int` on a Timestamp column — a Unix-timestamp integer in PHP. The
   encoder binds a datetime string (the only form every dialect's native
-  temporal column accepts); the decoder parses it back to the integer,
-  and still accepts legacy cells that store bare unix seconds. An
-  unparseable cell throws naming the column (never a silent `0`).
+  temporal column accepts); the decoder parses it back to the integer in
+  UTC — the same zone the encoder wrote, so the instant survives on hosts
+  running any `date.timezone` — and still accepts legacy cells that store
+  bare unix seconds. An unparseable cell throws naming the column (never
+  a silent `0`).
 - `Carbon`/`DateTime` on a Timestamp or DateTime column — the value
   round-trips as a datetime string through the connection's codec; the
   re-fetched instance is a `Carbon` (re-based to the property's class).

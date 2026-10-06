@@ -8,6 +8,7 @@ use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\Tests\Support\CastRoundTrips;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
+use BlueprintAU\Radiant\Tests\Support\TimezoneSwap;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastProbe;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\CastStatus;
 use Carbon\Carbon;
@@ -83,6 +84,41 @@ final class CastRoundTripTest extends DatabaseTestCase
         $refetched = $this->refetch($this->seedRow());
 
         self::assertSame([], ModelIntrospection::dirtyOf($refetched));
+    }
+
+    /**
+     * The full save → re-fetch cycle holds the instant on a non-UTC host:
+     * the row saves under `Australia/Sydney`, re-fetches, and the int arm
+     * reads back the exact epoch seconds it was saved with — the UTC
+     * datetime string the encoder binds must parse as UTC on the way out,
+     * never in the host's zone (which drifted the round-trip by the
+     * offset). The DateTime arm's seed is a naive host-zone wall-clock,
+     * so the codec normalizes its BINDING to UTC on the way in — the
+     * decoded instant must equal the seed's epoch (`assertEquals`, since
+     * the re-hydrated Carbon is UTC-tagged while the seed carried the
+     * host offset). The zone restores unconditionally afterwards.
+     */
+    public function testTimestampRoundTripHoldsUnderNonUtcHostZone(): void
+    {
+        TimezoneSwap::under('Australia/Sydney', function (): void {
+            $probe = $this->seedRow();
+
+            $refetched = CastProbe::find($probe->getKeyForRefresh());
+
+            self::assertNotNull($refetched);
+            self::assertSame(1791186433, $refetched->intTs);
+            self::assertSame(
+                1791186433,
+                $refetched->carbonTs->getTimestamp(),
+                'the Carbon arm must re-hydrate to the saved instant',
+            );
+            self::assertEqualsWithDelta(
+                $probe->dtTs->getTimestamp(),
+                $refetched->dtTs->getTimestamp(),
+                0,
+                'the DateTime arm must re-hydrate to the saved epoch',
+            );
+        });
     }
 
     /**

@@ -296,7 +296,10 @@ Each connection adapts PHP values to driver bytes at the boundary through
 a codec (`encode()` on the write/bind path, `decode()` on the read path).
 The default codec passes scalars through and normalizes
 `DateTimeInterface` values to `Y-m-d H:i:s` in UTC; Postgres overrides it
-for microsecond precision (`Y-m-d H:i:s.u`).
+for microsecond precision (`Y-m-d H:i:s.u`). The contract is symmetric —
+value codecs (or the cast pipeline) also *interpret* datetime strings as
+UTC wall-clock on the way out, so a stored instant survives round-trips
+regardless of the host's `date.timezone` setting.
 
 A column with a declared fractional-seconds precision is the exception:
 the cast pipeline formats the value itself (UTC, exactly the declared
