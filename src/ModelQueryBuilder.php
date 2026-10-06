@@ -164,6 +164,18 @@ final class ModelQueryBuilder extends QueryBuilder
 
         parent::__construct($connection, $modelClass::table());
 
+        // The model's OWN columns ARE the default select — resolved to the
+        // explicit list (PK first) at construction, so no bare `*` ever
+        // rides a model query: a join meeting the default qualifies real
+        // columns (`table.*` only for joins whose second table shares no
+        // dedup hazard... it stays one qualified star), and a grammar sees
+        // a definite list. select('*') keeps its expansion contract (same
+        // list); the base's `['*']` sentinel never materializes here.
+        $this->columns = array_values(array_unique(array_merge(
+            $this->forcedKeys,
+            array_diff($this->modelColumns, $this->forcedKeys),
+        )));
+
         // MTI: partition the merged columns per table and join the ancestor
         // chain so the read path sees ONE virtual row spanning all levels.
         if ($metadata->isMtiChild()) {
@@ -1713,12 +1725,26 @@ final class ModelQueryBuilder extends QueryBuilder
             );
 
             if ($callerOwned) {
-                return parent::select(...$this->qualifyForJoin($flat));
+                // Order-stable qualification: each spec qualifies IN ITS
+                // OWN POSITION — bare strings map to `table.col`, objects
+                // (Aggregate/Expression) pass through verbatim — so the
+                // compiled list matches the caller's written order.
+                return parent::select(...array_map(
+                    fn(string|Expression|Aggregate $column) => is_string($column)
+                        ? $this->qualifyForJoin([$column])[0]
+                        : $column,
+                    $flat,
+                ));
             }
         }
 
         if ($this->getGroups() !== []) {
-            return parent::select(...$this->qualifyForJoin($flat));
+            return parent::select(...array_map(
+                fn(string|Expression|Aggregate $column) => is_string($column)
+                    ? $this->qualifyForJoin([$column])[0]
+                    : $column,
+                $flat,
+            ));
         }
 
         // Merge forced keys (PK always selected), dedupe, preserve order.
@@ -1746,8 +1772,8 @@ final class ModelQueryBuilder extends QueryBuilder
      * entries pass through untouched. No-op when nothing is joined — bare
      * names stay the join-less ergonomic default.
      *
-     * @param  list<string|Expression|Aggregate>  $columns
-     * @return list<string|Expression|Aggregate>
+     * @param  list<string>  $columns
+     * @return list<string>
      */
     private function qualifyForJoin(array $columns): array
     {
@@ -1758,11 +1784,6 @@ final class ModelQueryBuilder extends QueryBuilder
         $qualified = [];
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression || $column instanceof Aggregate) {
-                $qualified[] = $column;
-                continue;
-            }
-
             $qualified[] = str_contains($column, '.')
                 ? $column
                 : $this->table . '.' . $column;
@@ -1840,6 +1861,11 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Add an order-by clause with model-aware column validation.
      *
+     * A bare column QUALIFIES when the query joins another table — the
+     * same join-aware rule the select list follows (through relations
+     * order by the related model's bare PK; unqualified, both joined
+     * tables carry `id` and the driver rejects the ambiguity).
+     *
      * @param  string|Expression  $column
      * @param  SortDirection|string  $direction
      * @return static
@@ -1849,6 +1875,10 @@ final class ModelQueryBuilder extends QueryBuilder
     {
         if (!$column instanceof Expression) {
             $this->validateColumn($column);
+
+            $qualified = $this->qualifyForJoin([$column]);
+
+            return parent::orderBy($qualified[0], $direction);
         }
 
         return parent::orderBy($column, $direction);

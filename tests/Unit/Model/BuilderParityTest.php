@@ -160,10 +160,11 @@ final class BuilderParityTest extends DatabaseTestCase
         };
 
         self::assertSame(
-            'SELECT "bp_users".* FROM "bp_users" INNER JOIN "bp_users" AS "other"'
+            'SELECT "bp_users"."id", "bp_users"."name", "bp_users"."signed_up_at", "bp_users"."meta"'
+            . ' FROM "bp_users" INNER JOIN "bp_users" AS "other"'
             . ' ON "bp_users"."id" = "other"."id"',
             $sqlFor(BpUser::newQuery()->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
-            'the untouched default select shields',
+            'the untouched default is the expanded, qualified column list',
         );
 
         // Caller-owned specs: the aggregate renders verbatim; the bare

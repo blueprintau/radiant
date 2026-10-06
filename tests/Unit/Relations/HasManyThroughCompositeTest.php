@@ -247,7 +247,10 @@ final class HasManyThroughCompositeTest extends DatabaseTestCase
         $sql = (new \BlueprintAU\Radiant\Database\Grammars\SqliteGrammar())
             ->compileSelect($us->legs()->getQuery());
 
-        self::assertStringContainsString('SELECT "cmp_legs".* FROM "cmp_legs"', $sql);
+        self::assertStringContainsString(
+            'SELECT "cmp_legs"."id", "cmp_legs"."route_id", "cmp_legs"."route_country", "cmp_legs"."position" FROM "cmp_legs"',
+            $sql,
+        );
     }
 
     /**

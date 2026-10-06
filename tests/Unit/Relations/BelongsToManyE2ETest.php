@@ -75,9 +75,9 @@ final class BelongsToManyE2ETest extends DatabaseTestCase
      * names last-wins, so the pivot row's id replaced the tag's — and
      * hydration decoded that value through the TAG's cast (an
      * incorrect-type-for-column failure whenever the two tables' id
-     * declarations diverge). The join-time shield now compiles
-     * `SELECT "b2m_tags".*` instead, keeping this model's columns
-     * name-unique.
+     * declarations diverge). The default select now expands to the
+     * qualified per-column form before the join sees it, keeping this
+     * model's columns name-unique.
      */
     public function testLazyReadKeepsRelatedIdWhenPivotHasOwnId(): void
     {
