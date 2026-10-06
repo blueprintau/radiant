@@ -33,7 +33,7 @@ class MtmVideo extends Model
     /**
      * The polymorphic many-to-many relation.
      *
-     * @return MorphToMany<MtmTag>
+     * @return MorphToMany<MtmTag, Model>
      */
     public function tags(): MorphToMany
     {

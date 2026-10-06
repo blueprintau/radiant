@@ -34,10 +34,30 @@ class MtmTag extends Model
      * The INVERSE polymorphic many-to-many relation — every post tagged
      * with this tag.
      *
-     * @return MorphToMany<MtmPost>
+     * @return MorphToMany<MtmPost, Model>
      */
     public function posts(): MorphToMany
     {
         return $this->morphedByMany(MtmPost::class, 'taggable');
+    }
+
+    /**
+     * The inverse direction with a pool allowlist — the cross-type read.
+     *
+     * @return MorphToMany<MtmPost, MtmPost|MtmVideo>
+     */
+    public function poolPosts(): MorphToMany
+    {
+        return $this->morphedByMany(MtmPost::class, 'taggable', poolTypes: [MtmPost::class, MtmVideo::class]);
+    }
+
+    /**
+     * The direct direction — pool() must refuse it.
+     *
+     * @return MorphToMany<MtmPost, MtmPost|MtmVideo>
+     */
+    public function directPool(): MorphToMany
+    {
+        return $this->morphToMany(MtmPost::class, 'taggable', poolTypes: [MtmPost::class, MtmVideo::class]);
     }
 }

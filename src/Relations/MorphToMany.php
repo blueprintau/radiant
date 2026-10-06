@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Relations;
 
+use BlueprintAU\Radiant\Collection;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Model;
@@ -21,6 +22,7 @@ use BlueprintAU\Radiant\Model;
  * filter on.
  *
  * @template TRelated of Model
+ * @template TPool of Model
  * @extends BelongsToMany<TRelated>
  */
 class MorphToMany extends BelongsToMany
@@ -48,6 +50,13 @@ class MorphToMany extends BelongsToMany
     protected readonly string $morphKeyColumn;
 
     /**
+     * The optional pool allowlist — the classes `pool()` may resolve.
+     *
+     * @var list<class-string<Model>>|null
+     */
+    protected readonly array|null $poolTypes;
+
+    /**
      * Create a polymorphic many-to-many relation.
      *
      * @param  Model  $parent
@@ -55,6 +64,7 @@ class MorphToMany extends BelongsToMany
      * @param  string  $morphName
      * @param  string|class-string<Model>|null  $table
      * @param  bool  $inverse  True for `morphedByMany`.
+     * @param  list<class-string<TPool>>|null  $poolTypes  The pool allowlist for the inverse side's `pool()` read.
      * @throws \InvalidArgumentException
      */
     public function __construct(
@@ -63,10 +73,12 @@ class MorphToMany extends BelongsToMany
         string $morphName,
         ?string $table = null,
         bool $inverse = false,
+        array|null $poolTypes = null,
     ) {
         $this->morphTypeColumn = $morphName . '_type';
         $this->morphKeyColumn = $morphName . '_id';
         $this->morphAlias = $inverse ? $related : $parent::class;
+        $this->poolTypes = $poolTypes === null || $poolTypes === [] ? null : $poolTypes;
 
         // The direct direction: the pivot's morph columns point at the
         // parent (Post), the related table's id column at the related
@@ -225,5 +237,177 @@ class MorphToMany extends BelongsToMany
         }
 
         $connection->table($this->pivotTable)->insert($rows);
+    }
+
+    // ---- The cross-type pool read ----
+
+    /**
+     * Read the shared pivot pool across EVERY morph type — the inverse
+     * direction's cross-class read.
+     *
+     * Each allowlisted type (or each distinct stored type when no
+     * allowlist was declared) queries its own table through the shared
+     * pivot columns, and every row hydrates through its own model — the
+     * result is a genuinely mixed collection. With an allowlist the
+     * static bound narrows to exactly those classes; every resolved type
+     * still validates at runtime, so an out-of-list stored alias fails
+     * fast rather than slipping a foreign model into the collection.
+     *
+     * The read is always fresh: it never serves the `with()` cache (that
+     * snapshot is single-typed) and never composes the relation's
+     * filters. Pivot values ride along per query, so `pivotValue()` works
+     * on pool rows.
+     *
+     * @return Collection<TPool>
+     * @throws \InvalidArgumentException
+     * @throws \LogicException In the direct direction — the parent side is one class there.
+     */
+    public function pool(): Collection
+    {
+        if (!$this->isInversePool()) {
+            throw new \LogicException(
+                'pool() reads the shared pivot pool across morph types — available only on '
+                . 'the inverse direction (morphedByMany), where this side\'s pivot columns '
+                . 'carry a (type, key) pair. The direct direction resolves one static class.'
+            );
+        }
+
+        $parentKey = $this->parent->attribute($this->parentKey);
+
+        if ($parentKey === null) {
+            return Collection::make([]);
+        }
+
+        $models = [];
+
+        foreach ($this->poolAliases($parentKey) as $alias) {
+            $class = $this->validatedPoolClass($alias);
+
+            array_push($models, ...$this->poolQueryFor($class, $parentKey)->get()->all());
+        }
+
+        return Collection::make($models);
+    }
+
+    /**
+     * Whether this side's pivot columns carry the morph (type, key) pair
+     * — the pool read's precondition.
+     *
+     * @return bool
+     */
+    private function isInversePool(): bool
+    {
+        return $this->foreignPivotKey === $this->parent::table() . '_id';
+    }
+
+    /**
+     * The morph aliases this pool read covers, in query order.
+     *
+     * The declared allowlist when present; otherwise every distinct type
+     * value stored under this parent's pivot rows.
+     *
+     * @param  int|string  $parentKey
+     * @return list<string>
+     */
+    private function poolAliases(int|string $parentKey): array
+    {
+        if ($this->poolTypes !== null) {
+            return $this->poolTypes;
+        }
+
+        $rows = $this->sqlConnection()
+            ->table($this->pivotTable)
+            ->select($this->morphTypeColumn)
+            ->distinct()
+            ->where($this->foreignPivotKey, '=', $parentKey)
+            ->get();
+
+        $aliases = [];
+
+        foreach ($rows as $row) {
+            $alias = $row->{$this->morphTypeColumn} ?? null;
+
+            if (is_string($alias) && $alias !== '') {
+                $aliases[$alias] = true;
+            }
+        }
+
+        return array_keys($aliases);
+    }
+
+    /**
+     * Validate one resolved morph alias into a model class-string — the
+     * pool's runtime backing for the static union.
+     *
+     * @param  string  $alias
+     * @return class-string<TPool>
+     * @throws \InvalidArgumentException
+     */
+    private function validatedPoolClass(string $alias): string
+    {
+        if ($this->poolTypes !== null && !in_array($alias, $this->poolTypes, true)) {
+            throw new \InvalidArgumentException(
+                'Morph type [' . $alias . '] on pivot [' . $this->pivotTable
+                . '] is not in the pool allowlist.'
+            );
+        }
+
+        if (!class_exists($alias) || !is_a($alias, Model::class, true)) {
+            throw new \InvalidArgumentException(
+                'Morph type [' . $alias . '] on pivot [' . $this->pivotTable
+                . '] does not resolve to an existing model class.'
+            );
+        }
+
+        // The runtime checks ARE the template's backing — the same inline
+        // narrowing the MorphTo marker trick uses.
+        /** @var class-string<TPool> */
+        return $alias;
+    }
+
+    /**
+     * One type's pool query — the inverse join filtered to that type,
+     * with the pivot columns riding the select.
+     *
+     * @param  class-string<TPool>  $class
+     * @param  int|string  $parentKey
+     * @return \BlueprintAU\Radiant\ModelQueryBuilder<TPool>
+     */
+    private function poolQueryFor(string $class, int|string $parentKey): \BlueprintAU\Radiant\ModelQueryBuilder
+    {
+        $typeTable = $class::table();
+
+        $builder = $class::newQuery()
+            ->join(
+                $this->pivotTable,
+                self::qualify($typeTable, 'id'),
+                '=',
+                self::qualify($this->pivotTable, $this->relatedPivotKey),
+            )
+            ->where(
+                self::qualify($this->pivotTable, $this->morphTypeColumn),
+                '=',
+                $class,
+            )
+            ->where(
+                self::qualify($this->pivotTable, $this->foreignPivotKey),
+                '=',
+                $parentKey,
+            );
+
+        if ($this->pivotColumns === []) {
+            return $builder;
+        }
+
+        $selects = [];
+
+        foreach ($this->pivotColumns as $column) {
+            $selects[] = self::qualify($this->pivotTable, $column) . ' as radiant_pivot_' . $column;
+        }
+
+        $selects[] = "{$typeTable}.*";
+
+        /** @var \BlueprintAU\Radiant\ModelQueryBuilder<TPool> */
+        return $builder->select(...$selects);
     }
 }

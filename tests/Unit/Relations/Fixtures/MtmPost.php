@@ -33,7 +33,7 @@ class MtmPost extends Model
     /**
      * The polymorphic many-to-many relation.
      *
-     * @return MorphToMany<MtmTag>
+     * @return MorphToMany<MtmTag, Model>
      */
     public function tags(): MorphToMany
     {
@@ -43,7 +43,7 @@ class MtmPost extends Model
     /**
      * The polymorphic many-to-many relation with a MODEL-named pivot.
      *
-     * @return MorphToMany<MtmTag>
+     * @return MorphToMany<MtmTag, Model>
      */
     public function tagged(): MorphToMany
     {

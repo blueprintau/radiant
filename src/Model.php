@@ -1922,19 +1922,22 @@ abstract class Model
      * (type, key) pair, so models of any class share the pool.
      *
      * @template TRelated of Model
+     * @template TPool of Model
      *
      * @param  class-string<TRelated>  $related
      * @param  string  $morphName
      * @param  string|class-string<Model>|null  $table  The pivot table name, or a model class-string to derive it.
-     * @return Relations\MorphToMany<TRelated>
+     * @param  list<class-string<TPool>>|null  $poolTypes  The pool allowlist for the inverse direction's `pool()` read.
+     * @return ($poolTypes is null ? Relations\MorphToMany<TRelated, Model> : Relations\MorphToMany<TRelated, TPool>)
      * @throws \InvalidArgumentException
      */
     protected function morphToMany(
         string $related,
         string $morphName,
         ?string $table = null,
+        ?array $poolTypes = null,
     ): Relations\MorphToMany {
-        return (new Relations\MorphToMany($this, $related, $morphName, $table))
+        return (new Relations\MorphToMany($this, $related, $morphName, $table, poolTypes: $poolTypes))
             ->withName(self::relationName());
     }
 
@@ -1943,19 +1946,22 @@ abstract class Model
      * related side of the pivot.
      *
      * @template TRelated of Model
+     * @template TPool of Model
      *
      * @param  class-string<TRelated>  $related
      * @param  string  $morphName
      * @param  string|class-string<Model>|null  $table  The pivot table name, or a model class-string to derive it.
-     * @return Relations\MorphToMany<TRelated>
+     * @param  list<class-string<TPool>>|null  $poolTypes  The pool allowlist; narrows `pool()` to exactly those classes.
+     * @return ($poolTypes is null ? Relations\MorphToMany<TRelated, Model> : Relations\MorphToMany<TRelated, TPool>)
      * @throws \InvalidArgumentException
      */
     protected function morphedByMany(
         string $related,
         string $morphName,
         ?string $table = null,
+        ?array $poolTypes = null,
     ): Relations\MorphToMany {
-        return (new Relations\MorphToMany($this, $related, $morphName, $table, inverse: true))
+        return (new Relations\MorphToMany($this, $related, $morphName, $table, inverse: true, poolTypes: $poolTypes))
             ->withName(self::relationName());
     }
 
