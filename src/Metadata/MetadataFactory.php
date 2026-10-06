@@ -821,15 +821,35 @@ final class MetadataFactory
         string $class,
         array $properties,
     ): array {
-        // Rule 4 — no columns anywhere in the chain, no table (abstract or
-        // a deliberately concrete organizational base alike).
-        if ($properties === []) {
-            return [null, null];
-        }
-
         // Rule 4 — abstract classes are never instantiated; their columns
         // belong to the first concrete descendant.
         if ($reflection->isAbstract()) {
+            return [null, null];
+        }
+
+        // An explicit #[Table(name)] on a column-less concrete model IS a
+        // declaration: the class names a table without owning columns —
+        // pivot-table pointers (belongsToMany(table: Pivot::class)) above
+        // all. Empty-name stays a mis-declaration.
+        /** @var \ReflectionAttribute<Table>|null $explicitTable */
+        $explicitTable = $reflection->getAttributes(Table::class)[0] ?? null;
+
+        if ($properties === [] && $explicitTable !== null) {
+            $name = $explicitTable->newInstance()->name;
+
+            if ($name === '') {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[Table(name: '')] — an empty name is "
+                    . 'a mis-declaration; omit the argument to keep the convention.'
+                );
+            }
+
+            return [$name, null];
+        }
+
+        // Rule 4 — no columns anywhere in the chain, no table (abstract or
+        // a deliberately concrete organizational base alike).
+        if ($properties === []) {
             return [null, null];
         }
 

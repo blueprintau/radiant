@@ -39,4 +39,14 @@ class MtmPost extends Model
     {
         return $this->morphToMany(MtmTag::class, 'taggable');
     }
+
+    /**
+     * The polymorphic many-to-many relation with a MODEL-named pivot.
+     *
+     * @return MorphToMany<MtmTag>
+     */
+    public function tagged(): MorphToMany
+    {
+        return $this->morphToMany(MtmTag::class, 'taggable', table: PivotClassMtm::class);
+    }
 }

@@ -53,7 +53,7 @@ class MorphToMany extends BelongsToMany
      * @param  Model  $parent
      * @param  class-string<TRelated>  $related
      * @param  string  $morphName
-     * @param  string|null  $table
+     * @param  string|class-string<Model>|null  $table
      * @param  bool  $inverse  True for `morphedByMany`.
      * @throws \InvalidArgumentException
      */
@@ -84,7 +84,7 @@ class MorphToMany extends BelongsToMany
         parent::__construct(
             $parent,
             $related,
-            $table ?? $morphName,
+            self::resolvePivotTable($table, 'pivot') ?? $morphName,
             $foreignPivotKey,
             $relatedPivotKey,
         );

@@ -39,4 +39,36 @@ class B2mPost extends Model
     {
         return $this->belongsToMany(B2mTag::class);
     }
+
+    /**
+     * The pivot table named by a MODEL class-string.
+     *
+     * @return BelongsToMany<B2mTag>
+     */
+    public function tagged(): BelongsToMany
+    {
+        return $this->belongsToMany(B2mTag::class, table: PivotClassBtm::class);
+    }
+
+    /**
+     * A guarded form for construction-failure tests.
+     *
+     * @param  string  $table
+     * @return BelongsToMany<B2mTag>
+     */
+    public function belongsToManyRaw(string $table): BelongsToMany
+    {
+        return $this->belongsToMany(B2mTag::class, table: $table);
+    }
+
+    /**
+     * A pivot CLASS whose table collides with the endpoint's.
+     *
+     * @param  class-string<Model>  $pivot
+     * @return BelongsToMany<B2mTag>
+     */
+    public function tagThrough(string $pivot): BelongsToMany
+    {
+        return $this->belongsToMany(B2mTag::class, table: $pivot);
+    }
 }

@@ -92,7 +92,7 @@ class BelongsToMany extends Relation
      *
      * @param  Model  $parent
      * @param  class-string<TRelated>  $related
-     * @param  string|null  $table
+     * @param  string|class-string<Model>|null  $table
      * @param  string|null  $foreignPivotKey
      * @param  string|null  $relatedPivotKey
      * @param  string|null  $parentKey
@@ -108,13 +108,48 @@ class BelongsToMany extends Relation
         ?string $parentKey = null,
         ?string $relatedKey = null,
     ) {
-        $this->pivotTable = $table ?? $parent::table() . '_' . $related::table();
+        $pivotTable = self::resolvePivotTable($table, 'pivot');
+
+        $this->pivotTable = $pivotTable ?? $parent::table() . '_' . $related::table();
         $this->foreignPivotKey = $foreignPivotKey ?? $parent::table() . '_id';
         $this->relatedPivotKey = $relatedPivotKey ?? $related::table() . '_id';
         $this->parentKey = $parentKey ?? self::singlePrimaryKeyOf($parent::class, 'parent');
         $this->relatedKey = $relatedKey ?? self::singlePrimaryKeyOf($related, 'related');
 
+        if ($this->pivotTable === $parent::table() || $this->pivotTable === $related::table()) {
+            throw new \InvalidArgumentException(
+                'The pivot table [' . $this->pivotTable . '] collides with the parent ['
+                . $parent::table() . '] or related [' . $related::table() . '] table — '
+                . 'joining the pivot to itself is ambiguous. Pick another pivot table name.'
+            );
+        }
+
         parent::__construct($parent, $related, $this->relatedPivotKey, $this->relatedKey);
+    }
+
+    /**
+     * Resolve a caller-supplied pivot table name — a class-string derives
+     * its table name.
+     *
+     * @param  string|null  $table
+     * @param  string  $role
+     * @return string|null Null passes the derivation duty back to the caller.
+     * @throws \InvalidArgumentException
+     */
+    final protected static function resolvePivotTable(?string $table, string $role): ?string
+    {
+        if ($table === null || !str_contains($table, '\\')) {
+            return $table;
+        }
+
+        if (!is_a($table, Model::class, true)) {
+            throw new \InvalidArgumentException(
+                "The {$role} table [{$table}] resolves to no model class — pass a plain "
+                . 'table name or a model class-string.'
+            );
+        }
+
+        return $table::table();
     }
 
     /**

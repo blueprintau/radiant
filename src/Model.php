@@ -1890,7 +1890,7 @@ abstract class Model
      * @template TRelated of Model
      *
      * @param  class-string<TRelated>  $related
-     * @param  string|null  $table
+     * @param  string|class-string<Model>|null  $table  The pivot table name, or a model class-string to derive it.
      * @param  string|null  $foreignPivotKey
      * @param  string|null  $relatedPivotKey
      * @param  string|null  $parentKey
@@ -1925,7 +1925,7 @@ abstract class Model
      *
      * @param  class-string<TRelated>  $related
      * @param  string  $morphName
-     * @param  string|null  $table
+     * @param  string|class-string<Model>|null  $table  The pivot table name, or a model class-string to derive it.
      * @return Relations\MorphToMany<TRelated>
      * @throws \InvalidArgumentException
      */
@@ -1946,7 +1946,7 @@ abstract class Model
      *
      * @param  class-string<TRelated>  $related
      * @param  string  $morphName
-     * @param  string|null  $table
+     * @param  string|class-string<Model>|null  $table  The pivot table name, or a model class-string to derive it.
      * @return Relations\MorphToMany<TRelated>
      * @throws \InvalidArgumentException
      */

@@ -330,6 +330,13 @@ select: `withPivot('position')` carries the column onto each related
 model, readable through `$tag->pivotValue('position')`;
 `withTimestamps()` is sugar for the `created_at`/`updated_at` pair.
 
+The pivot `$table` argument accepts a model class-string as well as a
+plain name — the table derives from the class's own metadata
+(`belongsToMany(Tag::class, table: PostTag::class)` on a `post_tags`
+pivot). The model itself is optional sugar: the relation needs no pivot
+PHP model to function, and a class whose table collides with either
+endpoint's table is rejected at construction.
+
 **The pivot table is yours.** Radiant derives its NAME
 (`{parentTable}_{relatedTable}`, overridable) but never creates, migrates,
 or syncs the table itself — `Blueprint::fromMetadata()` folds model
