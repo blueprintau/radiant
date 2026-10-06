@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant;
 
 use BlueprintAU\Radiant\Attributes\Hook;
+use BlueprintAU\Radiant\Attributes\RowHook;
 use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
@@ -18,6 +19,7 @@ use BlueprintAU\Radiant\Metadata\MetadataFactory;
  * column, so the trait can sit on a shared base model safely.
  *
  * @mixin \BlueprintAU\Radiant\Model
+ * @method static \Carbon\Carbon freshTimestamp() A fresh timestamp for the stamp columns.
  * @phpstan-require-extends \BlueprintAU\Radiant\Model
  */
 trait Timestamps
@@ -118,6 +120,60 @@ trait Timestamps
         }
 
         return null;
+    }
+
+    /**
+     * Stamp the bulk-insert rows — both columns per row, each only when
+     * the row does not carry it (a caller-set value always wins).
+     *
+     * @param  list<array<string, mixed>>  $rows
+     */
+    #[RowHook(Hook::Insert)]
+    protected static function stampInsertRows(array &$rows): void
+    {
+        $metadata = MetadataFactory::for(static::class);
+
+        $createdAt = self::createdAtColumnName();
+        $updatedAt = self::updatedAtColumnName();
+
+        $stampCreated = $metadata->hasColumn($createdAt);
+        $stampUpdated = $metadata->hasColumn($updatedAt);
+
+        if (!$stampCreated && !$stampUpdated) {
+            return;
+        }
+
+        // One clock read per batch — only when a row actually needs it.
+        $now = null;
+
+        foreach ($rows as &$row) {
+            if ($stampCreated && !array_key_exists($createdAt, $row)) {
+                $now ??= static::freshTimestamp();
+                $row[$createdAt] = $now;
+            }
+
+            if ($stampUpdated && !array_key_exists($updatedAt, $row)) {
+                $now ??= static::freshTimestamp();
+                $row[$updatedAt] = $now;
+            }
+        }
+    }
+
+    /**
+     * Stamp the bulk-update values — `updated_at` only when the payload
+     * does not carry it (a caller-set value always wins).
+     *
+     * @param  array<string, mixed>  $values
+     */
+    #[RowHook(Hook::Update)]
+    protected static function stampUpdateValues(array &$values): void
+    {
+        $metadata = MetadataFactory::for(static::class);
+        $updatedAt = self::updatedAtColumnName();
+
+        if ($metadata->hasColumn($updatedAt) && !array_key_exists($updatedAt, $values)) {
+            $values[$updatedAt] = static::freshTimestamp();
+        }
     }
 
     /**

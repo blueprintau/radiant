@@ -274,23 +274,57 @@ User::newQuery()->insert([
 Post::newQuery()->where('status', '=', 'stale')->update(['archived' => 1]);
 ```
 
-**Builder writes bypass the write hooks.** `insert()`/`insertGetId()`/
-`update()` on the builder run no `#[WriteHook]` behaviors and no
-lifecycle listeners — they are raw, validated writes. Concretely:
+**Bulk writes run the `#[RowHook]` traits, bypass the `#[WriteHook]` ones.**
+`insert()`/`insertGetId()`/`update()` on the builder dispatch every
+`#[RowHook]` method — static trait methods receiving the rows (or the
+update values map) by reference, in PHP value space before encoding —
+then validate and encode. No instance behaviors and no lifecycle
+listeners run. Concretely:
 
-- **Timestamps does not stamp** — `created_at`/`updated_at` are only
-  written if you include them in the payload.
+- **Timestamps stamps** — bulk inserts get `created_at`/`updated_at`
+  (one clock read per batch); bulk updates bump `updated_at`. A value
+  already in the payload always wins.
 - **SoftDeletes does not intercept** — a builder `update()` targets rows
   regardless of `deleted_at` (the trait's query scope still applies to
   reads, so trashed rows are invisible to a plain `newQuery()`; use
   `withTrashed()` to reach them deliberately).
 - **Audit/observer traits see nothing** — their `#[WriteHook]` methods
-  never fire.
+  never fire; convert the trait's bulk side to a `#[RowHook]` method to
+  cover it.
 
-`save()` and `delete()` are the hook-honoring paths. Use the builder
-writes for seeders and batch jobs where you control the payload; use
-`save()` when per-row behavior (stamping, soft-delete interception,
-audits) matters.
+A `#[RowHook]` returning `false` vetoes the whole write: a
+`RowHookVetoException` throws before any statement runs, so a vetoed
+batch is all-or-nothing. Traits declare both sides when they need
+them — `#[WriteHook]` for instance claims, `#[RowHook]` for the bulk
+pass:
+
+```php
+use BlueprintAU\Radiant\Attributes\Hook;
+use BlueprintAU\Radiant\Attributes\RowHook;
+use BlueprintAU\Radiant\Attributes\WriteHook;
+
+trait AuditsWrites
+{
+    #[WriteHook(Hook::Update)]
+    protected function auditUpdate(): null
+    {
+        Audit::log(static::class.' updated');
+
+        return null;
+    }
+
+    #[RowHook(Hook::Update)]
+    protected static function auditBulkUpdate(array &$values): void
+    {
+        Audit::log(static::class.' bulk-updated');
+    }
+}
+```
+
+`save()` and `delete()` remain the full-semantics paths — claims
+(soft-delete interception), `$this` bookkeeping, lifecycle listeners.
+Use the builder writes for seeders and batch jobs where per-row
+instance state does not matter; use `save()` when it does.
 
 ## Timestamps
 

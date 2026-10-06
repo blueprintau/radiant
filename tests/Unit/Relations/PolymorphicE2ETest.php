@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;

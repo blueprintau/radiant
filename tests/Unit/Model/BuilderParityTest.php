@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 use BlueprintAU\Radiant\Tests\Support\ArrayRowConnection;

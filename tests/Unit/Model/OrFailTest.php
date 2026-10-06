@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
-use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
+use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\OfPost;

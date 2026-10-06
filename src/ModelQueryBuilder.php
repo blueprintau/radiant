@@ -7,8 +7,8 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
-use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
-use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
+use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
@@ -2016,15 +2016,21 @@ final class ModelQueryBuilder extends QueryBuilder
     // ---- Writes (validated + encoded through the column casts) ----
 
     /**
-     * Insert rows with model-aware validation and cast encoding.
+     * Insert rows with model-aware validation, cast encoding, and bulk
+     * row hooks.
      *
      * @param  array<string, mixed>|list<array<string, mixed>>  $values
      * @return int
      * @throws \InvalidArgumentException
+     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
      */
     public function insert(array $values): int
     {
-        return parent::insert($this->encodeRows($values));
+        $rows = $this->normalizeRows($values);
+
+        Model::dispatchInsertHooks($this->modelClass, $rows);
+
+        return parent::insert($this->encodeRows($rows));
     }
 
     /**
@@ -2034,38 +2040,62 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>  $values
      * @return string|int|null
      * @throws \InvalidArgumentException
+     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
      */
     public function insertGetId(array $values): string|int|null
     {
-        return parent::insertGetId($this->encodeRow($values));
+        $rows = [$values];
+
+        Model::dispatchInsertHooks($this->modelClass, $rows);
+
+        return parent::insertGetId($this->encodeRow($rows[0]));
     }
 
     /**
-     * Update the matching rows with model-aware validation and cast
-     * encoding.
+     * Update the matching rows with model-aware validation, cast
+     * encoding, and bulk update hooks.
      *
      * @param  array<string, mixed>  $values
      * @return int
      * @throws \InvalidArgumentException
+     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
      */
     public function update(array $values): int
     {
+        Model::dispatchUpdateHooks($this->modelClass, $values);
+
         return parent::update($this->encodeRow($values));
     }
 
     /**
-     * Encode a single row through the column casts.
+     * Normalize an insert payload to a row list.
      *
-     * @param  array<string, mixed>|list<array<string, mixed>>  $values
-     * @return array<string, mixed>|list<array<string, mixed>>
-     * @throws \InvalidArgumentException
+     * A single map is a one-row batch — the normalization makes the hook
+     * contract uniform (insert hooks always see a row list) and keeps
+     * {@see encodeRows()} on the single list path.
+     *
+     * @param  array<string, mixed>|list<array<int|string, mixed>>  $values
+     * @return list<array<int|string, mixed>>
      */
-    private function encodeRows(array $values): array
+    private function normalizeRows(array $values): array
     {
-        if (!array_is_list($values)) {
-            return $this->encodeRow($values);
+        if (array_is_list($values)) {
+            /** @var list<array<int|string, mixed>> */
+            return $values;
         }
 
+        return [$values];
+    }
+
+    /**
+     * Encode a row list through the column casts.
+     *
+     * @param  list<array<int|string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     * @throws \InvalidArgumentException
+     */
+    private function encodeRows(array $rows): array
+    {
         // A list whose entries are NOT arrays is caller error — a list of
         // scalars (`insert(['name', 'age'])`) is never a valid row set.
         // Delegating each entry to encodeRow() makes that fail fast: its
@@ -2074,7 +2104,7 @@ final class ModelQueryBuilder extends QueryBuilder
         // rows (PHP 8 foreach-over-string skips the loop).
         $encoded = [];
 
-        foreach ($values as $row) {
+        foreach ($rows as $row) {
             $encoded[] = $this->encodeRow($row);
         }
 

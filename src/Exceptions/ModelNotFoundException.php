@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace BlueprintAU\Radiant\Database\Exceptions;
+namespace BlueprintAU\Radiant\Exceptions;
 
 /**
  * Thrown by the fail-fast retrieval family (`firstOrFail()`, `findOrFail()`,

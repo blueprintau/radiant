@@ -6,8 +6,8 @@ namespace BlueprintAU\Radiant\Concerns;
 
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Collection;
-use BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException;
-use BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException;
+use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
+use BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
@@ -113,7 +113,7 @@ trait FetchesResults
      * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
      */
     final public function findOrFail(int|string|null|array $id, bool $fresh = false): Model
     {
@@ -136,7 +136,7 @@ trait FetchesResults
      * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
      */
     final public function firstOrFail(bool $fresh = false): Model
     {
@@ -159,8 +159,8 @@ trait FetchesResults
      * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
      * @return TRelated
      *
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException
      */
     final public function sole(bool $fresh = false): Model
     {

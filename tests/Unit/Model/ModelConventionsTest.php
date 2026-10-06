@@ -51,7 +51,7 @@ final class ModelConventionsTest extends DatabaseTestCase
     {
         MvAuthor::newQuery()->delete();
 
-        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException::class);
+        $this->expectException(\BlueprintAU\Radiant\Exceptions\ModelNotFoundException::class);
 
         MvAuthor::firstOrFail();
     }
@@ -69,7 +69,7 @@ final class ModelConventionsTest extends DatabaseTestCase
         $second->name = 'ben';
         $second->save();
 
-        $this->expectException(\BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException::class);
+        $this->expectException(\BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException::class);
 
         MvAuthor::sole();
     }

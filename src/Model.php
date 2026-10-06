@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Exceptions\RowHookVetoException;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
@@ -184,7 +185,7 @@ abstract class Model
      *
      * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
      * @return static
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
      */
     final public static function findOrFail(int|string|null|array $id): static
     {
@@ -195,7 +196,7 @@ abstract class Model
      * Get the first model of the table or throw if the table is empty.
      *
      * @return static
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
      */
     final public static function firstOrFail(): static
     {
@@ -206,8 +207,8 @@ abstract class Model
      * Get the single model of the table or throw if the count differs.
      *
      * @return static
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException
-     * @throws \BlueprintAU\Radiant\Database\Exceptions\MultipleRecordsFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\ModelNotFoundException
+     * @throws \BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException
      */
     final public static function sole(): static
     {
@@ -505,7 +506,7 @@ abstract class Model
      *
      * @return \Carbon\Carbon
      */
-    protected function freshTimestamp(): \Carbon\Carbon
+    protected static function freshTimestamp(): \Carbon\Carbon
     {
         return \Carbon\Carbon::now();
     }
@@ -715,6 +716,83 @@ abstract class Model
         }
 
         return null;
+    }
+
+    /**
+     * Dispatch the insert hooks on a bulk row set.
+     *
+     * Rows arrive in the PHP value space, before column encoding. All
+     * hooks for the path run — there are no claims. A `void` return is an
+     * observer; a `bool` return of `false` vetoes the write.
+     *
+     * @param  class-string<Model>  $modelClass
+     * @param  list<array<int|string, mixed>>  $rows
+     */
+    final public static function dispatchInsertHooks(string $modelClass, array &$rows): void
+    {
+        foreach (MetadataFactory::for($modelClass)->rowHooks as $entry) {
+            if ($entry['hook'] !== Hook::Insert) {
+                continue;
+            }
+
+            // Dynamic calls cannot pass the array by reference, so each
+            // hook is invoked through a closure scoped to the model class —
+            // protected static hook methods stay reachable from the
+            // builder. Bound only when a hook actually runs: the common
+            // hook-less write pays nothing.
+            $call = \Closure::bind(
+                static function (string $method, array &$rows) {
+                    return static::{$method}($rows);
+                },
+                null,
+                $modelClass,
+            );
+
+            if ($call($entry['method'], $rows) === false) {
+                throw new RowHookVetoException(
+                    "The #[RowHook(Hook::{$entry['hook']->value})] method "
+                    . "[{$entry['trait']}::{$entry['method']}] vetoed the write."
+                );
+            }
+        }
+    }
+
+    /**
+     * Dispatch the update hooks on an update values map.
+     *
+     * Values arrive in the PHP value space, before column encoding. All
+     * hooks for the path run — there are no claims. A `void` return is an
+     * observer; a `bool` return of `false` vetoes the write.
+     *
+     * @param  class-string<Model>  $modelClass
+     * @param  array<string|int, mixed>  $values
+     */
+    final public static function dispatchUpdateHooks(string $modelClass, array &$values): void
+    {
+        foreach (MetadataFactory::for($modelClass)->rowHooks as $entry) {
+            if ($entry['hook'] !== Hook::Update) {
+                continue;
+            }
+
+            // Same scoped invocation as {@see dispatchInsertHooks()} — a
+            // by-ref array cannot pass through a shared dispatcher without
+            // widening the caller's type to a rows-or-values union. Bound
+            // only when a hook actually runs.
+            $call = \Closure::bind(
+                static function (string $method, array &$values) {
+                    return static::{$method}($values);
+                },
+                null,
+                $modelClass,
+            );
+
+            if ($call($entry['method'], $values) === false) {
+                throw new RowHookVetoException(
+                    "The #[RowHook(Hook::{$entry['hook']->value})] method "
+                    . "[{$entry['trait']}::{$entry['method']}] vetoed the write."
+                );
+            }
+        }
     }
 
     /**

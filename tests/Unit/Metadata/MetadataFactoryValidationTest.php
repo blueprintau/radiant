@@ -173,6 +173,71 @@ final class MetadataFactoryValidationTest extends TestCase
         MetadataFactory::for(WriteHookDestroyNonVoidModel::class);
     }
 
+    // ---- Row hooks ----
+
+    /**
+     * A non-static #[RowHook] method fails the static contract.
+     */
+    public function testRowHookNonStaticThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook] method ['
+            . \BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RowHookNonStaticTrait::class
+            . '::onInsertNotStatic] must be a static method.',
+        );
+
+        MetadataFactory::for(Fixtures\RowHookNonStaticModel::class);
+    }
+
+    /**
+     * A #[RowHook] method with no return type fails the void-or-bool
+     * contract.
+     */
+    public function testRowHookUntypedReturnThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook] method ['
+            . \BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RowHookUntypedReturnTrait::class
+            . '::onInsertUntyped] must declare a void or bool return type; got none.',
+        );
+
+        MetadataFactory::for(Fixtures\RowHookUntypedReturnModel::class);
+    }
+
+    /**
+     * A #[RowHook] method with a non-void/bool return type fails the
+     * return contract, naming the offending type.
+     */
+    public function testRowHookBadReturnThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook] method ['
+            . \BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RowHookBadReturnTrait::class
+            . '::onInsertStringReturn] must declare a void or bool return type; got string.',
+        );
+
+        MetadataFactory::for(Fixtures\RowHookBadReturnModel::class);
+    }
+
+    /**
+     * A #[RowHook(Hook::Delete)] fails — bulk hooks support Insert and
+     * Update only.
+     */
+    public function testRowHookDeleteHookThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook(Hook::delete)] on ['
+            . \BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\RowHookDeleteHookTrait::class
+            . '::onDeleteRows] is invalid — bulk hooks support Hook::Insert and Hook::Update only.',
+        );
+
+        MetadataFactory::for(Fixtures\RowHookDeleteHookModel::class);
+    }
+
     // ---- Nested traits ----
 
     /**

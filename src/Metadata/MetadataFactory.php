@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Attributes\ModelScope;
+use BlueprintAU\Radiant\Attributes\RowHook;
 use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
@@ -187,6 +188,7 @@ final class MetadataFactory
             tablePartitions: $partitions,
             traitScopes: self::collectTraitScopes($reflection, $class, $properties),
             writeHooks: self::collectWriteHooks($reflection, $class),
+            rowHooks: self::collectRowHooks($reflection, $class),
         );
     }
 
@@ -308,6 +310,61 @@ final class MetadataFactory
                     }
 
                     $hooks[] = ['trait' => $trait->name, 'hook' => $writeHook->hook, 'method' => $method->name];
+                }
+            }
+        }
+
+        return $hooks;
+    }
+
+    /**
+     * Collect the trait-declared bulk-write hooks for a class.
+     *
+     * Walks the class's traits recursively (declaration order, then
+     * ancestors). Within one trait, methods run in declaration order.
+     * Methods must be static and declare a void or bool return type —
+     * `Hook::Delete` and `Hook::Destroy` have no bulk path.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @return list<array{trait: class-string, hook: Hook, method: string}>
+     * @throws \InvalidArgumentException
+     */
+    private static function collectRowHooks(\ReflectionClass $reflection, string $class): array
+    {
+        $hooks = [];
+
+        foreach (self::traitsOf($reflection) as $trait) {
+            foreach ($trait->getMethods() as $method) {
+                foreach ($method->getAttributes(RowHook::class) as $attribute) {
+                    /** @var RowHook $rowHook */
+                    $rowHook = $attribute->newInstance();
+
+                    if (!$method->isStatic()) {
+                        throw new \InvalidArgumentException(
+                            "The #[RowHook] method [{$trait->name}::{$method->name}] must be a static method."
+                        );
+                    }
+
+                    $returnType = $method->hasReturnType() ? (string) $method->getReturnType() : null;
+
+                    if ($returnType !== 'void' && $returnType !== 'bool') {
+                        $declared = $returnType ?? 'none';
+
+                        throw new \InvalidArgumentException(
+                            "The #[RowHook] method [{$trait->name}::{$method->name}] must declare a void or "
+                            . "bool return type; got {$declared}."
+                        );
+                    }
+
+                    if ($rowHook->hook !== Hook::Insert && $rowHook->hook !== Hook::Update) {
+                        throw new \InvalidArgumentException(
+                            "The #[RowHook(Hook::{$rowHook->hook->value})] on [{$trait->name}::{$method->name}] "
+                            . 'is invalid — bulk hooks support Hook::Insert and Hook::Update only.'
+                        );
+                    }
+
+                    $hooks[] = ['trait' => $trait->name, 'hook' => $rowHook->hook, 'method' => $method->name];
                 }
             }
         }

@@ -55,6 +55,7 @@ final class ClassMetadata
      * @param  array<string, string>  $tablePartitions
      * @param  list<array{trait: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>  $traitScopes
      * @param  list<array{trait: class-string, hook: \BlueprintAU\Radiant\Attributes\Hook, method: string}>  $writeHooks
+     * @param  list<array{trait: class-string, hook: \BlueprintAU\Radiant\Attributes\Hook, method: string}>  $rowHooks
      */
     public function __construct(
         public readonly ?string $tableName,
@@ -69,6 +70,7 @@ final class ClassMetadata
         array $tablePartitions = [],
         public readonly array $traitScopes = [],
         public readonly array $writeHooks = [],
+        public readonly array $rowHooks = [],
     ) {
         // Eager precompute: the class is built once per process (the
         // MetadataFactory cache), so deriving the lookup map here costs
