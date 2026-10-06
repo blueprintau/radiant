@@ -685,25 +685,20 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  string  $second
      * @return static
      * @throws \InvalidArgumentException
-     */
-    #[\Override]
+     */    #[\Override]
     protected function addJoin(JoinType $type, string $table, string $first, ColumnOperator|string $operator, string $second): static
     {
         $clone = parent::addJoin($type, $table, $first, $operator, $second);
 
-        $starHeld = $clone->columns === ['*']
-            || in_array('*', $clone->columns, true);
-
-        if ($starHeld) {
-            // Same-class direct write — the scoped-instance idiom the MTI
-            // partition select and scalar-read clones already use.
-            $clone->columns = [$this->table . '.*'];
-        }
-
+        // Per-spec qualify: every bare name prefixes with this model's
+        // table; every raw star in place becomes `table.*`. The untouched
+        // default (`['*']`) therefore collapses to exactly one qualified
+        // star, while a hand-built mixed shape (`count(*) AS t`, `*`,
+        // `name`) keeps its aggregate AND its other columns — each star
+        // shields in place, none of the caller's specs are dropped.
         // Bare names selected BEFORE the join are already in `$columns` —
-        // qualify them now that a second table shares the row. (select()
-        // handles its OWN bare specs post-join; this closes the join-first
-        // half of the ordering.)
+        // qualifying them closes the join-first half of the ordering
+        // (select() handles its OWN bare specs post-join).
         $clone->columns = $this->qualifyColumns($clone->columns);
 
         return $clone;
@@ -713,9 +708,10 @@ final class ModelQueryBuilder extends QueryBuilder
      * Qualify bare specs in an arbitrary column list — the shared body
      * of {@see qualifyForJoin()} and {@see addJoin()}'s ordering shield.
      *
-     * Every plain-string spec without a `.` gets this model's table
-     * prefix; a raw `*` becomes `table.*` (join-read expansion in scalar
-     * form); Aggregate/Expression/qualified entries pass through.
+     * Every plain-string spec WITHOUT a `.` gets this model's table
+     * prefix — including a raw `*`, which becomes `table.*` IN PLACE (a
+     * mixed shape keeps its sibling specs); Aggregate, Expression and
+     * already-qualified entries pass through.
      *
      * @param  list<string|Expression|Aggregate>  $columns
      * @return list<string|Expression|Aggregate>
@@ -725,19 +721,14 @@ final class ModelQueryBuilder extends QueryBuilder
         $qualified = [];
 
         foreach ($columns as $column) {
-            if (!$column instanceof Expression && !$column instanceof Aggregate) {
-                if ($column === '*') {
-                    $qualified[] = $this->table . '.*';
-                    continue;
-                }
-
-                if (!str_contains($column, '.')) {
-                    $qualified[] = $this->table . '.' . $column;
-                    continue;
-                }
+            if ($column instanceof Expression || $column instanceof Aggregate) {
+                $qualified[] = $column;
+                continue;
             }
 
-            $qualified[] = $column;
+            $qualified[] = str_contains($column, '.')
+                ? $column
+                : $this->table . '.' . $column;
         }
 
         return $qualified;
@@ -1945,6 +1936,10 @@ final class ModelQueryBuilder extends QueryBuilder
 
         if ($source !== $column && isset($columns[$source])) {
             return; // `column as alias` over a declared column.
+        }
+
+        if ($source === '*') {
+            return; // a raw star — it qualifies IN PLACE under a join (table.*).
         }
 
         // Qualified reference — `table.column[ as alias]`. The qualified

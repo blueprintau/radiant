@@ -358,12 +358,15 @@ model column with the prefix collides the same way the moment it rides a
 reserved alias — name your columns anything else.
 
 **Joined reads never collide.** As soon as a join touches a model query
-with an otherwise-unqualified select, the ORM qualifies that model's own
-columns (`SELECT "tags".* FROM "tags" INNER JOIN ...`). Duplicate column
-names across joined tables — most commonly every table's `id` — would
-otherwise collapse last-wins in the fetched row and hydrate the wrong
-table's values through this model's casts. The pivot's columns ride a
-read only through `withPivot()` aliases; the model's own select is never
+with a bare select, the ORM qualifies that model's own columns — a bare
+star becomes `SELECT "tags".* FROM "tags" INNER JOIN ...` and bare
+column names prefix with the table (`"tags"."id"`), so every compiled
+spec names its table. Duplicate column names across joined tables —
+most commonly every table's `id` — would otherwise collapse last-wins
+in the fetched row and hydrate the wrong table's values through this
+model's casts. Ordering never matters: selecting before or after the
+join lands on the same qualified list. The pivot's columns ride a read
+only through `withPivot()` aliases; the model's own select is never
 polluted with them.
 
 The write API operates on the pivot directly:

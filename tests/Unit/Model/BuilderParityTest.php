@@ -144,16 +144,12 @@ final class BuilderParityTest extends DatabaseTestCase
     }
 
     /**
-     * The join-time shield covers every shape still holding a raw star —
-     * the untouched default and any hand-built state carrying a bare
-     * `'*'` alongside other specs. A raw star under a join would let the
-     * joined table's duplicate column names (both tables have `id`)
-     * collide last-wins in the fetched row — the SILENT hazard. Two
-     * shapes cannot hold a raw star: a bare `select('*')` expands to the
-     * model's columns (PK first) before any join lands, and the allowlist
-     * rejects a bare star MIXED with plain columns. Explicit caller specs
-     * (aggregates, qualified lists) pass through untouched — a duplicate
-     * BARE column there is a loud DB ambiguity error, not silent
+     * The join-time shield qualifies every bare spec IN PLACE — a raw
+     * star becomes `table.*`, bare column names prefix with the model's
+     * table, and a mixed shape keeps ALL its specs (the aggregate renders
+     * verbatim beside the qualified star). No shape's columns are dropped.
+     * Caller-owned qualified lists pass through untouched — a duplicate
+     * bare column there is a loud DB ambiguity error, not silent
      * corruption.
      */
     public function testJoinShieldsEveryRawStarShape(): void
@@ -170,22 +166,28 @@ final class BuilderParityTest extends DatabaseTestCase
             'the untouched default select shields',
         );
 
-        // Caller-owned specs (an Aggregate marks the list) pass through,
-        // EXCEPT bare names still qualify — the ordering shield makes a
-        // bare column under a join name its table, same as every other
-        // ordering. The aggregate renders verbatim.
+        // Caller-owned specs: the aggregate renders verbatim; the bare
+        // sibling column still qualifies. Nothing is dropped.
         self::assertSame(
             'SELECT count(*) AS "total", "bp_users"."name" FROM "bp_users"'
             . ' INNER JOIN "bp_users" AS "other" ON "bp_users"."id" = "other"."id"',
             $sqlFor(BpUser::newQuery()->select(Aggregate::count('*', 'total'), 'name')
                 ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
-            'an aggregate select passes through; bare names still qualify',
+            'a mixed aggregate shape keeps its aggregate and qualifies the rest',
         );
 
-        // select('*') expands to the model's columns (PK first) — no raw
-        // star remains, so the compiled list is the explicit expansion,
-        // collision-free by construction — and, with the join-aware
-        // qualification, now lands QUALIFIED.
+        // A hand-built raw star beside other specs: each star qualifies IN
+        // PLACE — the aggregate and the bare column both survive.
+        self::assertSame(
+            'SELECT count(*) AS "total", "bp_users".*, "bp_users"."name" FROM "bp_users"'
+            . ' INNER JOIN "bp_users" AS "other" ON "bp_users"."id" = "other"."id"',
+            $sqlFor(BpUser::newQuery()->select(Aggregate::count('*', 'total'), '*', 'name')
+                ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
+            'a raw star beside other specs shields in place, not by collapse',
+        );
+
+        // select('*') expands to the model's columns (PK first) — the
+        // join-aware qualification then lands each column QUALIFIED.
         self::assertSame(
             'SELECT "bp_users"."id", "bp_users"."name", "bp_users"."signed_up_at", "bp_users"."meta"'
             . ' FROM "bp_users" INNER JOIN "bp_users" AS "other"'
