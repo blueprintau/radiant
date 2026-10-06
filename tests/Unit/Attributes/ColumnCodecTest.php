@@ -294,6 +294,45 @@ final class ColumnCodecTest extends TestCase
     }
 
     /**
+     * The DateTime column's decode holds the instant on a non-UTC host:
+     * the codec normalized the binding to UTC wall-clock on the way in,
+     * so the re-hydrated Carbon must carry that UTC interpretation rather
+     * than silently inheriting `date.timezone`. A naive `Carbon::parse`
+     * under Sydney reads 05:06:07 as Sydney wall-clock — a 39 600-second
+     * drift this test pins shut.
+     */
+    public function testDateTimeDecodeHoldsInstantUnderNonUtcHostZone(): void
+    {
+        TimezoneSwap::under('Australia/Sydney', function (): void {
+            $column = new Column(type: ColumnType::DateTime, name: 'fired_at');
+
+            $decoded = $column->decode('2026-03-04 05:06:07', \Carbon\Carbon::class);
+
+            self::assertInstanceOf(\Carbon\Carbon::class, $decoded);
+            self::assertSame(1772600767, $decoded->getTimestamp());
+        });
+    }
+
+    /**
+     * The Date column's decode holds the calendar day on a non-UTC host:
+     * a `Y-m-d` cell parsed in the host zone lands its midnight in
+     * Sydney instead of UTC, shifting the instant by the offset. The
+     * UTC-tagged start of day is pinned by epoch — bare-parsed under
+     * Sydney it would read 1 767 272 400 instead.
+     */
+    public function testDateDecodeHoldsStartOfDayUnderNonUtcHostZone(): void
+    {
+        TimezoneSwap::under('Australia/Sydney', function (): void {
+            $column = new Column(type: ColumnType::Date, name: 'd');
+
+            $decoded = $column->decode('2026-01-02', \Carbon\Carbon::class);
+
+            self::assertInstanceOf(\Carbon\Carbon::class, $decoded);
+            self::assertSame(1767312000, $decoded->getTimestamp());
+        });
+    }
+
+    /**
      * A Timestamp column fails loudly — with the column named — on a
      * non-numeric, unparseable cell instead of silently decoding to 0.
      */
