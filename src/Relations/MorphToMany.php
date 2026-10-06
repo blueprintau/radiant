@@ -242,25 +242,18 @@ class MorphToMany extends BelongsToMany
     // ---- The cross-type pool read ----
 
     /**
-     * Read the shared pivot pool across EVERY morph type — the inverse
-     * direction's cross-class read.
+     * Read the shared pivot pool across every morph type.
      *
-     * Each allowlisted type (or each distinct stored type when no
-     * allowlist was declared) queries its own table through the shared
-     * pivot columns, and every row hydrates through its own model — the
-     * result is a genuinely mixed collection. With an allowlist the
-     * static bound narrows to exactly those classes; every resolved type
-     * still validates at runtime, so an out-of-list stored alias fails
-     * fast rather than slipping a foreign model into the collection.
-     *
-     * The read is always fresh: it never serves the `with()` cache (that
-     * snapshot is single-typed) and never composes the relation's
-     * filters. Pivot values ride along per query, so `pivotValue()` works
-     * on pool rows.
+     * An allowlist restricts the read to exactly those classes and
+     * ignores every other stored alias; the same list narrows the
+     * static bound. Without an allowlist every stored alias resolves
+     * and validates — an unknown type value fails fast. The read is
+     * always fresh: it never serves the `with()` cache, never composes
+     * the relation's filters, and pivot values ride along per query.
      *
      * @return Collection<TPool>
      * @throws \InvalidArgumentException
-     * @throws \LogicException In the direct direction — the parent side is one class there.
+     * @throws \LogicException
      */
     public function pool(): Collection
     {
@@ -290,8 +283,7 @@ class MorphToMany extends BelongsToMany
     }
 
     /**
-     * Whether this side's pivot columns carry the morph (type, key) pair
-     * — the pool read's precondition.
+     * Whether this side's pivot columns carry the morph (type, key) pair.
      *
      * @return bool
      */
@@ -336,8 +328,7 @@ class MorphToMany extends BelongsToMany
     }
 
     /**
-     * Validate one resolved morph alias into a model class-string — the
-     * pool's runtime backing for the static union.
+     * Validate one resolved morph alias into a model class-string.
      *
      * @param  string  $alias
      * @return class-string<TPool>
@@ -359,15 +350,14 @@ class MorphToMany extends BelongsToMany
             );
         }
 
-        // The runtime checks ARE the template's backing — the same inline
+        // The runtime checks back the template bound — the same inline
         // narrowing the MorphTo marker trick uses.
         /** @var class-string<TPool> */
         return $alias;
     }
 
     /**
-     * One type's pool query — the inverse join filtered to that type,
-     * with the pivot columns riding the select.
+     * Build one morph type's pool query.
      *
      * @param  class-string<TPool>  $class
      * @param  int|string  $parentKey

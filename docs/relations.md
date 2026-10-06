@@ -425,6 +425,33 @@ class Tag extends Model
 Every query filters the pivot's type column to the parent's class-string,
 and `attach()`/`sync()` stamp the alias onto every inserted row.
 
+The inverse side can also read the SHARED pool across every morph type —
+`pool()` resolves one query per type through the shared pivot columns,
+hydrating each row through its own model. Declare an allowlist to
+restrict the read to exactly those classes (every other stored alias is
+ignored, the way `morphTo`'s allowlist restricts resolution) and the
+same list narrows the static bound:
+
+```php
+class Tag extends Model
+{
+    /** @return MorphToMany<Post, Post|Video> pool(): Collection<Post|Video> */
+    public function postables(): MorphToMany
+    {
+        return $this->morphedByMany(Post::class, 'taggable',
+            poolTypes: [Post::class, Video::class]);
+    }
+}
+
+$tag->postables()->pool();        // every Post AND Video row this tag links
+$tag->postables()->get();         // unchanged — the single-typed Post read
+```
+
+Without an allowlist the pool resolves every distinct stored type (the
+honest `Model` bound), failing fast on a stored alias that is not a
+model class. `pool()` is a read, not a composition: it never serves the
+eager-loaded snapshot and ignores relation filters.
+
 ## Portability and semantics
 
 HasOne/HasMany/BelongsTo and the polymorphic family (MorphOne/MorphMany/

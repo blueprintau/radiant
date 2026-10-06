@@ -128,11 +128,10 @@ class BelongsToMany extends Relation
     }
 
     /**
-     * Resolve a caller-supplied pivot table name — a class-string derives
-     * its table name.
+     * Resolve a caller-supplied pivot table name.
      *
      * @param  string|null  $table
-     * @param  string  $role
+     * @param  string  $role  The caller's name for the table, used in error messages.
      * @return string|null Null passes the derivation duty back to the caller.
      * @throws \InvalidArgumentException
      */
