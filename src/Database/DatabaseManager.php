@@ -41,6 +41,7 @@ final class DatabaseManager
      */
     protected array $connectors = [
         'mysql' => \BlueprintAU\Radiant\Database\Connectors\MySqlConnector::class,
+        'mariadb' => \BlueprintAU\Radiant\Database\Connectors\MariaDbConnector::class,
         'sqlite' => \BlueprintAU\Radiant\Database\Connectors\SqliteConnector::class,
         'pgsql' => \BlueprintAU\Radiant\Database\Connectors\PostgresConnector::class,
         'csv' => \BlueprintAU\Radiant\Database\Connectors\CsvConnector::class,

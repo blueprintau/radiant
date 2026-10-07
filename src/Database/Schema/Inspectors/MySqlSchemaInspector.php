@@ -9,7 +9,7 @@ namespace BlueprintAU\Radiant\Database\Schema\Inspectors;
  *
  * @extends SchemaInspector<\BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar>
  */
-final class MySqlSchemaInspector extends SchemaInspector
+class MySqlSchemaInspector extends SchemaInspector
 {
     /**
      * The dialect's schema grammar (the factory hook).
@@ -137,12 +137,23 @@ final class MySqlSchemaInspector extends SchemaInspector
                 'nullable' => strtoupper((string) $row['is_nullable']) === 'YES',
                 // MySQL reports CURRENT_TIMESTAMP (and other literals) as
                 // strings; pass through as-is — the differ compares text.
-                'default' => $default,
+                'default' => $this->normalizeColumnDefault($default),
                 'primaryKey' => ((int) $row['is_primary']) === 1,
             ];
         }
 
         return $columns;
+    }
+
+    /**
+     * Normalize a live column default's dialect spelling.
+     *
+     * @param  mixed  $default
+     * @return mixed
+     */
+    protected function normalizeColumnDefault(mixed $default): mixed
+    {
+        return $default;
     }
 
     /**

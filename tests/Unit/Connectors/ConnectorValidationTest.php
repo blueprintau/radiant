@@ -462,8 +462,8 @@ final class ConnectorValidationTest extends TestCase
 
     /**
      * The DSN-field gate's null/empty arm — reachable only through
-     * reflection (the connectors are final and the drivers' own type
-     * checks fire first), so the gate is probed directly.
+     * reflection (the drivers' own type checks fire first), so the gate
+     * is probed directly.
      */
     public function testDsnFieldRejectsNull(): void
     {

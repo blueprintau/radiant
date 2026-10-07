@@ -15,8 +15,30 @@ use Override;
  *
  * @phpstan-import-type PdoOptions from \BlueprintAU\Radiant\Database\Connectors\SqlConnector
  */
-final class MySqlConnector extends SqlConnector
+class MySqlConnector extends SqlConnector
 {
+    /**
+     * The dialect's name in the connector's validation messages.
+     *
+     * @return string
+     */
+    protected function dialectLabel(): string
+    {
+        return 'MySQL';
+    }
+
+    /**
+     * The connection class this connector builds — the factory hook a
+     * dialect subclass overrides.
+     *
+     * @param  \PDO  $pdo
+     * @return MySqlConnection
+     */
+    protected function makeConnection(\Pdo $pdo): MySqlConnection
+    {
+        return new MySqlConnection($pdo);
+    }
+
     /**
      * Charsets MySQL accepts on `SET NAMES` — the allowlist the configured
      * charset must match.
@@ -42,7 +64,7 @@ final class MySqlConnector extends SqlConnector
         if (!is_string($charset) || $charset === ''
             || !in_array(strtolower($charset), self::ALLOWED_CHARSETS, true)) {
             throw new \InvalidArgumentException(
-                'MySQL "charset" must be one of: ' . implode(', ', self::ALLOWED_CHARSETS)
+                $this->dialectLabel() . ' "charset" must be one of: ' . implode(', ', self::ALLOWED_CHARSETS)
                 . '; got ' . (is_string($charset) ? "[{$charset}]" : get_debug_type($charset)) . '.'
             );
         }
@@ -90,7 +112,7 @@ final class MySqlConnector extends SqlConnector
         // connect() calls that skip the manager.
         if (!is_string($host) || !is_int($port) || !is_string($database)) {
             throw new \InvalidArgumentException(
-                'MySQL requires a string host, an integer port and a string database.'
+                $this->dialectLabel() . ' requires a string host, an integer port and a string database.'
             );
         }
 
@@ -109,7 +131,7 @@ final class MySqlConnector extends SqlConnector
         // (config-driven, so it can't be a static forced option).
         $pdo->exec("SET NAMES {$charset}");
 
-        return new MySqlConnection($pdo);
+        return $this->makeConnection($pdo);
     }
 
     /**
@@ -135,7 +157,7 @@ final class MySqlConnector extends SqlConnector
 
         if (!is_string($host) || $host === '') {
             throw new \InvalidArgumentException(
-                'MySQL requires a non-empty string "host"; got '
+                $this->dialectLabel() . ' requires a non-empty string "host"; got '
                 . ($host === null ? 'nothing' : get_debug_type($host))
                 . '.'
             );
@@ -143,7 +165,7 @@ final class MySqlConnector extends SqlConnector
 
         if (!is_int($port)) {
             throw new \InvalidArgumentException(
-                'MySQL requires an integer "port"; got '
+                $this->dialectLabel() . ' requires an integer "port"; got '
                 . ($port === null ? 'nothing' : get_debug_type($port))
                 . '.'
             );
@@ -151,7 +173,7 @@ final class MySqlConnector extends SqlConnector
 
         if (!is_string($database) || $database === '') {
             throw new \InvalidArgumentException(
-                'MySQL requires a non-empty string "database"; got '
+                $this->dialectLabel() . ' requires a non-empty string "database"; got '
                 . ($database === null ? 'nothing' : get_debug_type($database))
                 . '.'
             );

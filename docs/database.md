@@ -50,6 +50,7 @@ construction and fails fast with a message naming the problem.
 | Driver | Key | Required | Optional |
 | --- | --- | --- | --- |
 | MySQL | `mysql` | `host`, `port` (integer), `database` | `username`, `password`, `charset` (allowlisted), PDO `options` |
+| MariaDB | `mariadb` | `host`, `port` (integer), `database` | `username`, `password`, `charset` (allowlisted), PDO `options` |
 | SQLite | `sqlite` | `database` (non-empty path string) | PDO `options` |
 | Postgres | `pgsql` | `host`, `database` | `port` (integer, default 5432), `sslmode` (allowlisted), `username`, `password`, PDO `options` |
 | CSV | `csv` | `path` (non-empty string) | `readonly` boolean |
@@ -62,6 +63,23 @@ construction and fails fast with a message naming the problem.
 Custom backends register via `extendConnector('mydriver', MyConnector::class)`
 or `$manager->addConnection(...)`. The CSV backend is a first-class example —
 see [The CSV backend](csv-backend.md).
+
+### MariaDB
+
+MariaDB speaks the MySQL wire protocol and SQL surface, so the `'mariadb'`
+driver reuses the MySQL grammar — every query, DDL statement, savepoint
+and advisory lock is identical. It is its own driver key (not an alias)
+because the live-schema reader must adapt two MariaDB spellings:
+
+- `JSON` columns store as `LONGTEXT` — a declared `Json` column reads back
+  as `longtext`, which the MariaDB inspector maps onto `Json` so schema
+  sync converges instead of re-planning every Json column as a modify.
+- A current-timestamp default reports as `current_timestamp()` —
+  normalized to `CURRENT_TIMESTAMP` so an `Expression('CURRENT_TIMESTAMP')`
+  column converges on the first plan.
+
+The tested floor is MariaDB 11.4 LTS (caching_sha2_password auth). Older
+versions are untested.
 
 A custom connection can pre-flight queries instead of discovering an
 unsupported shape at execution time: `SqlFeature::usedBy($query)` reports

@@ -25,7 +25,7 @@ use Override;
  *
  * @extends SqlConnection<\BlueprintAU\Radiant\Database\Grammars\MySqlGrammar, \BlueprintAU\Radiant\Database\Schema\Grammars\MySqlSchemaGrammar, \BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector>
  */
-final class MySqlConnection extends SqlConnection
+class MySqlConnection extends SqlConnection
 {
     /**
      * The default query grammar for this connection.
