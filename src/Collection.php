@@ -9,15 +9,12 @@ use BlueprintAU\Collections\Collection as BaseCollection;
 /**
  * Model-aware subclass of the base {@see BaseCollection}.
  *
- * The base class is the external dependency (the ONLY one) — a pure array
- * wrapper with immutable transforms. Radiant adds model-shaped conveniences
- * (`find()`/`modelKeys()` need the primary key; `load()`/`fresh()` are the
- * relation-era hooks). Everything else
- * (map/filter/pluck/…) is inherited unchanged — Radiant never overrides the
- * base's semantics, it only adds model awareness.
+ * A collection is a list by default; `keyBy()`/`groupBy()` results are the
+ * keyed shape, carrying their key type as `TKey`.
  *
+ * @template TKey of array-key = int
  * @template TValue of Model
- * @extends BaseCollection<int, TValue>
+ * @extends BaseCollection<TKey, TValue>
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
  */
 final class Collection extends BaseCollection
@@ -29,11 +26,11 @@ final class Collection extends BaseCollection
      * pair-wise — so map ordering never matters.
      *
      * @param  KeyValue  $key
-     * @return Model|null
+     * @return TValue|null
      */
     public function find(int|string|null|array $key): ?Model
     {
-        /** @var Model|null */
+        /** @var TValue|null */
         return $this->first(fn (Model $model) => self::keyMatches($model->getKeyForRefresh(), $key));
     }
 
