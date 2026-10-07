@@ -14,9 +14,10 @@ use Override;
  *
  * MariaDB implements `JSON` as an alias for `LONGTEXT`, so a declared
  * Json column reads back as `longtext` — matched here to stop the differ
- * re-planning every Json column forever. MariaDB also renders
- * `current_timestamp()` (lowercase, with parens) where MySQL reports
- * `CURRENT_TIMESTAMP`; the default is normalized so an
+ * re-planning every Json column forever. MariaDB also retains integer
+ * display widths that MySQL 8 dropped (`bigint(20)`), stripped here, and
+ * renders `current_timestamp()` (lowercase, with parens) where MySQL
+ * reports `CURRENT_TIMESTAMP`; the default is normalized so an
  * `Expression('CURRENT_TIMESTAMP')` column converges on the first plan.
  *
  * @see \BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector
@@ -29,6 +30,22 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
      * @var list<string>
      */
     private const CURRENT_TIMESTAMP_SPELLINGS = ['current_timestamp()', 'now()'];
+
+    /**
+     * Normalize a live column type's MariaDB spelling.
+     *
+     * MariaDB retains integer display widths that MySQL 8 dropped
+     * (`bigint(20)` where MySQL reports `bigint`); the widths have no
+     * semantic effect, so they are stripped.
+     *
+     * @param  string  $type
+     * @return string
+     */
+    #[Override]
+    protected function normalizeColumnType(string $type): string
+    {
+        return preg_replace('/^(tinyint|smallint|mediumint|bigint|int)\(\d+\)/', '$1', $type) ?? $type;
+    }
 
     /**
      * Whether a live column's native type text matches the declared
@@ -52,6 +69,10 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
             return true;
         }
 
+        // MariaDB retains integer display widths MySQL 8 dropped — strip
+        // them so the comparison sees the bare type text.
+        $liveType = $this->normalizeColumnType(strtolower($liveType));
+
         return parent::columnTypeMatches($liveType, $declaredType, $declaredLength, $declaredPrecision, $declaredScale);
     }
 
@@ -67,7 +88,11 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
     #[Override]
     public function castSafety(string $liveType, ColumnType $desiredType): CastSafety
     {
-        if ($desiredType === ColumnType::Json && strtolower($liveType) === 'longtext') {
+        // The family comparisons see the same stripped text the differ
+        // read from the columns.
+        $liveType = $this->normalizeColumnType(strtolower($liveType));
+
+        if ($desiredType === ColumnType::Json && $liveType === 'longtext') {
             return CastSafety::Safe;
         }
 

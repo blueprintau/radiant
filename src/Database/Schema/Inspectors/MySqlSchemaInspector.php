@@ -133,7 +133,7 @@ class MySqlSchemaInspector extends SchemaInspector
 
             $columns[] = [
                 'name' => (string) $row['column_name'],
-                'type' => strtolower((string) $row['column_type']),
+                'type' => $this->normalizeColumnType(strtolower((string) $row['column_type'])),
                 'nullable' => strtoupper((string) $row['is_nullable']) === 'YES',
                 // MySQL reports CURRENT_TIMESTAMP (and other literals) as
                 // strings; pass through as-is — the differ compares text.
@@ -143,6 +143,17 @@ class MySqlSchemaInspector extends SchemaInspector
         }
 
         return $columns;
+    }
+
+    /**
+     * Normalize a live column type's dialect spelling.
+     *
+     * @param  string  $type
+     * @return string
+     */
+    protected function normalizeColumnType(string $type): string
+    {
+        return $type;
     }
 
     /**

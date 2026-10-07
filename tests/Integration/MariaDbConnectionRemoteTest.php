@@ -124,7 +124,9 @@ final class MariaDbConnectionRemoteTest extends IntegrationTestCase
         $liveTypes = array_column($live->columns, 'type');
         self::assertContains('longtext', $liveTypes, 'MariaDB stores JSON as LONGTEXT');
 
-        self::assertSame([], $synchronizer->plan([$desired]), 'a Json column must converge, never re-plan as a modify');
+        // Plan ONLY the table under test (dropTables off) — a leftover
+        // table in the shared schema would add an unrelated drop_table.
+        self::assertSame([], $synchronizer->plan([$desired], dropTables: false), 'a Json column must converge, never re-plan as a modify');
     }
 
     /**
@@ -141,6 +143,8 @@ final class MariaDbConnectionRemoteTest extends IntegrationTestCase
 
         $synchronizer = new \BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer($this->connection);
 
-        self::assertSame([], $synchronizer->plan([$desired]), 'a current-timestamp default must converge, never re-plan');
+        // Plan ONLY the table under test (dropTables off) — a leftover
+        // table in the shared schema would add an unrelated drop_table.
+        self::assertSame([], $synchronizer->plan([$desired], dropTables: false), 'a current-timestamp default must converge, never re-plan');
     }
 }

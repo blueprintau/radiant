@@ -29,6 +29,23 @@ final class MariaDbSchemaInspectorTest extends TestCase
     }
 
     /**
+     * MariaDB's legacy integer spellings match the declared logical
+     * types after the display-width strip.
+     */
+    public function testIntegerDisplayWidthsMatchDeclaredTypes(): void
+    {
+        self::assertTrue(
+            $this->inspector->columnTypeMatches('bigint(20)', ColumnType::BigInt, null),
+        );
+        self::assertTrue(
+            $this->inspector->columnTypeMatches('int(11)', ColumnType::Int, null),
+        );
+        self::assertFalse(
+            $this->inspector->columnTypeMatches('bigint(20)', ColumnType::Int, null),
+        );
+    }
+
+    /**
      * A declared Json column matches a live longtext — MariaDB stores
      * JSON as LONGTEXT.
      */
@@ -61,6 +78,50 @@ final class MariaDbSchemaInspectorTest extends TestCase
         self::assertTrue(
             $this->inspector->columnTypeMatches('json', ColumnType::Json, null),
         );
+    }
+
+    /**
+     * MariaDB's integer display widths are stripped — MySQL 8 reports
+     * bare `int`/`bigint`, MariaDB reports `int(11)`/`bigint(20)`, and
+     * the widths have no semantic effect.
+     *
+     * @return iterable<string, array{string, string}> The (raw, normalized) pairs.
+     */
+    public static function integerDisplayWidthsProvider(): iterable
+    {
+        yield 'bigint(20)' => ['bigint(20)', 'bigint'];
+        yield 'int(11)' => ['int(11)', 'int'];
+        yield 'tinyint(1)' => ['tinyint(1)', 'tinyint'];
+        yield 'smallint(5)' => ['smallint(5)', 'smallint'];
+        yield 'mediumint(9)' => ['mediumint(9)', 'mediumint'];
+    }
+
+    /**
+     * Every integer display width strips to the bare type.
+     *
+     * @param string $raw The MariaDB type text.
+     * @param string $expected The normalized type text.
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('integerDisplayWidthsProvider')]
+    public function testIntegerDisplayWidthsStrip(string $raw, string $expected): void
+    {
+        $method = new \ReflectionMethod(MariaDbSchemaInspector::class, 'normalizeColumnType');
+
+        self::assertSame($expected, $method->invoke($this->inspector, $raw));
+    }
+
+    /**
+     * Non-integer types pass through untouched — varchar lengths, decimal
+     * precision and datetime precision are semantic and must survive.
+     */
+    public function testNonIntegerTypesPassThrough(): void
+    {
+        $method = new \ReflectionMethod(MariaDbSchemaInspector::class, 'normalizeColumnType');
+
+        self::assertSame('varchar(100)', $method->invoke($this->inspector, 'varchar(100)'));
+        self::assertSame('decimal(10,2)', $method->invoke($this->inspector, 'decimal(10,2)'));
+        self::assertSame('datetime(3)', $method->invoke($this->inspector, 'datetime(3)'));
+        self::assertSame('bigint', $method->invoke($this->inspector, 'bigint'));
     }
 
     /**
