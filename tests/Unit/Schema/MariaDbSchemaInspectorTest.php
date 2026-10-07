@@ -91,9 +91,25 @@ final class MariaDbSchemaInspectorTest extends TestCase
     {
         yield 'bigint(20)' => ['bigint(20)', 'bigint'];
         yield 'int(11)' => ['int(11)', 'int'];
-        yield 'tinyint(1)' => ['tinyint(1)', 'tinyint'];
         yield 'smallint(5)' => ['smallint(5)', 'smallint'];
         yield 'mediumint(9)' => ['mediumint(9)', 'mediumint'];
+    }
+
+    /**
+     * `tinyint(1)` is NOT stripped — it is the Boolean rendering, not a
+     * display width, and the type comparison needs it verbatim.
+     */
+    public function testTinyintBooleanWidthSurvives(): void
+    {
+        $method = new \ReflectionMethod(MariaDbSchemaInspector::class, 'normalizeColumnType');
+
+        self::assertSame('tinyint(1)', $method->invoke($this->inspector, 'tinyint(1)'));
+        self::assertTrue(
+            $this->inspector->columnTypeMatches('tinyint(1)', ColumnType::Boolean, null),
+        );
+        self::assertFalse(
+            $this->inspector->columnTypeMatches('tinyint(1)', ColumnType::Int, null),
+        );
     }
 
     /**
@@ -122,6 +138,20 @@ final class MariaDbSchemaInspectorTest extends TestCase
         self::assertSame('decimal(10,2)', $method->invoke($this->inspector, 'decimal(10,2)'));
         self::assertSame('datetime(3)', $method->invoke($this->inspector, 'datetime(3)'));
         self::assertSame('bigint', $method->invoke($this->inspector, 'bigint'));
+    }
+
+    /**
+     * MariaDB reports the literal string 'NULL' for a nullable column
+     * with no default — normalized to the real null MySQL reports.
+     */
+    public function testNullLiteralDefaultNormalizesToNull(): void
+    {
+        $method = new \ReflectionMethod(MariaDbSchemaInspector::class, 'normalizeColumnDefault');
+
+        self::assertNull($method->invoke($this->inspector, 'NULL'));
+        self::assertNull($method->invoke($this->inspector, 'null'));
+        // A quoted NULL literal is a real string default — untouched.
+        self::assertSame("'NULL'", $method->invoke($this->inspector, "'NULL'"));
     }
 
     /**
@@ -197,7 +227,7 @@ final class MariaDbSchemaInspectorTest extends TestCase
 
     /**
      * Other defaults pass through untouched — only the spelling of the
-     * current-timestamp function is normalized.
+     * current-timestamp function and the NULL literal are normalized.
      */
     public function testOtherDefaultsPassThrough(): void
     {

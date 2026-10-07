@@ -10,15 +10,18 @@ use Override;
 
 /**
  * Reads the live schema on MariaDB — `information_schema`, as MySQL
- * reports it with two divergences.
+ * reports it with four divergences.
  *
  * MariaDB implements `JSON` as an alias for `LONGTEXT`, so a declared
  * Json column reads back as `longtext` — matched here to stop the differ
  * re-planning every Json column forever. MariaDB also retains integer
- * display widths that MySQL 8 dropped (`bigint(20)`), stripped here, and
+ * display widths that MySQL 8 dropped (`bigint(20)`), stripped here,
  * renders `current_timestamp()` (lowercase, with parens) where MySQL
- * reports `CURRENT_TIMESTAMP`; the default is normalized so an
- * `Expression('CURRENT_TIMESTAMP')` column converges on the first plan.
+ * reports `CURRENT_TIMESTAMP`, and reports the literal string `'NULL'`
+ * for a nullable column with no default where MySQL reports a real
+ * null — the default and type normalizations keep an
+ * `Expression('CURRENT_TIMESTAMP')` column and a nullable-no-default
+ * column converging on the first plan.
  *
  * @see \BlueprintAU\Radiant\Database\Schema\Inspectors\MySqlSchemaInspector
  */
@@ -35,8 +38,10 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
      * Normalize a live column type's MariaDB spelling.
      *
      * MariaDB retains integer display widths that MySQL 8 dropped
-     * (`bigint(20)` where MySQL reports `bigint`); the widths have no
-     * semantic effect, so they are stripped.
+     * (`bigint(20)` where MySQL reports `bigint`) — the widths have no
+     * semantic effect, so they are stripped. The exception is
+     * `tinyint(1)`: it IS the Boolean rendering, not a display width,
+     * and the type comparison needs it verbatim.
      *
      * @param  string  $type
      * @return string
@@ -44,6 +49,10 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
     #[Override]
     protected function normalizeColumnType(string $type): string
     {
+        if (strtolower($type) === 'tinyint(1)') {
+            return 'tinyint(1)';
+        }
+
         return preg_replace('/^(tinyint|smallint|mediumint|bigint|int)\(\d+\)/', '$1', $type) ?? $type;
     }
 
@@ -103,7 +112,9 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
      * Normalize a live column default's MariaDB spelling.
      *
      * MariaDB renders `current_timestamp()` (and `now()`) where MySQL
-     * reports `CURRENT_TIMESTAMP`.
+     * reports `CURRENT_TIMESTAMP`, and reports the literal string
+     * `'NULL'` for a nullable column with no default where MySQL reports
+     * a real null.
      *
      * @param  mixed  $default
      * @return mixed
@@ -111,6 +122,12 @@ final class MariaDbSchemaInspector extends MySqlSchemaInspector
     #[\Override]
     protected function normalizeColumnDefault(mixed $default): mixed
     {
+        // A nullable column with no default reports the literal string
+        // 'NULL' — normalize to the real null MySQL reports.
+        if (is_string($default) && strtoupper($default) === 'NULL') {
+            return null;
+        }
+
         if (!is_string($default)
             || !in_array(strtolower(trim($default)), self::CURRENT_TIMESTAMP_SPELLINGS, true)) {
             return $default;
