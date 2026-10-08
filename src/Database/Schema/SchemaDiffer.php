@@ -715,6 +715,7 @@ final class SchemaDiffer
      * scalar as-is, `NULL` for null, everything else through var_export.
      *
      * @param  mixed  $default
+     * @return string
      */
     private function renderDefault(mixed $default): string
     {
@@ -1225,6 +1226,7 @@ final class SchemaDiffer
      * the quoted list the grammar's CHECK carries.
      *
      * @param  array<string, mixed>  $column  The desired ColumnShape.
+     * @return string
      */
     private function enumValuesDetail(array $column): string
     {
