@@ -876,4 +876,169 @@ final class SchemaSyncTest extends DatabaseTestCase
         self::assertCount(1, $plan);
         self::assertSame(SchemaOperation::ModifyColumn, $plan[0]->operation);
     }
+
+    /**
+     * The ModifyColumn description carries the drift DETAIL: each
+     * modified column renders the facets that drifted — type, nullability,
+     * default — not just its name.
+     */
+    public function testModifyDescriptionShowsDriftDetail(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_modify_detail'))
+                ->id()
+                ->column(ColumnType::Int, 'priority', nullable: true)
+                ->column(ColumnType::String, 'name', length: 50, nullable: true, default: 'x'),
+        );
+
+        // Desired: type, nullability, and default all drift at once.
+        $desired = (new Blueprint('sync_modify_detail'))
+            ->id()
+            ->column(ColumnType::BigInt, 'priority')
+            ->column(ColumnType::String, 'name', length: 120, default: 'y');
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::ModifyColumn, $changes[0]->operation);
+
+        // SQLite stores bigint as `integer` and string as `varchar(n)`;
+        // both columns also tighten nullability (the `id` column diff
+        // aside, per-column detail is what the assertion targets).
+        self::assertStringContainsString(
+            '[priority (int -> integer, nullable -> not null), name',
+            $changes[0]->description,
+        );
+        self::assertStringContainsString(
+            "name (varchar(50) -> varchar(120), nullable -> not null, default changed: 'x' -> y)",
+            $changes[0]->description,
+        );
+        self::assertStringContainsString('DESTRUCTIVE', $changes[0]->description);
+    }
+
+    /**
+     * An enum column whose values change describes the drift as a values
+     * change with the new list.
+     */
+    public function testModifyDescriptionShowsEnumValuesDrift(): void
+    {
+        // The live table carries the enum's inline CHECK as a NAMED
+        // constraint (the SQLite parser reports an unnamed one with an
+        // empty name, which the CHECK advisory diff cannot match), so
+        // the plan is exactly the one modify.
+        $this->connection->statement(
+            'CREATE TABLE sync_enum_drift (id INTEGER PRIMARY KEY AUTOINCREMENT, role varchar(6) NOT NULL,'
+            . " CONSTRAINT sync_enum_drift_role_check CHECK (role IN ('admin', 'member', 'owner')))",
+        );
+
+        $desired = (new Blueprint('sync_enum_drift'))
+            ->id()
+            ->enum('role', ['admin', 'member', 'owner'])
+            ->check("role IN ('admin', 'member', 'owner')");
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::ModifyColumn, $changes[0]->operation);
+
+        // The desired enum's values list is the drift facet; the sizing
+        // change rides with it (the length derives from the longest value
+        // — here it stays varchar(11) on both sides because the live
+        // named CHECK carries the wider list).
+        self::assertStringContainsString(
+            "role (enum values changed: ['admin', 'member', 'owner'])]",
+            $changes[0]->description,
+        );
+        self::assertStringContainsString("id (nullable -> not null)", $changes[0]->description);
+    }
+
+    /**
+     * A default-only modify stays NON-destructive, and the description
+     * shows the old → new default.
+     */
+    public function testModifyDescriptionShowsDefaultOnlyDrift(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_default_detail'))
+                ->id()
+                ->column(ColumnType::Int, 'priority', default: 0),
+        );
+
+        $desired = (new Blueprint('sync_default_detail'))
+            ->id()
+            ->column(ColumnType::Int, 'priority', default: 7);
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertFalse($changes[0]->destructive, 'a default-only change cannot lose data');
+        self::assertStringContainsString(
+            '[priority (default changed: 0 -> 7)]',
+            $changes[0]->description,
+        );
+    }
+
+    /**
+     * The AddForeignKey description names the referencing columns, the
+     * referenced table AND columns, and the declared actions — the dry
+     * run shows what the constraint will actually do.
+     */
+    public function testAddForeignKeyDescriptionShowsDetail(): void
+    {
+        $this->createTables(
+            (new Blueprint('fk_detail_teams'))->id(),
+        );
+
+        $desired = (new Blueprint('fk_detail_users'))
+            ->id()
+            ->column(ColumnType::BigInt, 'team_id', nullable: true)
+            ->foreignKey(['team_id'], 'fk_detail_teams', ['id'], onDelete: 'cascade', onUpdate: 'set null');
+
+        $this->connection->create(
+            (new Blueprint('fk_detail_users'))
+                ->id()
+                ->column(ColumnType::BigInt, 'team_id', nullable: true),
+        );
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+
+        $fk = array_values(array_filter(
+            $changes,
+            fn (\BlueprintAU\Radiant\Database\Schema\SchemaChange $c) => $c->operation === SchemaOperation::AddForeignKey,
+        ));
+        self::assertCount(1, $fk);
+        self::assertStringContainsString(
+            '[team_id] -> [fk_detail_teams] ([id]) on delete CASCADE on update SET NULL',
+            str_replace(')) on delete', ') on delete', $fk[0]->description),
+        );
+    }
+
+    /**
+     * The AlterIndexes description shows WHICH option drifted and the
+     * before → after values.
+     */
+    public function testAlterIndexesDescriptionShowsOptionDetail(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_index_detail'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->index('sync_index_detail_email_unique', ['email'], unique: true),
+        );
+
+        // Desired: same index with a partial predicate.
+        $desired = (new Blueprint('sync_index_detail'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->index('sync_index_detail_email_unique', ['email'], unique: true, where: 'email IS NOT NULL');
+
+        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::AlterIndexes, $changes[0]->operation);
+        self::assertStringContainsString(
+            "[sync_index_detail_email_unique (where: none -> email IS NOT NULL)]",
+            $changes[0]->description,
+        );
+    }
 }

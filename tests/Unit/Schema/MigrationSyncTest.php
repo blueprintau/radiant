@@ -384,8 +384,8 @@ final class MigrationSyncTest extends DatabaseTestCase
         self::assertSame(SchemaOperation::ModifyColumn, $changes[0]->operation);
         // The change's blueprint carries the FULL desired column set (the
         // SQLite rebuild renders the whole table); the description names
-        // the modified subset.
-        self::assertStringContainsString('[name]', $changes[0]->description);
+        // the modified subset with its drift detail.
+        self::assertStringContainsString('[name (varchar(50) -> varchar(120))]', $changes[0]->description);
 
         $this->connection->apply($changes[0]);
 
@@ -753,7 +753,7 @@ final class MigrationSyncTest extends DatabaseTestCase
 
         self::assertCount(1, $changes);
         self::assertSame(SchemaOperation::ModifyColumn, $changes[0]->operation);
-        self::assertStringContainsString('[commentable_id]', $changes[0]->description);
+        self::assertStringContainsString('[commentable_id (integer -> text)]', $changes[0]->description);
 
         $this->connection->apply($changes[0]);
 

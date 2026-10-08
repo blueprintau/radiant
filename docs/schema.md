@@ -159,7 +159,13 @@ Each returned `SchemaChange` carries the table, the operation
 `RenameTable`/`RenameColumn`/`ModifyColumn`/`AddForeignKey`/
 `DropForeignKey`/`AddCheck`/`DropCheck`), a `destructive` flag (anything
 that can lose data), and a human-readable `description` for dry-run
-output. Changes are ordered **creates → renames → alters → drops**;
+output. Modify and index-drift descriptions carry the drift **detail** —
+per column, the facets that changed with old → new values (type,
+nullability, default, enum values), e.g.
+`modify column(s) on [users]: [age (int -> bigint), status (nullable -> not null), role (enum values changed: ['admin', 'member'])]`;
+per index, the option that changed (partial predicate / `NULLS NOT
+DISTINCT`), e.g. `rebuild [idx (where: none -> 'email IS NOT NULL')]`.
+Changes are ordered **creates → renames → alters → drops**;
 creates are **dependency-ordered** (referenced tables first — `posts`
 with an FK to `users` is created after `users` even when declared
 first), and drops are **reverse-dependency-ordered** (children before

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Database\Schema;
 
+use BlueprintAU\Radiant\Database\Schema\Enums\CastSafety;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\Inspectors\LiveTable;
@@ -471,6 +472,17 @@ final class SchemaDiffer
         $drops = [];
         $modifications = [];
 
+        // The drift DETAIL rides the detection pass: the facets each
+        // modified column drifts by are rendered here, while the
+        // live/desired pair is in hand — modifyChange() never re-runs
+        // the tests. Keys are the modification names (the `to` side for
+        // renamed columns); values are the rendered facet strings.
+        // Destructiveness is classified in the same pass: nullability
+        // tightening and cast risk are exactly the arms driftDetail()
+        // and castSafety() already know about.
+        $details = [];
+        $destructive = false;
+
         foreach ($desiredColumns as $name => $column) {
             if (!isset($liveColumns[$name])) {
                 $additions[] = $name;
@@ -481,8 +493,37 @@ final class SchemaDiffer
             // facets. Type via the dialect's round-trip mapping; nullability
             // and default directly. An enum column's inline CHECK is part
             // of its definition — a values change is content drift.
-            if ($this->columnDrifts($liveColumns[$name], $column) || !$this->enumCheckMatches($table, $column, $live)) {
+            $detail = $this->driftDetail($liveColumns[$name], $column);
+
+            if (!$this->enumCheckMatches($table, $column, $live)) {
+                $detail[] = sprintf('enum values changed: %s', $this->enumValuesDetail($column));
+            }
+
+            if ($detail !== []) {
                 $modifications[] = $name;
+                $details[$name] = $detail;
+            }
+
+            if ($column['nullable'] === false && $liveColumns[$name]['nullable'] === true) {
+                $destructive = true; // nullability tightened.
+            }
+
+            // A type change must be a cast the dialect can perform: fail
+            // fast on an impossible one, flag a data-dependent one.
+            $safety = $this->inspector->castSafety($liveColumns[$name]['type'], $column['type']);
+
+            if ($safety === CastSafety::Uncastable) {
+                throw new \LogicException(sprintf(
+                    'Cannot modify [%s].[%s]: the live type [%s] cannot be cast to [%s].',
+                    $table,
+                    $name,
+                    $liveColumns[$name]['type'],
+                    $column['type']->value,
+                ));
+            }
+
+            if ($safety === CastSafety::Risky) {
+                $destructive = true; // the cast may lose data or fail on some values.
             }
         }
 
@@ -498,7 +539,10 @@ final class SchemaDiffer
 
         // Renamed columns: the desired `to` shape is compared against the
         // live `from` shape — a rename + shape change sequences
-        // RenameColumn (first) then ModifyColumn.
+        // RenameColumn (first) then ModifyColumn. Same single-pass detail
+        // rendering as above (no enum arm here: the rename carries the
+        // desired shape, and its CHECK is handled by the plain-name pass
+        // when the desired column is not also renamed away).
         foreach ($renamedDesired as $to => $column) {
             $from = array_search($to, $renames, true);
 
@@ -506,8 +550,35 @@ final class SchemaDiffer
                 continue;
             }
 
-            if ($this->columnDrifts($liveColumns[$from], $column)) {
+            $detail = $this->driftDetail($liveColumns[$from], $column);
+
+            if (!$this->enumCheckMatches($table, $column, $live)) {
+                $detail[] = sprintf('enum values changed: %s', $this->enumValuesDetail($column));
+            }
+
+            if ($detail !== []) {
                 $modifications[] = $to;
+                $details[$to] = $detail;
+            }
+
+            if ($column['nullable'] === false && $liveColumns[$from]['nullable'] === true) {
+                $destructive = true; // nullability tightened.
+            }
+
+            $safety = $this->inspector->castSafety($liveColumns[$from]['type'], $column['type']);
+
+            if ($safety === CastSafety::Uncastable) {
+                throw new \LogicException(sprintf(
+                    'Cannot modify [%s].[%s]: the live type [%s] cannot be cast to [%s].',
+                    $table,
+                    $to,
+                    $liveColumns[$from]['type'],
+                    $column['type']->value,
+                ));
+            }
+
+            if ($safety === CastSafety::Risky) {
+                $destructive = true; // the cast may lose data or fail on some values.
             }
         }
 
@@ -533,7 +604,7 @@ final class SchemaDiffer
         }
 
         if ($modifications !== []) {
-            $changes[] = $this->modifyChange($table, $blueprint, $modifications, $renames, $liveColumns);
+            $changes[] = $this->modifyChange($table, $blueprint, $modifications, $details, $destructive);
         }
 
         return $changes;
@@ -589,14 +660,18 @@ final class SchemaDiffer
     }
 
     /**
-     * Determine whether a live column's type, nullability, or default drifts from the declared shape.
+     * The human-readable facets a live column drifts from the declared
+     * shape — the same tests the detection pass classifies, rendered:
+     * type (`live -> declared native`), nullability, default, enum values.
      *
      * @param  array<string, mixed>  $liveColumn
      * @param  array<string, mixed>  $column
-     * @return bool
+     * @return list<string>
      */
-    private function columnDrifts(array $liveColumn, array $column): bool
+    private function driftDetail(array $liveColumn, array $column): array
     {
+        $detail = [];
+
         $typeMatches = $this->inspector->columnTypeMatches(
             $liveColumn['type'],
             $column['type'],
@@ -605,9 +680,57 @@ final class SchemaDiffer
             $column['scale'] ?? null,
         );
 
-        return !$typeMatches
-            || $liveColumn['nullable'] !== $column['nullable']
-            || !$this->defaultsMatch($liveColumn['default'], $column['default']);
+        if (!$typeMatches) {
+            $detail[] = sprintf(
+                '%s -> %s',
+                (string) $liveColumn['type'],
+                $this->inspector->schemaGrammar->type(
+                    $column['type'],
+                    $column['length'],
+                    $column['precision'],
+                    $column['scale'] ?? null,
+                ),
+            );
+        }
+
+        if ($liveColumn['nullable'] !== $column['nullable']) {
+            $detail[] = $column['nullable'] ? 'not null -> nullable' : 'nullable -> not null';
+        }
+
+        if (!$this->defaultsMatch($liveColumn['default'], $column['default'])) {
+            $detail[] = sprintf(
+                'default changed: %s -> %s',
+                $liveColumn['default'] === null || $liveColumn['default'] === false
+                    ? 'NULL'
+                    : (string) $liveColumn['default'],
+                $this->renderDefault($column['default']),
+            );
+        }
+
+        return $detail;
+    }
+
+    /**
+     * Render a declared column default for a description — a plain
+     * scalar as-is, `NULL` for null, everything else through var_export.
+     *
+     * @param  mixed  $default
+     */
+    private function renderDefault(mixed $default): string
+    {
+        if ($default === null) {
+            return 'NULL';
+        }
+
+        if (is_bool($default)) {
+            return $default ? 'true' : 'false';
+        }
+
+        if (is_scalar($default)) {
+            return (string) $default;
+        }
+
+        return var_export($default, true);
     }
 
     /**
@@ -703,77 +826,37 @@ final class SchemaDiffer
     }
 
     /**
-     * Build the ModifyColumn change, classifying destructiveness from nullability tightening.
+     * Build the ModifyColumn change from the detection pass's findings.
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint  The full desired blueprint carried on the change.
      * @param  list<string>  $modifications  The drifted column names (the subject).
-     * @param  array<string, string>  $renames
-     * @param  array<string, array<string, mixed>>  $liveColumns
+     * @param  array<string, list<string>>  $details  The rendered drift facets per modified column,
+     *        computed in the detection pass ({@see diffTable}) — keys match $modifications.
+     * @param  bool  $destructive  Classified in the detection pass: nullability tightened or a
+     *        data-dependent cast.
      * @return SchemaChange
      */
-    private function modifyChange(string $table, Blueprint $blueprint, array $modifications, array $renames, array $liveColumns): SchemaChange
+    private function modifyChange(string $table, Blueprint $blueprint, array $modifications, array $details, bool $destructive): SchemaChange
     {
-        // Destructive when the change tightens nullability (existing rows
-        // may violate the new shape); non-destructive for a default-only
-        // change.
-        $modifyDestructive = false;
-
-        $desiredByName = [];
-
-        foreach ($blueprint->getColumns() as $column) {
-            $desiredByName[$column['name']] = $column;
-        }
+        $detailed = [];
 
         foreach ($modifications as $name) {
-            $column = $desiredByName[$name] ?? null;
+            $detail = $details[$name] ?? [];
 
-            if ($column === null) {
-                continue;
-            }
-
-            // A renamed column's live shape is the FROM column's (the
-            // rename has not applied yet at diff time).
-            $liveName = array_search($name, $renames, true) ?: $name;
-            $liveColumn = $liveColumns[$liveName] ?? null;
-
-            if ($liveColumn === null) {
-                continue;
-            }
-
-            if ($column['nullable'] === false && $liveColumn['nullable'] === true) {
-                $modifyDestructive = true; // nullability tightened.
-            }
-
-            // A type change must be a cast the dialect can perform: fail
-            // fast on an impossible one, flag a data-dependent one.
-            $safety = $this->inspector->castSafety($liveColumn['type'], $column['type']);
-
-            if ($safety === \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Uncastable) {
-                throw new \LogicException(sprintf(
-                    'Cannot modify [%s].[%s]: the live type [%s] cannot be cast to [%s].',
-                    $table,
-                    $name,
-                    $liveColumn['type'],
-                    $column['type']->value,
-                ));
-            }
-
-            if ($safety === \BlueprintAU\Radiant\Database\Schema\Enums\CastSafety::Risky) {
-                $modifyDestructive = true; // the cast may lose data or fail on some values.
-            }
+            $detailed[] = $detail === [] ? $name : sprintf('%s (%s)', $name, implode(', ', $detail));
         }
 
         return new SchemaChange(
             $table,
             SchemaOperation::ModifyColumn,
             $blueprint,
-            $modifyDestructive,
+            $destructive,
             sprintf(
                 'modify column(s) on [%s]: [%s]%s',
                 $table,
-                implode(', ', $modifications),
-                $modifyDestructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
+                implode(', ', $detailed),
+                $destructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
             ),
             false,
             null,
@@ -928,16 +1011,23 @@ final class SchemaDiffer
             // the FK add routes through the table rebuild (which renders
             // the whole desired schema); the in-place dialects read the
             // FK from the blueprint's first entry.
+            $actions = array_filter([
+                $desiredFk['onDelete'] === null ? null : "on delete {$desiredFk['onDelete']->value}",
+                $desiredFk['onUpdate'] === null ? null : "on update {$desiredFk['onUpdate']->value}",
+            ]);
+
             $changes[] = new SchemaChange(
                 $table,
                 SchemaOperation::AddForeignKey,
                 $blueprint,
                 false,
                 sprintf(
-                    'add foreign key on [%s] ([%s] -> [%s])',
+                    'add foreign key on [%s] ([%s] -> [%s] ([%s]))%s',
                     $table,
                     implode(', ', $desiredFk['columns']),
                     (string) $desiredFk['references'][0],
+                    implode(', ', array_slice($desiredFk['references'], 1)),
+                    $actions === [] ? '' : ' ' . implode(' ', $actions),
                 ),
             );
         }
@@ -1131,6 +1221,22 @@ final class SchemaDiffer
     }
 
     /**
+     * Render a drifted enum column's declared values for a description —
+     * the quoted list the grammar's CHECK carries.
+     *
+     * @param  array<string, mixed>  $column  The desired ColumnShape.
+     */
+    private function enumValuesDetail(array $column): string
+    {
+        $values = $column['values'] ?? [];
+
+        return '[' . implode(', ', array_map(
+            fn (string $value) => "'" . str_replace("'", "''", $value) . "'",
+            $values,
+        )) . ']';
+    }
+
+    /**
      * Diff one table's declared indexes against the live ones — option
      * drift only.
      *
@@ -1154,7 +1260,7 @@ final class SchemaDiffer
         }
 
         $rebuild = new Blueprint($table);
-        $drifted = [];
+        $detailed = [];
 
         foreach ($blueprint->getIndexes() as $index) {
             $name = $index['name'];
@@ -1172,17 +1278,38 @@ final class SchemaDiffer
             }
 
             $rebuild = $rebuild->index($name, $index['columns'], unique: $index['unique'], where: $index['where'], nullsNotDistinct: $index['nullsNotDistinct']);
-            $drifted[] = $name;
+
+            // WHICH option drifted and from what to what — rendered while
+            // the live/desired pair is in hand.
+            $options = [];
+
+            if (!$whereMatches) {
+                $options[] = sprintf(
+                    'where: %s -> %s',
+                    $liveIndex['where'] ?? 'none',
+                    $index['where'] ?? 'none',
+                );
+            }
+
+            if (!$nullsMatch) {
+                $options[] = sprintf(
+                    'nulls not distinct: %s -> %s',
+                    $liveIndex['nullsNotDistinct'] ? 'on' : 'off',
+                    $index['nullsNotDistinct'] ? 'on' : 'off',
+                );
+            }
+
+            $detailed[] = sprintf('%s (%s)', $name, implode('; ', $options));
         }
 
-        if ($drifted === []) {
+        if ($detailed === []) {
             return null;
         }
 
         $description = sprintf(
             'alter indexes on [%s]: rebuild [%s] — index options drifted (partial predicate / NULLS NOT DISTINCT)',
             $table,
-            implode(', ', $drifted),
+            implode(', ', $detailed),
         );
 
         return new SchemaChange($table, SchemaOperation::AlterIndexes, $rebuild, false, $description);
