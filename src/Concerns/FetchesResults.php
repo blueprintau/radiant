@@ -41,7 +41,7 @@ trait FetchesResults
     /**
      * The eagerly-loaded result — the row reads' cache path.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     abstract protected function eagerCache(): Collection;
 

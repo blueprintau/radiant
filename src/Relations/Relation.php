@@ -176,7 +176,7 @@ abstract class Relation
     /**
      * The eagerly-loaded result as a collection.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     protected function eagerCache(): Collection
     {
@@ -237,7 +237,7 @@ abstract class Relation
      * Distribute eagerly-loaded results onto their parents.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<TRelated>  $results
+     * @param  Collection<int, TRelated>  $results
      * @param  string  $name
      * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void
@@ -358,7 +358,7 @@ abstract class Relation
      * bypass the cache and always run the query.
      *
      * @param  bool  $fresh  Bypass the eagerly-loaded result and run the query.
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     final public function get(bool $fresh = false): Collection
     {
@@ -372,24 +372,24 @@ abstract class Relation
     /**
      * Wrap a cached relation value into the collection shape.
      *
-     * @param  Model|Collection<Model>|null  $value
-     * @return Collection<TRelated>
+     * @param  Model|Collection<int, Model>|null  $value
+     * @return Collection<int, TRelated>
      */
     private function wrapCached(Model|Collection|null $value): Collection
     {
         if ($value instanceof Model) {
-            /** @var Collection<TRelated> */
+            /** @var Collection<int, TRelated> */
             return Collection::make([$value]);
         }
 
-        /** @var Collection<TRelated> */
+        /** @var Collection<int, TRelated> */
         return $value ?? Collection::make([]);
     }
 
     /**
      * Run the query and return the related models.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     protected function executeResults(): Collection
     {

@@ -67,7 +67,7 @@ abstract class Model
     /**
      * Loaded relation results, keyed by relation name.
      *
-     * @var array<string, Model|Collection<Model>|null>
+     * @var array<string, Model|Collection<int, Model>|null>
      */
     protected array $relations = [];
 
@@ -218,7 +218,7 @@ abstract class Model
     /**
      * Get every model in the table.
      *
-     * @return Collection<static>
+     * @return Collection<int, static>
      */
     final public static function all(): Collection
     {
@@ -2047,7 +2047,7 @@ abstract class Model
      * Cache a relation's loaded result on the instance.
      *
      * @param  string  $name
-     * @param  Model|Collection<Model>|null  $value
+     * @param  Model|Collection<int, Model>|null  $value
      * @return static
      */
     final public function setRelation(string $name, Model|Collection|null $value): static
@@ -2061,7 +2061,7 @@ abstract class Model
      * A loaded relation's cached result — the loader's read path.
      *
      * @param  string  $name
-     * @return Model|Collection<Model>|null
+     * @return Model|Collection<int, Model>|null
      */
     final public function cachedRelation(string $name): Model|Collection|null
     {

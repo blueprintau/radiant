@@ -12,8 +12,8 @@ use BlueprintAU\Collections\Collection as BaseCollection;
  * A collection is a list by default; `keyBy()`/`groupBy()` results are the
  * keyed shape, carrying their key type as `TKey`.
  *
+ * @template TKey of array-key
  * @template TValue of Model
- * @template TKey of array-key = int
  * @extends BaseCollection<TKey, TValue>
  * @phpstan-import-type KeyValue from \BlueprintAU\Radiant\Model
  */

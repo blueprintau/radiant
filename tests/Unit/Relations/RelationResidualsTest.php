@@ -313,7 +313,7 @@ final class RelationResidualsTest extends DatabaseTestCase
              * Unused — executeResults() is the path under test.
              *
              * @param  list<\BlueprintAU\Radiant\Model>  $parents
-             * @param  Collection<\BlueprintAU\Radiant\Model>  $results
+             * @param  Collection<int, \BlueprintAU\Radiant\Model>  $results
              * @param  string  $name
              * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
              * @return void
@@ -408,7 +408,7 @@ final class RelationResidualsTest extends DatabaseTestCase
         /**
          * A sparse list reindexes to 0-based — the array_values contract.
          * 
-         * @var Collection<\BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost> $reindexed
+         * @var Collection<int, \BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\RelPost> $reindexed
          */
         $reindexed = EagerResult::listToCollection([5 => $firstPost]);
         self::assertCount(1, $reindexed);

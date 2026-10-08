@@ -207,7 +207,17 @@ final class DisallowNarrowUnionArgumentsRule implements Rule
     private function resolveAcceptor(CallLike $call, Scope $scope): ?ParametersAcceptor
     {
         if ($call instanceof MethodCall && $call->name instanceof Identifier) {
-            $method = $scope->getType($call->var)->getMethod($call->name->toString(), $scope);
+            $name = $call->name->toString();
+            $receiver = $scope->getType($call->var);
+
+            // Scalar receivers (a generic TKey, a bare int) have no method
+            // surface — checking prevents a reflection fatal, not a false
+            // negative, since a scalar can never satisfy a union contract.
+            if (!$receiver->hasMethod($name)->yes()) {
+                return null;
+            }
+
+            $method = $receiver->getMethod($name, $scope);
 
             return $this->singleVariant($method->getVariants());
         }

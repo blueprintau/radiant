@@ -24,7 +24,7 @@ final class MorphMany extends MorphOneOrMany
     /**
      * Run the constrained query.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -39,7 +39,7 @@ final class MorphMany extends MorphOneOrMany
      * relation is loaded either way.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<TRelated>  $results
+     * @param  Collection<int, TRelated>  $results
      * @param  string  $name
      * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void
@@ -56,9 +56,9 @@ final class MorphMany extends MorphOneOrMany
         foreach ($parents as $parent) {
             $key = self::serializeKey($parent->attribute($this->getLocalKey()));
             // The bag's items came off $results (TRelated) — every one IS
-            // a Model; setRelation accepts Collection<Model> and the item
+            // a Model; setRelation accepts Collection<int, Model> and the item
             // template is not covariant.
-            /** @var Collection<Model> $bag */
+            /** @var Collection<int, Model> $bag */
             $bag = Collection::make($grouped[$key] ?? []);
             $parent->setRelation($name, $bag);
         }

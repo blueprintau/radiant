@@ -26,7 +26,7 @@ final class EagerResult
     /**
      * The loaded related models, in query order.
      *
-     * @var Collection<TModel>
+     * @var Collection<int, TModel>
      */
     public readonly Collection $models;
 
@@ -43,7 +43,7 @@ final class EagerResult
     public readonly ?array $parentKeys;
 
     /**
-     * @param  Collection<TModel>  $models
+     * @param  Collection<int, TModel>  $models
      * @param  list<int|string|null|list<int|string|null>>|null  $parentKeys  The per-row parent keys, or null.
      */
     public function __construct(Collection $models, ?array $parentKeys = null)
@@ -71,7 +71,7 @@ final class EagerResult
      *
      * @template TRelatedModel of \BlueprintAU\Radiant\Model
      *
-     * @param  Collection<TRelatedModel>  $models
+     * @param  Collection<int, TRelatedModel>  $models
      * @return self<TRelatedModel>
      */
     public static function fromCollection(Collection $models): self
@@ -85,7 +85,7 @@ final class EagerResult
      * @template TRelatedModel of \BlueprintAU\Radiant\Model
      *
      * @param  list<TRelatedModel>|array<int,TRelatedModel>  $models
-     * @return Collection<TRelatedModel>
+     * @return Collection<int, TRelatedModel>
      *
      * @internal Construction detail of the eager-load path; not public API.
      */

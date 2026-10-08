@@ -43,7 +43,7 @@ final class MorphOne extends MorphOneOrMany
     /**
      * Run the constrained query and keep only the first match.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -75,7 +75,7 @@ final class MorphOne extends MorphOneOrMany
      * Distribute eager results onto parents — first match per FK value.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<TRelated>  $results
+     * @param  Collection<int, TRelated>  $results
      * @param  string  $name
      * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void

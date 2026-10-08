@@ -101,7 +101,7 @@ final class BelongsTo extends Relation
     /**
      * Run the constrained query — a single model or none.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -186,7 +186,7 @@ final class BelongsTo extends Relation
      * Distribute eager results onto parents by FK value.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<TRelated>  $results
+     * @param  Collection<int, TRelated>  $results
      * @param  string  $name
      * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys  Unused.
      * @return void

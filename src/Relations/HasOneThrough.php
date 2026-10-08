@@ -42,7 +42,7 @@ final class HasOneThrough extends HasManyThrough
     /**
      * Run the constrained query and keep only the first match.
      *
-     * @return Collection<TRelated>
+     * @return Collection<int, TRelated>
      */
     #[\Override]
     protected function executeResults(): Collection
@@ -73,7 +73,7 @@ final class HasOneThrough extends HasManyThrough
      * Distribute eager results — first match per parent key.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<TRelated>  $results
+     * @param  Collection<int, TRelated>  $results
      * @param  string  $name
      * @param  list<int|string|null|list<int|string|null>>|null  $eagerParentKeys
      * @return void

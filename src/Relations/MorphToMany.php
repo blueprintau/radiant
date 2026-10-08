@@ -251,7 +251,7 @@ class MorphToMany extends BelongsToMany
      * always fresh: it never serves the `with()` cache, never composes
      * the relation's filters, and pivot values ride along per query.
      *
-     * @return Collection<TPool>
+     * @return Collection<int, TPool>
      * @throws \InvalidArgumentException
      * @throws \LogicException
      */

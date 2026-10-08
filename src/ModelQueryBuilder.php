@@ -385,7 +385,7 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * @template TLoaded of Model
      *
-     * @param  Collection<TLoaded>  $models
+     * @param  Collection<int, TLoaded>  $models
      * @return void
      */
     protected function eagerLoadRelations(Collection $models): void
@@ -400,7 +400,7 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * @template TLoaded of Model
      *
-     * @param  Collection<TLoaded>  $models
+     * @param  Collection<int, TLoaded>  $models
      * @param  string  $path
      * @return void
      */
@@ -501,7 +501,9 @@ final class ModelQueryBuilder extends QueryBuilder
                 // loads as an EMPTY collection. The relation's cardinality
                 // decides — a probe match against an empty result set
                 // keeps the shapes honest without special-casing names.
-                $relation->match([$parent], Collection::make([]), $name, []);
+                $empty = Collection::make([]);
+
+                $relation->match([$parent], $empty, $name, []);
             }
 
             return;
@@ -882,7 +884,7 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Run the query and hydrate every row into a model.
      *
-     * @return Collection<TModel>
+     * @return Collection<int, TModel>
      *
      * @phpstan-ignore method.childReturnType, generics.variance
      */
@@ -949,7 +951,9 @@ final class ModelQueryBuilder extends QueryBuilder
 
         // Eager loads apply to single-model reads too.
         if ($this->eagerLoad !== []) {
-            $this->eagerLoadRelations(Collection::make([$model]));
+            $single = Collection::make([$model]);
+
+            $this->eagerLoadRelations($single);
         }
 
         return $model;
@@ -1026,7 +1030,9 @@ final class ModelQueryBuilder extends QueryBuilder
 
         // Eager loads apply to single-model reads too — same tail as first().
         if ($this->eagerLoad !== []) {
-            $this->eagerLoadRelations(Collection::make([$model]));
+            $single = Collection::make([$model]);
+
+            $this->eagerLoadRelations($single);
         }
 
         return $model;

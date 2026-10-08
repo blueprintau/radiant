@@ -303,6 +303,7 @@ final class MorphTo extends Relation
             $byAlias[$alias][self::serializeKey($fk)] = true;
         }
 
+        /** @var list<Model> $models */
         $models = [];
         $pairs = [];
 
@@ -325,14 +326,16 @@ final class MorphTo extends Relation
             }
         }
 
-        return new EagerResult(Collection::make($models), $pairs);
+        $collection = Collection::make($models);
+
+        return new EagerResult($collection, $pairs);
     }
 
     /**
      * Distribute eager results onto parents by (alias, key) pair.
      *
      * @param  list<Model>  $parents
-     * @param  Collection<Model>  $results
+     * @param  Collection<int, Model>  $results
      * @param  string  $name
      * @param  list<array{string, string}>|null  $eagerParentKeys
      * @return void
@@ -378,7 +381,7 @@ final class MorphTo extends Relation
     /**
      * Run the constrained query against the parent's resolved type.
      *
-     * @return Collection<Model>
+     * @return Collection<int, Model>
      */
     #[\Override]
     protected function executeResults(): Collection

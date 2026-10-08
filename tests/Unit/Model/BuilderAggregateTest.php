@@ -586,7 +586,7 @@ final class BuilderAggregateTest extends DatabaseTestCase
 
         // The nested path walks the cached posts of the loaded users.
         $builder = OfUser::newQuery();
-        /** @var \BlueprintAU\Radiant\Collection<\BlueprintAU\Radiant\Model> $models */
+        /** @var \BlueprintAU\Radiant\Collection<int, \BlueprintAU\Radiant\Model> $models */
         $models = $users;
         $builder->loadRelationPath($models, 'posts');
 

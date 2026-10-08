@@ -224,7 +224,7 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $relation = $comment->commentable();
         // match() takes Collection<Model> and the item template is not
         // covariant — both fixtures ARE Models.
-        /** @var \BlueprintAU\Radiant\Collection<\BlueprintAU\Radiant\Model> $results */
+        /** @var \BlueprintAU\Radiant\Collection<int, \BlueprintAU\Radiant\Model> $results */
         $results = \BlueprintAU\Radiant\Collection::make([$post, $video]);
         $relation->match(
             [$comment],

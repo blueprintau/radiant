@@ -983,7 +983,6 @@ class QueryBuilder
                 : $raw;
         }
 
-        /** @var Collection<string, mixed> */
         return Collection::make($out);
     }
 
@@ -1016,7 +1015,6 @@ class QueryBuilder
                 $out[$key] ??= 0;
             }
 
-            /** @var Collection<string, int> */
             return Collection::make($out);
         }
 
