@@ -69,17 +69,19 @@ see [The CSV backend](csv-backend.md).
 MariaDB speaks the MySQL wire protocol and SQL surface, so the `'mariadb'`
 driver reuses the MySQL grammar — every query, DDL statement, savepoint
 and advisory lock is identical. It is its own driver key (not an alias)
-because the live-schema reader must adapt two MariaDB spellings:
+because the live-schema reader must adapt four MariaDB divergences:
 
 - `JSON` columns store as `LONGTEXT` — a declared `Json` column reads back
   as `longtext`, which the MariaDB inspector maps onto `Json` so schema
   sync converges instead of re-planning every Json column as a modify.
-- A current-timestamp default reports as `current_timestamp()` —
-  normalized to `CURRENT_TIMESTAMP` so an `Expression('CURRENT_TIMESTAMP')`
-  column converges on the first plan.
+- A current-timestamp default reports as `current_timestamp()` (or
+  `now()`) — normalized to `CURRENT_TIMESTAMP` so an
+  `Expression('CURRENT_TIMESTAMP')` column converges on the first plan.
+- Integer display widths (`bigint(20)`) are stripped — except
+  `tinyint(1)`, which is Boolean and kept verbatim.
+- A literal `'NULL'` string default is normalized to a real SQL `NULL`.
 
-The tested floor is MariaDB 11.4 LTS (caching_sha2_password auth). Older
-versions are untested.
+The tested floor is MariaDB 11.4 LTS. Older versions are untested.
 
 A custom connection can pre-flight queries instead of discovering an
 unsupported shape at execution time: `SqlFeature::usedBy($query)` reports
@@ -92,10 +94,14 @@ SQL is compiled.
 
 The generic `ConnectionInterface` runs a structured query against any
 backend (SQL, CSV, …): `table()`, `select()`, `selectColumn()`,
-`insert()`, `update()`, `delete()`, `cursor()`. The ORM's core CRUD works
-on all of them. Scalar reads (`value()`/`pluck()`) ride `selectColumn()`,
-which fetches the single column directly on SQL backends
-(`PDO::FETCH_COLUMN`) instead of materializing one row object per record.
+`insert()`, `insertGetId()`, `update()`, `delete()`, `cursor()` (plus
+the staleness pair `isStale()`/`markStale()`). The ORM's core CRUD works
+on all of them. Scalar reads (`value()`/`pluck()`) ride `selectColumn()`
+when given a plain column — an `Aggregate` argument instead runs through
+a `select()` with a stable `radiant_scalar` alias and reads the result
+back by name. `selectColumn()` fetches the single column directly on SQL
+backends (`PDO::FETCH_COLUMN`) instead of materializing one row object
+per record.
 
 Features that only make sense with a real SQL engine — joins, raw SQL,
 transactions, schema changes — live on `SqlConnection` and throw
@@ -202,18 +208,19 @@ $busy = $db->table('posts')
     ->select('user_id', Aggregate::count('*', 'total'))
     ->groupBy('user_id')
     ->having(Aggregate::count(), '>', 5)
-    ->getRaw();
+    ->get();
 
-// Multiple aggregates in one query:
-$stats = $db->table('orders')->aggregates([
-    'total' => Aggregate::count(),
-    'top'   => Aggregate::max('price'),
-]);
+// Multiple aggregates in one query (variadic; alias each):
+$stats = $db->table('orders')->aggregates(
+    Aggregate::count('*', 'total'),
+    Aggregate::max('price', 'top'),
+);
 ```
 
 `insertGetId()` returns the new row's id only when the builder knows which
 column holds it — declare it with `insertIdColumn()` first; otherwise the
-insert runs and the method returns `null`:
+insert runs and the method returns `null`. On the CSV backend the method
+always returns `null` regardless — a CSV has no auto-increment id:
 
 ```php
 $id = $db->table('users')->insertIdColumn('id')->insertGetId(['name' => 'Alicia']);

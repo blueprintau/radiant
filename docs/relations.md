@@ -50,9 +50,11 @@ class Post extends Model
 ## Filtering and composing
 
 The relation carries the shared filter vocabulary itself (`where`,
-`orWhere`, `whereIn`, `whereNull`, `whereBetween`, `orderBy`, `limit`,
-`offset` — all validated against the related model), so composition
-happens right on the relation:
+`orWhere`, `whereIn`, `whereNotIn`, `whereNull`, `whereNotNull`,
+`whereBetween`, `whereNotBetween`, `whereLike`/`whereNotLike` and their
+`or*` forms, `whereNested`, plus `select`, `groupBy`, `having`,
+`orderBy`, `limit`, `offset` — all validated against the related
+model), so composition happens right on the relation:
 
 ```php
 foreach ($user->posts()->orderBy('created_at')->get() as $post) { ... }
@@ -67,8 +69,8 @@ can never be served for a filtered read.
 
 The relation also exposes the full read family, all scoped to the
 relation's constraint: `first()`/`find()` return the first related model
-(or null), `firstOrFail()` throws
-`BlueprintAU\Radiant\Database\Exceptions\ModelNotFoundException` when the
+(or null), `firstOrFail()`/`findOrFail()` throw
+`BlueprintAU\Radiant\Exceptions\ModelNotFoundException` when the
 relation matches none, `sole()` requires exactly one match (more than one
 throws `MultipleRecordsFoundException`), and `count()`/`exists()` report
 the constrained set. The scalar reads (`value()`, `pluck()`,
@@ -322,8 +324,10 @@ allowlisted morph.
 
 Fail-fast semantics: a null type column resolves empty (an optional morph
 target); an unknown class, a non-model class, or a non-string type value
-throws; a target whose primary-key type does not match the key column's
-declared type throws at construction or resolution.
+throws; on `morphTo` the check that a target's primary-key type matches
+the key column's declared type runs at read/eager **resolution** time
+(the related class is dynamic until then) — on the direct directions
+(`morphMany`/`morphOne`) the equivalent check runs at construction.
 
 ## Many-to-many relations
 
@@ -360,11 +364,13 @@ attributes into blueprints, and a pivot has no model, so it never enters
 the schema-sync desired state. Create it like any other table:
 
 ```php
+use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+
 $conn->create(
     (new Blueprint('posts_tags'))
         ->foreignId('posts_id', 'posts.id')
         ->foreignId('tags_id', 'tags.id')
-        ->string('position', length: 16, nullable: true),
+        ->column(ColumnType::String, 'position', length: 16, nullable: true),
 );
 ```
 
@@ -438,8 +444,10 @@ class Tag extends Model
 }
 ```
 
-Every query filters the pivot's type column to the parent's class-string,
-and `attach()`/`sync()` stamp the alias onto every inserted row.
+Every query filters the pivot's type column to the morph alias — the
+parent's class-string on the direct side, the related class's on the
+inverse (`morphedByMany`) — and `attach()`/`sync()` stamp that alias
+onto every inserted row.
 
 The inverse side can also read the SHARED pool across every morph type —
 `pool()` resolves one query per type through the shared pivot columns,

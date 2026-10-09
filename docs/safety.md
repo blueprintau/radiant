@@ -67,10 +67,10 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
   unbuildable.
 
 Dialects refuse what they cannot express honestly, rather than emitting
-SQL with different semantics: SQLite rejects row locks (no syntax) and
-drop-column before 3.35; MySQL rejects partial-index predicates and
-`NULLS NOT DISTINCT`; identifiers over the 64-character MySQL cap fail at
-compile. MySQL-specific quirks are explicit, not silent: a bare
+SQL with different semantics: SQLite rejects row locks (no syntax);
+MySQL rejects partial-index predicates and `NULLS NOT DISTINCT`; index
+and constraint names over the 64-character MySQL cap fail at compile.
+MySQL-specific quirks are explicit, not silent: a bare
 `offset()` pads the limit (`LIMIT 18446744073709551615 OFFSET n`) and an
 empty insert compiles to `INSERT INTO t () VALUES ()`.
 
@@ -88,7 +88,10 @@ Bulk key lists never scale past driver limits:
 - Parent keys in eager loading are chunked (500 per query), so one
   oversized `load()` degrades to more queries instead of exceeding driver
   placeholder caps or `max_allowed_packet`.
-- `whereKey([...])` over a large key list follows the same 500-chunk
-  bound.
+- `whereKey([...])` is deliberately NOT chunked — it returns one builder,
+  so a single query is preserved. An oversized list therefore hits the
+  driver's own placeholder cap (SQLite's 999 variables, MySQL's
+  `max_allowed_packet`) with the driver's error; keep such lists bounded
+  at the call site.
 - `chunkSql()` streams fixed-size chunks so a bulk read never
   materializes the whole result set.

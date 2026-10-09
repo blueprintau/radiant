@@ -33,15 +33,18 @@ throw `UnsupportedFeatureException`.
   a partial file. Original file permissions are preserved.
 - **Column-aligned rows** as the schema grows — an update introducing a
   new column never shifts another row's values under the wrong header.
-- **Formula-injection neutralization** on write — payloads starting with
-  `=`, `@`, `+`, `-` (whitespace-prefixed included) are quoted so a
-  spreadsheet cannot evaluate them; headers included. Ordinary negative
-  numbers are data, not formulas, and stay unquoted.
+- **Formula-injection neutralization** on write — payloads whose first
+  non-whitespace character is `=`, `@`, `|`, TAB, or CR are quoted, and
+  `+`/`-` are quoted unless the payload is a plain number, so a
+  spreadsheet cannot evaluate them; whitespace-prefixed payloads and
+  headers included. Ordinary negative numbers are data, not formulas,
+  and stay unquoted.
 
 ## Concurrency boundary
 
-The lock coordinates only `CsvConnection` instances of this library
-cooperating through `flock`. Non-participating writers (another process
+The lock is a sidecar `flock` on `<path>.lock` — a second file created
+next to the CSV — and coordinates only `CsvConnection` instances of this
+library cooperating through it. Non-participating writers (another process
 using `file_put_contents`, an editor save) bypass it and can tear a read
 in progress — the `readonly` flag gates *this* connection's writes, not
 the file's.
@@ -57,3 +60,14 @@ transaction is open — described in
 It reads the whole file on every query and rewrites it on every write, so
 it suits small, simple datasets — exports, fixtures, local tooling — not
 production workloads.
+
+## Divergences from SQL backends
+
+- `insertGetId()` always returns `null` — a CSV has no auto-increment id.
+- `LIKE` is case-insensitive (a deliberate divergence from Postgres and
+  SQLite, where it is case-sensitive).
+- An empty cell reads back as `null` (the `''`-is-null convention, which
+  keeps `IS NULL` queries consistent across round-trips).
+- Only the portable core and the operators it can express run here —
+  anything beyond raw/column wheres throws
+  `UnsupportedFeatureException`.

@@ -94,7 +94,8 @@ circular-FK seeding within one transaction), and tables take portable
 
 ```php
 $blueprint->foreignKey(['account_id'], 'accounts', ['id'], deferrable: true, initiallyDeferred: true);
-$blueprint->check('price >= 0', 'price_positive'); // named → {table}_{name}_check
+$blueprint->check('price >= 0', 'price_positive'); // named — used verbatim
+$blueprint->check('stock >= 0'); // unnamed — derived: {table}_{columns}_check
 ```
 
 ## Creating, altering, dropping
@@ -190,10 +191,13 @@ $blueprint->renameColumn('name', 'full_name'); // column rename
 
 The differ verifies the declaration against the live schema (old exists,
 new absent) and emits a real `RenameTable` / `RenameColumn` change —
-non-destructive, data travels with the rename. A declaration that does
-not match reality falls through to the usual create/drop handling with
-the rename reported as a suggestion. A column rename plus a shape change
-sequences two changes: `RenameColumn` first, then `ModifyColumn`.
+non-destructive, data travels with the rename. A declared **table**
+rename that does not match reality fails fast — the differ throws rather
+than falling through to a create/drop plan. A declared **column** rename
+whose declaration does not match reality is silently ignored for the
+diff (the rename simply does not apply). A column rename plus a shape
+change sequences two changes: `RenameColumn` first, then
+`ModifyColumn`.
 
 A declared **table** rename is the starting point of the table's diff,
 not the end of it: the columns the rename carries over (the old table's
@@ -375,9 +379,11 @@ plan. A later change can still fail after the rebuild committed. The
 plan-read window between lock release and apply is fenced by the
 rebuild itself — it re-reads the live table per change, and its
 `foreign_key_check` gate fails loud on drift it cannot reconcile. On
-MySQL and Postgres — and on SQLite plans without an FK-involved
-rebuild — the apply stays under the lock and `transactional: true`
-remains all-or-nothing.
+Postgres — and on SQLite plans without an FK-involved rebuild — the
+apply stays under the lock and `transactional: true` remains
+all-or-nothing. MySQL has no transactional DDL: requesting
+`transactional: true` there fails fast with a `LogicException` instead
+of silently degrading.
 
 `PRAGMA defer_foreign_keys` is not a workaround: deferral postpones
 the constraint *check*, but the `ON DELETE CASCADE` actions still fire

@@ -14,9 +14,10 @@ namespace BlueprintAU\Radiant\Attributes;
  * columns with dialect functions); a typo surfaces as a DDL error at
  * apply time.
  *
- * A named constraint gets the final name `{table}_{name}_check`; unnamed
- * constraints render the dialect default. MySQL 8.0.16+ enforces CHECK
- * constraints; older MySQL parses-and-ignores them.
+ * An explicitly named constraint keeps the given name verbatim; unnamed
+ * constraints render the derived `{table}_{columns}_check` name. MySQL
+ * 8.0.16+ enforces CHECK constraints; older MySQL parses-and-ignores
+ * them.
  */
 #[\Attribute(\Attribute::TARGET_CLASS | \Attribute::IS_REPEATABLE)]
 final class Check

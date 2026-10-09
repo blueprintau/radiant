@@ -70,8 +70,9 @@ fail-fast reads: `$user->featuredPost()->firstOrFail()` and
 The remaining reads also have static forms — `User::first()`,
 `User::count()`, `User::exists()`, `User::value('name')`,
 `User::pluck('name')`, `User::max('signed_up_at')`,
-`User::aggregates(...)`, `User::countBy('status')`, and
-`User::cursor()` — every one a forwarder over `newQuery()`. Relations
+`User::aggregates(...)`, `User::aggregateBy('status')`,
+`User::countBy('status')`, and `User::cursor()` — every one a forwarder
+over `newQuery()`. Relations
 carry the same read family instance-side, scoped to the relation's
 constraint.
 
@@ -98,6 +99,17 @@ declared:
 - `string` on a Date column — the property keeps the stored `Y-m-d`
   form verbatim. Declare a `Carbon`/`DateTime` property instead when you
   want the value decoded to a datetime object.
+- A backed `enum` property on a String/Int column — cases encode to
+  their backing value; a unit case encodes to its name. Raw values
+  binding into where filters are validated against the case set.
+- `array`/object properties on Json columns, and `Uuid`-backed property
+  types on uuid columns — declared via `ColumnType::Json` and
+  `ColumnType::Uuid` respectively.
+
+`#[Column]` also accepts `precision:` and `scale:` (decimal/datetime
+shapes), `values:` (enum column value sets), and `onUpdate:` (a SQL
+expression re-applied by the database on UPDATE, e.g.
+`CURRENT_TIMESTAMP`).
 
 ## Table naming
 
@@ -123,6 +135,10 @@ The attribute is designed to grow other table-level settings later, so
 - `name:` — explicit DB column name when it differs from the property.
 - `unique:`, `index:`, `foreign:` — single-column flags (see below).
 - `default:` — a scalar or SQL expression default.
+
+Column names starting with the reserved `radiant_` prefix fail fast at
+metadata build — the prefix is reserved for the framework's internal
+aliases.
 
 A separate `#[Backfill]` attribute on the same property declares the
 one-time value existing rows receive when the column is added — see
@@ -284,10 +300,10 @@ listeners run. Concretely:
 - **Timestamps stamps** — bulk inserts get `created_at`/`updated_at`
   (one clock read per batch); bulk updates bump `updated_at`. A value
   already in the payload always wins.
-- **SoftDeletes does not intercept** — a builder `update()` targets rows
-  regardless of `deleted_at` (the trait's query scope still applies to
-  reads, so trashed rows are invisible to a plain `newQuery()`; use
-  `withTrashed()` to reach them deliberately).
+- **SoftDeletes rides along** — the trait's auto-applied `deleted_at IS NULL`
+  scope is compiled into a builder `update()`'s wheres too, so a plain
+  `newQuery()->update(...)` only touches live rows; add `withTrashed()`
+  to reach trashed rows deliberately (the same is true of reads).
 - **Audit/observer traits see nothing** — their `#[WriteHook]` methods
   never fire; convert the trait's bulk side to a `#[RowHook]` method to
   cover it.
@@ -329,8 +345,10 @@ instance state does not matter; use `save()` when it does.
 ## Timestamps
 
 Opt in by applying the `Timestamps` trait — `save()` then stamps
-`created_at` on INSERT (only when you have not set it yourself) and
-`updated_at` on every INSERT and UPDATE:
+`created_at` on INSERT and `updated_at` on every INSERT and UPDATE. A
+caller-set value always wins: on INSERT, a stamp is only written when you
+have not set the column yourself; on UPDATE, `updated_at` is bumped
+unconditionally:
 
 ```php
 use BlueprintAU\Radiant\Model;
@@ -347,9 +365,9 @@ NULL `datetime`, shaped by the `timestamps()` blueprint helper, so schema
 sync creates them. Declare your own `#[Column]` of the same name to
 control the shape (precision, nullability); a user declaration wins.
 When a resolved stamp column is absent the trait is a silent no-op for
-that column, so the trait can sit on a shared base model safely. A
-caller-set value always wins: the stamper never overwrites an explicitly
-assigned timestamp.
+that column, so the trait can sit on a shared base model safely.
+Re-assigning a stamp via the property always wins: the stamper never
+overwrites a caller-set value on INSERT.
 
 **Renaming the stamp columns.** Override `createdAtColumn()` /
 `updatedAtColumn()` to return the column's name — the returned name must
@@ -389,7 +407,7 @@ $post->saving(function (Post $post): void {
 });
 
 $post->deleting(function (Post $post): bool {
-    return $post->comments()->isEmpty();     // false vetoes the delete
+    return $post->comments()->count() === 0; // false vetoes the delete
 });
 
 $post->saved(function (Post $post): void {
@@ -436,12 +454,20 @@ and `onlyTrashed()` returns just them. Soft deletes use only the portable
 core (`update()` + `whereKey()`), so they work on any backend — CSV
 included.
 
+A `save()` on a trashed model throws `LogicException` — the auto-applied
+`deleted_at IS NULL` scope would match zero rows, so the write is
+refused up front. `restore()` the model (or `forceDelete()` it) before
+writing again; use `withTrashed()` when a bulk builder write must reach
+trashed rows.
+
 **Renaming the delete column.** Override `deletedAtColumn()` to return
 the column's name — the returned name MUST match a declared `#[Column]`
-on the model (datetime, nullable), otherwise metadata building fails
+on the model of `datetime` type, otherwise metadata building fails
 fast: an override is an explicit claim that the column is declared, so a
 typo or forgotten declaration is a build-time error instead of a silently
-injected phantom column. Returning `null` (the default) uses `deleted_at`
+injected phantom column. (Nullability is not enforced — declare the
+column `nullable: true` yourself, as the examples do.) Returning `null`
+(the default) uses `deleted_at`
 and injects a synthetic column unless you declare your own `#[Column]` of
 that name (a user declaration wins):
 
