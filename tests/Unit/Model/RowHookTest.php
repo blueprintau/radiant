@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
-use BlueprintAU\Radiant\Exceptions\RowHookVetoException;
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\ColumnAdder;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\PlainTimestamped;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\RowHookProbe;
@@ -147,23 +148,21 @@ final class RowHookTest extends DatabaseTestCase
 
     /**
      * A `false` return from a hook vetoes the whole batch — the veto
-     * exception names trait::method and NO row was written.
+     * exception carries the vetoing trait::method and NO row was written.
      */
     public function testVetoThrowsAndWritesNothing(): void
     {
-        try {
-            RowHookProbe::newQuery()->insert([
+        $exception = Expectation::throws(
+            fn () => RowHookProbe::newQuery()->insert([
                 ['name' => 'ada'],
                 ['name' => 'veto'],
-            ]);
+            ]),
+            WriteVetoException::class,
+        );
 
-            self::fail('the vetoed insert must throw');
-        } catch (RowHookVetoException $exception) {
-            self::assertStringContainsString(
-                Fixtures\VetoInsertRowsTrait::class.'::observeInsertRows',
-                $exception->getMessage(),
-            );
-        }
+        self::assertSame('insert', $exception->event);
+        self::assertSame(Fixtures\VetoInsertRowsTrait::class, $exception->trait);
+        self::assertSame('observeInsertRows', $exception->method);
 
         self::assertSame([], RowHookProbe::newQuery()->get()->all(), 'no row may survive a vetoed batch');
     }

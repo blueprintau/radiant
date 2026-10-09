@@ -7,7 +7,8 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
-use BlueprintAU\Radiant\Exceptions\RowHookVetoException;
+use BlueprintAU\Radiant\Exceptions\StaleRowException;
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
@@ -240,6 +241,7 @@ abstract class Model
      * @param  array<string, mixed>  $values  Extra column values for the created model.
      * @return static
      * @throws \InvalidArgumentException
+     * @throws WriteVetoException
      */
     final public static function findOrCreate(int|string|null|array $id, array $values = []): static
     {
@@ -675,20 +677,23 @@ abstract class Model
     /**
      * Save the model — INSERT when new, UPDATE of the dirty columns when not.
      *
-     * A `saving` listener returning false vetoes the save — nothing is
-     * written and `false` is reported.
+     * A `saving` listener returning false vetoes the save via a thrown
+     * {@see WriteVetoException}.
      *
-     * @return bool
+     * @return void
      * @throws \LogicException
+     * @throws WriteVetoException
      */
-    final public function save(): bool
+    final public function save(): void
     {
         if (!$this->fireLifecycle('saving')) {
-            return false;
+            throw WriteVetoException::listener(static::class, 'saving');
         }
 
         if (!$this->exists) {
-            return $this->performInsert();
+            $this->performInsert();
+
+            return;
         }
 
         $softDeleteColumn = MetadataFactory::for(static::class)->softDeleteColumn;
@@ -705,16 +710,14 @@ abstract class Model
         // MTI children update per-partition (single query when the dirty
         // columns land on one table, a transaction across tables otherwise).
         if (MetadataFactory::for(static::class)->isMtiChild()) {
-            $updated = $this->performMtiUpdate();
+            $this->performMtiUpdate();
 
-            if ($updated) {
-                $this->fireLifecycle('saved');
-            }
+            $this->fireLifecycle('saved');
 
-            return $updated;
+            return;
         }
 
-        return $this->performUpdate();
+        $this->performUpdate();
     }
 
     /**
@@ -722,51 +725,47 @@ abstract class Model
      * claim the delete (e.g. soft delete); with no claimant the row is
      * hard-deleted.
      *
-     * A `deleting` listener returning false vetoes the delete — the model
-     * is untouched and `false` is reported.
+     * A `deleting` listener returning false vetoes via a thrown
+     * {@see WriteVetoException}; 0 affected rows throws a
+     * {@see StaleRowException}.
      *
-     * @return bool
+     * @return void
+     * @throws \LogicException
+     * @throws WriteVetoException
+     * @throws StaleRowException
      */
-    final public function delete(): bool
+    final public function delete(): void
     {
         if (!$this->fireLifecycle('deleting')) {
-            return false;
+            throw WriteVetoException::listener(static::class, 'deleting');
         }
 
-        $claimed = $this->dispatchWriteHooks(Hook::Delete);
-
-        if ($claimed !== null) {
+        if ($this->dispatchWriteHooks(Hook::Delete)) {
             // The claiming trait owns the instance bookkeeping for its
             // path — a soft delete leaves the row in the table (exists
             // stays true; trashed() reflects state), while a stale
-            // instance clears it. Model only fires the event on success.
-            if ($claimed) {
-                $this->fireLifecycle('deleted');
-            }
-
-            return $claimed;
-        }
-
-        $hardDeleted = $this->performDelete();
-
-        if ($hardDeleted) {
+            // instance clears it. A failed claim threw in the dispatcher.
             $this->fireLifecycle('deleted');
+
+            return;
         }
 
-        return $hardDeleted;
+        $this->performDelete();
+
+        $this->fireLifecycle('deleted');
     }
 
     /**
      * Dispatch one hook path's trait methods in collection order.
      *
-     * A `null` return is an observer — dispatch continues. A `bool`
-     * return claims the write and ends dispatch: `true` = performed and
-     * succeeded, `false` = owned and failed/refused.
+     * A `true` return means a trait claimed the write; a failed claim
+     * throws {@see WriteVetoException}.
      *
      * @param  Hook  $hook
-     * @return bool|null Null when no trait claimed the write.
+     * @return bool
+     * @throws WriteVetoException
      */
-    final protected function dispatchWriteHooks(Hook $hook): ?bool
+    final protected function dispatchWriteHooks(Hook $hook): bool
     {
         foreach (MetadataFactory::for(static::class)->writeHooks as $entry) {
             if ($entry['hook'] !== $hook) {
@@ -776,11 +775,20 @@ abstract class Model
             $result = $this->{$entry['method']}();
 
             if ($result !== null) {
-                return $result;
+                if ($result === false) {
+                    throw WriteVetoException::hook(
+                        static::class,
+                        $hook->value,
+                        $entry['trait'],
+                        $entry['method'],
+                    );
+                }
+
+                return true;
             }
         }
 
-        return null;
+        return false;
     }
 
     /**
@@ -814,9 +822,11 @@ abstract class Model
             );
 
             if ($call($entry['method'], $rows) === false) {
-                throw new RowHookVetoException(
-                    "The #[RowHook(Hook::{$entry['hook']->value})] method "
-                    . "[{$entry['trait']}::{$entry['method']}] vetoed the write."
+                throw WriteVetoException::rowHook(
+                    $modelClass,
+                    $entry['hook']->value,
+                    $entry['trait'],
+                    $entry['method'],
                 );
             }
         }
@@ -852,9 +862,11 @@ abstract class Model
             );
 
             if ($call($entry['method'], $values) === false) {
-                throw new RowHookVetoException(
-                    "The #[RowHook(Hook::{$entry['hook']->value})] method "
-                    . "[{$entry['trait']}::{$entry['method']}] vetoed the write."
+                throw WriteVetoException::rowHook(
+                    $modelClass,
+                    $entry['hook']->value,
+                    $entry['trait'],
+                    $entry['method'],
                 );
             }
         }
@@ -863,9 +875,15 @@ abstract class Model
     /**
      * The real DELETE by primary key.
      *
-     * @return bool
+     * A delete that targets its row must delete: 0 affected rows means
+     * the row was already removed by someone else, and a
+     * {@see StaleRowException} throws rather than silently no-oping.
+     *
+     * @return void
+     * @throws \LogicException
+     * @throws StaleRowException
      */
-    final protected function performDelete(): bool
+    final protected function performDelete(): void
     {
         // A null key would compile to `WHERE pk IS NULL` — matching nothing,
         // or the wrong rows on dialects that permit NULL keys.
@@ -922,55 +940,56 @@ abstract class Model
                 $anyDeleted = $anyDeleted || $deleted > 0;
             }
 
+            // The leaf delete is the caller's contract — a cascade may
+            // remove ancestor partitions first (0 affected there is
+            // expected), but if NOTHING went away the row was already
+            // gone.
+            if (!$anyDeleted) {
+                throw new StaleRowException(static::class, 'delete');
+            }
+
             $this->exists = false;
             $this->wasRecentlyCreated = false;
 
-            // MTI reports success when at least one partition row went
-            // away — a cascade may legitimately remove some levels' rows
-            // first, so per-level zero counts are expected.
-            return $anyDeleted;
+            return;
         }
 
-        // withTrashed(): forceDelete must reach soft-deleted rows too — the
-        // auto-applied whereNull(deleted_at) scope would exclude exactly the
-        // rows a hard delete after a soft delete needs to target, matching 0
-        // rows and reporting false.
         $deleted = $this->newQuery()->withTrashed()->whereKey($this->getKeyForRefresh())->delete();
+
+        if ($deleted === 0) {
+            throw new StaleRowException(static::class, 'delete');
+        }
+
         $this->exists = false;
         $this->wasRecentlyCreated = false;
-
-        return $deleted > 0;
     }
 
     /**
      * INSERT the model.
      *
-     * @return bool
+     * @return void
+     * @throws WriteVetoException
      */
-    final protected function performInsert(): bool
+    final protected function performInsert(): void
     {
         $metadata = MetadataFactory::for(static::class);
 
         // MTI: split the insert per table — root first (generating the id),
         // then each descendant, in ONE transaction on a SQL connection.
         if ($metadata->isMtiChild()) {
-            $inserted = $this->performMtiInsert($metadata);
+            $this->performMtiInsert($metadata);
 
-            if ($inserted) {
-                $this->fireLifecycle('saved');
-            }
+            $this->fireLifecycle('saved');
 
-            return $inserted;
+            return;
         }
 
         // Insert-path trait hooks — observers stamp values BEFORE
         // getColumnValues() builds the payload, so the insert carries them
         // and syncOriginal() snapshots them. A claimant performs the
-        // insert itself.
-        $claimed = $this->dispatchWriteHooks(Hook::Insert);
-
-        if ($claimed !== null) {
-            return $claimed;
+        // insert itself; a failed claim threw in the dispatcher.
+        if ($this->dispatchWriteHooks(Hook::Insert)) {
+            return;
         }
 
         $values = $this->getColumnValues();
@@ -987,8 +1006,6 @@ abstract class Model
         $this->materializeDefaults();
         $this->syncOriginal();
         $this->fireLifecycle('saved');
-
-        return true;
     }
 
     /**
@@ -1021,17 +1038,17 @@ abstract class Model
      * one transaction.
      *
      * @param  \BlueprintAU\Radiant\Metadata\ClassMetadata  $metadata
-     * @return bool
+     * @return void
      * @throws \BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException
+     * @throws WriteVetoException
      */
-    final protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): bool
+    final protected function performMtiInsert(\BlueprintAU\Radiant\Metadata\ClassMetadata $metadata): void
     {
         // Insert-path trait hooks — MTI children get the same stamping as
         // single-table models (the hook fires before the payload build).
-        $claimed = $this->dispatchWriteHooks(Hook::Insert);
-
-        if ($claimed !== null) {
-            return $claimed;
+        // A failed claim threw in the dispatcher.
+        if ($this->dispatchWriteHooks(Hook::Insert)) {
+            return;
         }
 
         // Fail fast with the MTI-specific message: the insert splits across
@@ -1177,8 +1194,6 @@ abstract class Model
         $this->wasRecentlyCreated = true;
         $this->materializeDefaults();
         $this->syncOriginal();
-
-        return true;
     }
 
     /**
@@ -1244,18 +1259,17 @@ abstract class Model
     /**
      * UPDATE the dirty columns by primary key.
      *
-     * @return bool
+     * @return void
+     * @throws WriteVetoException
      */
-    final protected function performUpdate(): bool
+    final protected function performUpdate(): void
     {
         // Update-path trait hooks — stamping BEFORE getDirty() means the
         // bumped values show up in the dirty set (and a no-op update with
         // no other changes still writes the stamp). A claimant performs
-        // the update itself.
-        $claimed = $this->dispatchWriteHooks(Hook::Update);
-
-        if ($claimed !== null) {
-            return $claimed;
+        // the update itself; a failed claim threw in the dispatcher.
+        if ($this->dispatchWriteHooks(Hook::Update)) {
+            return;
         }
 
         $dirty = $this->getDirty();
@@ -1270,24 +1284,21 @@ abstract class Model
 
         $this->syncOriginal();
         $this->fireLifecycle('saved');
-
-        return true;
     }
 
     /**
      * UPDATE the dirty columns, split per owning table when the model is
      * an MTI child.
      *
-     * @return bool
+     * @return void
+     * @throws WriteVetoException
      */
-    final protected function performMtiUpdate(): bool
+    final protected function performMtiUpdate(): void
     {
         // Update-path trait hooks — MTI children get the same stamping as
-        // single-table models.
-        $claimed = $this->dispatchWriteHooks(Hook::Update);
-
-        if ($claimed !== null) {
-            return $claimed;
+        // single-table models. A failed claim threw in the dispatcher.
+        if ($this->dispatchWriteHooks(Hook::Update)) {
+            return;
         }
 
         $metadata = MetadataFactory::for(static::class);
@@ -1296,7 +1307,7 @@ abstract class Model
         if ($dirty === []) {
             $this->syncOriginal();
 
-            return true;
+            return;
         }
 
         // A null key would compile to `WHERE pk IS NULL` per partition —
@@ -1349,8 +1360,6 @@ abstract class Model
         }
 
         $this->syncOriginal();
-
-        return true;
     }
 
     // ---- Dirty tracking ----

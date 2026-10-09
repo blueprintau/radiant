@@ -70,14 +70,15 @@ final class ModelStaticAndHookClaimTest extends DatabaseTestCase
 
     /**
      * A trait hook returning TRUE claims the INSERT — the write never
-     * reaches the database and the model reports success.
+     * reaches the database and the model's flags reflect a successful
+     * save.
      */
     public function testInsertClaimHookOwnsTheWrite(): void
     {
         $post = new HookClaimPost();
         $post->title = 'claimed';
 
-        self::assertTrue($post->save());
+        $post->save();
 
         // The hook saw the model.
         self::assertCount(1, HookClaimPost::$claimedInserts);
@@ -102,7 +103,7 @@ final class ModelStaticAndHookClaimTest extends DatabaseTestCase
         HookClaimUpdatePost::$claimedUpdates = [];
 
         $post->title = 'after';
-        self::assertTrue($post->save());
+        $post->save();
 
         // The hook saw the model.
         self::assertCount(1, HookClaimUpdatePost::$claimedUpdates);
@@ -129,7 +130,7 @@ final class ModelStaticAndHookClaimTest extends DatabaseTestCase
         MtiHookClaimChild::$claimedUpdates = [];
 
         $admin->level = 'senior';
-        self::assertTrue($admin->save());
+        $admin->save();
 
         // The hook saw the model.
         self::assertCount(1, MtiHookClaimChild::$claimedUpdates);
@@ -152,7 +153,7 @@ final class ModelStaticAndHookClaimTest extends DatabaseTestCase
         $admin->email = 'insert-claim@example.com';
         $admin->level = 'lead';
 
-        self::assertTrue($admin->save());
+        $admin->save();
 
         // The write never landed — neither partition has a row.
         self::assertSame(0, $this->connection->table('mti_users')->count());

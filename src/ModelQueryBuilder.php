@@ -9,6 +9,7 @@ use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
 use BlueprintAU\Radiant\Exceptions\ModelNotFoundException;
 use BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException;
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
@@ -1154,6 +1155,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>  $values  Extra column values for the created model.
      * @return TModel
      * @throws \InvalidArgumentException
+     * @throws WriteVetoException
      */
     public function firstOrCreate(array $values = []): Model
     {
@@ -1180,6 +1182,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>  $values  Extra column values for the created model.
      * @return TModel
      * @throws \InvalidArgumentException
+     * @throws WriteVetoException
      */
     public function findOrCreate(int|string|null|array $id, array $values = []): Model
     {
@@ -1197,15 +1200,16 @@ final class ModelQueryBuilder extends QueryBuilder
     /**
      * Build, fill, and save a new model.
      *
-     * The shared miss path. A `save()` reporting `false` returns the
-     * unsaved model — the model's flags tell the truth. Synthetic
-     * columns route through {@see Model::setAttribute()}; typed-property
-     * columns through {@see Model::setColumn()}.
+     * The shared miss path. A vetoed save throws — the
+     * {@see WriteVetoException} propagates to the caller and no row
+     * lands. Synthetic columns route through {@see Model::setAttribute()};
+     * typed-property columns through {@see Model::setColumn()}.
      *
      * @param  array<string, mixed>  $match  The match-derived fills.
      * @param  array<string, mixed>  $values  The caller's create-only extras.
-     * @return TModel The created model, or the unsaved model when the save was vetoed.
+     * @return TModel
      * @throws \InvalidArgumentException
+     * @throws WriteVetoException
      */
     private function createModel(array $match, array $values): Model
     {
@@ -2352,7 +2356,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>|list<array<string, mixed>>  $values
      * @return int
      * @throws \InvalidArgumentException
-     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
+     * @throws \BlueprintAU\Radiant\Exceptions\WriteVetoException
      */
     public function insert(array $values): int
     {
@@ -2370,7 +2374,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>  $values
      * @return string|int|null
      * @throws \InvalidArgumentException
-     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
+     * @throws \BlueprintAU\Radiant\Exceptions\WriteVetoException
      */
     public function insertGetId(array $values): string|int|null
     {
@@ -2388,7 +2392,7 @@ final class ModelQueryBuilder extends QueryBuilder
      * @param  array<string, mixed>  $values
      * @return int
      * @throws \InvalidArgumentException
-     * @throws \BlueprintAU\Radiant\Exceptions\RowHookVetoException
+     * @throws \BlueprintAU\Radiant\Exceptions\WriteVetoException
      */
     public function update(array $values): int
     {

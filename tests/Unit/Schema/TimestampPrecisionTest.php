@@ -392,19 +392,21 @@ final class TimestampPrecisionTest extends DatabaseTestCase
             $restored++;
         });
 
-        self::assertTrue($post->delete());
+        $post->delete();
         self::assertSame(1, $deleted);
 
-        self::assertTrue($post->restore());
+        $post->restore();
         self::assertSame(1, $restored);
 
-        // An unsaved model's delete reports false — no event.
+        // An unsaved model's delete throws — no event.
         $unsaved = new TpPost();
         $unsaved->deleted(function () use (&$deleted): void {
             $deleted++;
         });
-        self::assertFalse($unsaved->delete());
-        self::assertSame(1, $deleted, 'a failed delete fires nothing');
+
+        $this->expectException(\LogicException::class);
+
+        $unsaved->delete();
     }
 
     /**
@@ -421,7 +423,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
             $deleted++;
         });
 
-        self::assertTrue($plain->delete());
+        $plain->delete();
         self::assertSame(1, $deleted);
     }
 
@@ -434,7 +436,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
     {
         $plain = new TpTraitNoColumns();
         $plain->name = 'Guarded';
-        self::assertTrue($plain->save());
+        $plain->save();
 
         $raw = $this->connection->table('tp_auto')->where('id', '=', $plain->id)->first();
         self::assertNotNull($raw);
@@ -512,7 +514,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
     {
         $post = new TpPost();
         $post->name = 'Composed';
-        self::assertTrue($post->save());
+        $post->save();
 
         $raw = $this->connection->table('tp_posts')->where('id', '=', $post->id)->first();
         self::assertNotNull($raw);
@@ -520,7 +522,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
         self::assertNotNull($raw->updated_at);
         self::assertNull($raw->deleted_at);
 
-        self::assertTrue($post->delete());
+        $post->delete();
         self::assertTrue($post->trashed());
 
         $raw = $this->connection->table('tp_posts')->where('id', '=', $post->id)->first();

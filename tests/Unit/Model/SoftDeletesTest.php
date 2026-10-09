@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
+use BlueprintAU\Radiant\Exceptions\StaleRowException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Support\ModelIntrospection;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MtiSoftChild;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\SdPost;
@@ -14,8 +16,8 @@ use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\MtiUser;
 
 /**
  * Dedicated coverage for the {@see SoftDeletes} trait beyond the lifecycle
- * in MetadataPipelineTest: the stale-row contract (delete()/restore()
- * report honestly when the row is gone), re-delete
+ * in MetadataPipelineTest: the stale-row contract (delete()/restore() are
+ * idempotent when the row is gone), unsaved-model throws, re-delete
  * semantics, custom column names, forceDelete, trashed() in-memory state,
  * withTrashed/onlyTrashed, and CSV portability.
  */
@@ -46,30 +48,34 @@ final class SoftDeletesTest extends DatabaseTestCase
     }
 
     /**
-     * delete() on an UNSAVED model returns false — there is no row to
-     * soft-delete, and success for a write that never ran would break the
-     * honest-reporting contract. (Pre-fix: the exists-guard fell through
-     * to `return true`.)
+     * delete() on an UNSAVED model throws — there is no row to
+     * soft-delete, and a silent no-op would let the caller believe a
+     * deletion happened. (Pre-void era: the call returned false.)
      */
-    public function testDeleteOnUnsavedModelReturnsFalse(): void
+    public function testDeleteOnUnsavedModelThrows(): void
     {
         $post = new SdPost();
         $post->title = 'Never saved';
 
-        self::assertFalse($post->delete());
-        self::assertCount(0, SdPost::newQuery()->withTrashed()->get());
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageIsOrContains('no row to delete');
+
+        $post->delete();
     }
 
     /**
      * Same contract for restore(): an unsaved model has no row to
-     * restore — false, not success.
+     * restore — LogicException, not a silent no-op.
      */
-    public function testRestoreOnUnsavedModelReturnsFalse(): void
+    public function testRestoreOnUnsavedModelThrows(): void
     {
         $post = new SdPost();
         $post->title = 'Never saved';
 
-        self::assertFalse($post->restore());
+        $this->expectException(\LogicException::class);
+        $this->expectExceptionMessageIsOrContains('no row to restore');
+
+        $post->restore();
     }
 
     /**
@@ -81,7 +87,7 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post = $this->seedPost();
 
         self::assertFalse($post->trashed());
-        self::assertTrue($post->delete());
+        $post->delete();
         self::assertTrue($post->trashed(), 'trashed() reads the in-memory state after delete');
 
         self::assertCount(0, SdPost::all(), 'the default scope excludes soft-deleted rows');
@@ -94,16 +100,18 @@ final class SoftDeletesTest extends DatabaseTestCase
     }
 
     /**
-     * Re-deleting an already-soft-deleted row returns true — the UPDATE
+     * Re-deleting an already-soft-deleted row succeeds — the UPDATE
      * matches the row directly (whereKey bypasses the scope) and refreshing
      * the timestamp is a legitimate soft delete.
      */
-    public function testRedeleteReturnsTrue(): void
+    public function testRedeleteSucceeds(): void
     {
         $post = $this->seedPost();
         $post->delete();
 
-        self::assertTrue($post->delete(), 're-delete targets the row directly and succeeds');
+        $post->delete();
+
+        self::assertTrue($post->trashed(), 're-delete targets the row directly and succeeds');
     }
 
     /**
@@ -172,42 +180,46 @@ final class SoftDeletesTest extends DatabaseTestCase
     /**
      * restore() clears the timestamp and returns the row to the default
      * scope; restore() on a live (never-deleted) row is a harmless no-op
-     * UPDATE that still matches the row — true.
+     * UPDATE that still matches the row — success.
      */
     public function testRestoreLifecycle(): void
     {
         $post = $this->seedPost();
         $post->delete();
 
-        self::assertTrue($post->restore());
+        $post->restore();
+
         self::assertFalse($post->trashed());
         self::assertCount(1, SdPost::all(), 'the restored row is visible again');
     }
 
     /**
-     * THE STALE-ROW CONTRACT (regression lock): delete() on a
-     * model whose row was hard-deleted by another connection must return
-     * FALSE and clear exists — the caller's compensation logic must not
-     * fire for a row that is not there. (Pre-fix: the UPDATE matched 0
-     * rows but the trait reported success.)
+     * THE STALE-ROW CONTRACT: delete() on a model whose row was
+     * hard-deleted by another connection throws a StaleRowException —
+     * the delete either deletes or errors, never silently no-ops.
      */
-    public function testDeleteOnStaleInstanceReturnsFalse(): void
+    public function testDeleteOnStaleInstanceThrows(): void
     {
         $post = $this->seedPost();
 
         // Hard-delete the row behind the instance's back.
         $this->connection->table('sd_posts')->where('id', '=', $post->id)->delete();
 
-        self::assertFalse($post->delete(), 'a stale delete must report failure, not success');
+        $exception = Expectation::throws(
+            fn () => $post->delete(),
+            StaleRowException::class,
+        );
+
+        self::assertSame(SdPost::class, $exception->model);
+        self::assertSame('delete', $exception->operation);
         self::assertCount(0, SdPost::newQuery()->withTrashed()->get());
     }
 
     /**
      * Same contract for restore(): the row was soft-deleted here, then
-     * hard-deleted elsewhere — restore() matches 0 rows, returns false,
-     * and clears exists.
+     * hard-deleted elsewhere — restore() matches 0 rows and throws.
      */
-    public function testRestoreOnStaleInstanceReturnsFalse(): void
+    public function testRestoreOnStaleInstanceThrows(): void
     {
         $post = $this->seedPost();
         $post->delete();
@@ -215,7 +227,12 @@ final class SoftDeletesTest extends DatabaseTestCase
         // Hard-delete the soft-deleted row behind the instance's back.
         $this->connection->table('sd_posts')->where('id', '=', $post->id)->delete();
 
-        self::assertFalse($post->restore(), 'a stale restore must report failure, not success');
+        $exception = Expectation::throws(
+            fn () => $post->restore(),
+            StaleRowException::class,
+        );
+
+        self::assertSame('restore', $exception->operation);
     }
 
     /**
@@ -227,24 +244,28 @@ final class SoftDeletesTest extends DatabaseTestCase
         $post->delete();
         self::assertCount(1, SdPost::newQuery()->onlyTrashed()->get());
 
-        self::assertTrue($post->forceDelete());
+        $post->forceDelete();
 
         self::assertCount(0, SdPost::newQuery()->withTrashed()->get());
     }
 
     /**
-     * forceDelete() on a soft-deleted row deleted elsewhere reports the
-     * stale instance (exists cleared, false) — the base performDelete()
-     * contract this trait rides on.
+     * forceDelete() on a soft-deleted row deleted elsewhere throws a
+     * StaleRowException — the hard delete either deletes or errors.
      */
-    public function testForceDeleteOnStaleInstanceReturnsFalse(): void
+    public function testForceDeleteOnStaleInstanceThrows(): void
     {
         $post = $this->seedPost();
         $post->delete();
 
         $this->connection->table('sd_posts')->where('id', '=', $post->id)->delete();
 
-        self::assertFalse($post->forceDelete());
+        $exception = Expectation::throws(
+            fn () => $post->forceDelete(),
+            StaleRowException::class,
+        );
+
+        self::assertSame('delete', $exception->operation);
     }
 
     /**
@@ -471,7 +492,7 @@ final class SoftDeletesTest extends DatabaseTestCase
                 self::assertTrue($post->trashed());
                 self::assertCount(0, SdPost::all(), 'the scoped query hides the soft-deleted row on CSV');
 
-                self::assertTrue($post->restore());
+                $post->restore();
                 self::assertCount(1, SdPost::all());
             });
         } finally {

@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Exceptions\QueryException;
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\FcDefaulted;
@@ -187,17 +188,22 @@ final class FindOrCreateTest extends DatabaseTestCase
     }
 
     /**
-     * A `saving` listener's veto reports false and nothing lands —
-     * save()'s contract. The create family returns the unsaved model on
-     * the same path (the flags stay truthful).
+     * A `saving` listener's veto throws a WriteVetoException and nothing
+     * lands — the create family lets the veto propagate, so no row and
+     * no model surface from a vetoed create.
      */
-    public function testVetoedCreateReturnsUnsavedModel(): void
+    public function testVetoedCreateThrows(): void
     {
         $vetoing = new FcVetoUser();
         $vetoing->email = 'vetoed@example.com';
         $vetoing->registerVeto();
 
-        self::assertFalse($vetoing->save());
+        Expectation::throwsWithMessage(
+            fn () => $vetoing->save(),
+            WriteVetoException::class,
+            'saving',
+        );
+
         self::assertFalse($vetoing->exists);
         self::assertFalse($vetoing->wasRecentlyCreated);
         self::assertSame(1, FcUser::newQuery()->count());

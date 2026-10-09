@@ -107,7 +107,7 @@ final class TimestampRebaseTest extends DatabaseTestCase
 
         self::assertFalse($post->trashed());
 
-        self::assertTrue($post->delete());
+        $post->delete();
 
         self::assertInstanceOf(CarbonImmutable::class, $post->removed_at);
         self::assertTrue($post->trashed());
@@ -129,7 +129,7 @@ final class TimestampRebaseTest extends DatabaseTestCase
         $post->save();
         $post->delete();
 
-        self::assertTrue($post->restore());
+        $post->restore();
 
         self::assertNull($post->removed_at);
         self::assertFalse($post->trashed());

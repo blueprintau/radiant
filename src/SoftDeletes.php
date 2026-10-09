@@ -8,6 +8,8 @@ use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Attributes\ModelScope;
 use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Exceptions\StaleRowException;
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 
 /**
@@ -48,22 +50,27 @@ trait SoftDeletes
     }
 
     /**
-     * The trait's write hook: claim the delete() path and perform the
-     * soft delete — an UPDATE setting the delete timestamp.
+     * Claim the delete() path and perform the soft delete.
      *
-     * The `?bool` return IS the delete's outcome: `true` = soft-deleted,
-     * `false` = nothing to delete (unsaved or stale instance).
+     * The `?bool` return is the delete's outcome: `true` = soft-deleted,
+     * `null` = never claims failure. An unsaved model throws
+     * {@see \LogicException}; 0 affected rows throws a
+     * {@see StaleRowException}.
      *
      * @return bool|null
+     * @throws \LogicException
+     * @throws StaleRowException
      */
     #[WriteHook(Hook::Delete)]
     protected function softDelete(): ?bool
     {
         if (!$this->exists) {
-            // An unsaved (or already-deleted) model has no row to
-            // soft-delete — report honestly instead of reporting success
-            // for a write that never ran.
-            return false;
+            // An unsaved model has no row to soft-delete — a caller
+            // logic error, not a veto. Fail fast the same way an UPDATE
+            // with an unresolved key would.
+            throw new \LogicException(
+                'The model [' . static::class . '] was never saved — there is no row to delete.'
+            );
         }
 
         $stamp = $this->freshTimestamp();
@@ -74,9 +81,9 @@ trait SoftDeletes
             ->update([self::softDeleteColumn() => $stamp]);
 
         if ($affected === 0) {
-            // The row is gone (stale instance) — report honestly.
-            $this->exists = false;
-            return false;
+            // The row is gone (stale instance) — the delete cannot
+            // silently no-op.
+            throw new StaleRowException(static::class, 'delete');
         }
 
         // The snapshot lives in the ENCODED (bindable) space — raw bytes,
@@ -123,45 +130,51 @@ trait SoftDeletes
     /**
      * Permanently delete the model — the real DELETE.
      *
-     * A `deleting` listener returning false vetoes the delete. The
-     * `#[WriteHook(Hook::Destroy)]` observers (audit traits) run before
-     * the DELETE; the hard DELETE itself is unclaimable.
+     * A `deleting` listener returning false vetoes via a thrown
+     * {@see WriteVetoException}; 0 affected rows throws a
+     * {@see StaleRowException}. The `#[WriteHook(Hook::Destroy)]`
+     * observers run before the DELETE; the hard DELETE itself is
+     * unclaimable.
      *
-     * @return bool
+     * @return void
+     * @throws \LogicException
+     * @throws WriteVetoException
+     * @throws StaleRowException
      */
-    public function forceDelete(): bool
+    public function forceDelete(): void
     {
         if (!$this->fireLifecycle('deleting')) {
-            return false;
+            throw WriteVetoException::listener(static::class, 'deleting');
         }
 
-        $deleted = $this->performDelete();
+        $this->performDelete();
 
-        if ($deleted) {
-            $this->fireLifecycle('deleted');
-        }
-
-        return $deleted;
+        $this->fireLifecycle('deleted');
     }
 
     /**
      * Restore a soft-deleted model — clear the delete timestamp.
      *
-     * A `restoring` listener returning false vetoes the restore. Like
-     * {@see delete()}, this reflects the affected-row count: a stale
-     * instance returns false; an unsaved model returns false.
+     * A `restoring` listener returning false vetoes via a thrown
+     * {@see WriteVetoException}; 0 affected rows throws a
+     * {@see StaleRowException}.
      *
-     * @return bool
+     * @return void
+     * @throws \LogicException
+     * @throws WriteVetoException
+     * @throws StaleRowException
      */
-    public function restore(): bool
+    public function restore(): void
     {
         if (!$this->exists) {
-            // An unsaved (or already-deleted) model has no row to restore.
-            return false;
+            // An unsaved model has no row to restore.
+            throw new \LogicException(
+                'The model [' . static::class . '] was never saved — there is no row to restore.'
+            );
         }
 
         if (!$this->fireLifecycle('restoring')) {
-            return false;
+            throw WriteVetoException::listener(static::class, 'restoring');
         }
 
         $affected = $this->newQuery()
@@ -170,16 +183,15 @@ trait SoftDeletes
             ->update([self::softDeleteColumn() => null]);
 
         if ($affected === 0) {
-            $this->exists = false;
-            return false;
+            // The row is gone (stale instance) — the restore cannot
+            // silently no-op.
+            throw new StaleRowException(static::class, 'restore');
         }
 
         $this->writeDeletedAtColumn(null);
         $this->original[self::softDeleteColumn()] = null;
 
         $this->fireLifecycle('restored');
-
-        return true;
     }
 
     /**

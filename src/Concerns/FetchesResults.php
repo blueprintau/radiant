@@ -198,6 +198,7 @@ trait FetchesResults
      * @param  array<string, mixed>  $values  Extra column values for the created model.
      * @return TRelated
      * @throws \InvalidArgumentException
+     * @throws \BlueprintAU\Radiant\Exceptions\WriteVetoException
      */
     final public function firstOrCreate(array $values = []): Model
     {
@@ -216,6 +217,7 @@ trait FetchesResults
      * @param  array<string, mixed>  $values  Extra column values for the created model.
      * @return TRelated
      * @throws \InvalidArgumentException
+     * @throws \BlueprintAU\Radiant\Exceptions\WriteVetoException
      */
     final public function findOrCreate(int|string|null|array $id, array $values = []): Model
     {

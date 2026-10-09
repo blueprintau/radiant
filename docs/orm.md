@@ -349,7 +349,7 @@ listeners run. Concretely:
   cover it.
 
 A `#[RowHook]` returning `false` vetoes the whole write: a
-`RowHookVetoException` throws before any statement runs, so a vetoed
+`WriteVetoException` throws before any statement runs, so a vetoed
 batch is all-or-nothing. Traits declare both sides when they need
 them — `#[WriteHook]` for instance claims, `#[RowHook]` for the bulk
 pass:
@@ -437,9 +437,10 @@ for example) — both stamps carry the same instant per save.
 
 Register multiple listeners per model instance around the write
 lifecycle. Attempt listeners (`saving`, `deleting`, `restoring`) may
-return `false` to veto the action — nothing is written and the method
-reports `false`; success listeners (`saved`, `deleted`, `restored`) run
-only after the row state actually changed:
+return `false` to veto the action — nothing is written and a
+`WriteVetoException` naming the event throws; success listeners
+(`saved`, `deleted`, `restored`) run only after the row state actually
+changed:
 
 ```php
 $post->saving(function (Post $post): void {
@@ -464,10 +465,20 @@ $post->restored(function (Post $post): void {
 ```
 
 Listeners run in registration order; a veto stops at the first `false`.
-A failed write (stale instance, unsaved model) fires nothing — a `true`
-return and a fired event always agree. The framework's own behaviors
-(stamping, soft deletes) run through internal hooks, not this registry,
-so user listeners can never break them — they only observe.
+A vetoed write fires nothing — a thrown `WriteVetoException` and a fired
+success event never disagree.
+
+**`save()`/`delete()` return void; vetoes throw.** Both methods report
+success by completing: a write either lands (the method returns
+normally and the success event fires) or a veto throws
+`WriteVetoException`. Bulk `#[RowHook]` vetoes throw the same exception,
+so one channel covers the whole write path. Deletes are idempotent —
+deleting a stale instance (the row already gone elsewhere) succeeds and
+clears the instance flags — while an unsaved model's delete or restore
+is a `LogicException`, and a stale restore (row gone) is idempotent
+too. Use `try/catch` around `save()` when a listener may veto; the
+builder writes (`insert()`/`update()`) keep returning affected-row
+counts.
 
 ## Soft deletes
 

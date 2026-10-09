@@ -41,7 +41,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         $admin->email = 'assigned@example.com';
         $admin->level = 'senior';
 
-        self::assertTrue($admin->save());
+        $admin->save();
 
         $rootRow = $this->connection->table('mti_guid_roots')->where('uuid', '=', 'guid-0001')->first();
         $childRow = $this->connection->table('mti_guid_children')->where('uuid', '=', 'guid-0001')->first();
@@ -70,7 +70,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
     }
 
     /**
-     * A no-dirty MTI update early-returns true — no queries run, the
+     * A no-dirty MTI update early-returns — no queries run, the
      * snapshot re-syncs.
      */
     public function testNoDirtyMtiUpdateEarlyReturns(): void
@@ -82,7 +82,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         $admin->save();
 
         // Re-save with NO changes — the update path early-returns.
-        self::assertTrue($admin->save());
+        $admin->save();
 
         // The row is untouched and still resolvable. (whereKey, not a bare
         // where: the MTI join makes a bare PK ambiguous in SQL — the
@@ -108,7 +108,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         // two tables, so the update takes the transaction branch.
         $admin->email = 'span2@example.com';
         $admin->level = 'senior';
-        self::assertTrue($admin->save());
+        $admin->save();
 
         $rootRow = $this->connection->table('mti_guid_roots')->where('uuid', '=', 'guid-0003')->first();
         $childRow = $this->connection->table('mti_guid_children')->where('uuid', '=', 'guid-0003')->first();
@@ -133,7 +133,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
 
         // Only the child column changes.
         $admin->level = 'lead';
-        self::assertTrue($admin->save());
+        $admin->save();
 
         $rootRow = $this->connection->table('mti_guid_roots')->where('uuid', '=', 'guid-0004')->first();
         $childRow = $this->connection->table('mti_guid_children')->where('uuid', '=', 'guid-0004')->first();
@@ -155,7 +155,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         $admin->level = 'junior';
         $admin->save();
 
-        self::assertTrue($admin->delete());
+        $admin->delete();
 
         self::assertSame(0, $this->connection->table('mti_guid_roots')->count());
         self::assertSame(0, $this->connection->table('mti_guid_children')->count());
@@ -172,7 +172,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         $admin->email = 'auto@example.com';
         $admin->level = 'lead';
 
-        self::assertTrue($admin->save());
+        $admin->save();
         self::assertGreaterThan(0, $admin->id, 'the generated id must be stamped back onto the leaf');
 
         $rootRow = $this->connection->table('mti_users')->where('id', '=', $admin->id)->first();
@@ -195,7 +195,7 @@ final class ModelMtiEdgesTest extends DatabaseTestCase
         $admin->email = 'synthetic@example.com';
         $admin->level = 'junior';
 
-        self::assertTrue($admin->save());
+        $admin->save();
 
         // email lives on the ROOT table; the stamps live on the child's.
         $rootRow = $this->connection->table('mti_users')->where('email', '=', 'synthetic@example.com')->first();

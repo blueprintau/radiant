@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
+use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\LvPost;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\LvSoftPost;
 
@@ -12,7 +14,8 @@ use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\LvSoftPost;
  * The lifecycle-callback contract: attempt events (`saving`, `deleting`,
  * `restoring`) veto on the first listener returning false; success events
  * (`saved`, `deleted`, `restored`) run every listener. The veto paths are
- * the dark branches — nothing is written and `false` is reported.
+ * the dark branches — nothing is written and a WriteVetoException naming
+ * the event throws.
  */
 final class ModelLifecycleVetoTest extends DatabaseTestCase
 {
@@ -26,7 +29,7 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
 
     /**
      * A `saving` listener returning false vetoes the INSERT — nothing is
-     * written and save() reports false.
+     * written and a WriteVetoException throws.
      */
     public function testSavingVetoBlocksInsert(): void
     {
@@ -36,7 +39,16 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return false;
         });
 
-        self::assertFalse($post->save());
+        $exception = Expectation::throwsWithMessage(
+            fn () => $post->save(),
+            WriteVetoException::class,
+            'saving',
+        );
+
+        self::assertSame(LvPost::class, $exception->model);
+        self::assertSame('saving', $exception->event);
+        self::assertNull($exception->trait);
+
         self::assertSame(0, $this->connection->table('lv_posts')->count());
     }
 
@@ -55,8 +67,16 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return false;
         });
 
-        self::assertFalse($post->save());
+        $exception = Expectation::throwsWithMessage(
+            fn () => $post->save(),
+            WriteVetoException::class,
+            'saving',
+        );
 
+        self::assertSame('saving', $exception->event);
+
+        // The dirty columns never landed — the row keeps its original
+        // title.
         $fresh = LvPost::newQuery()->find($post->id);
         self::assertNotNull($fresh);
         self::assertSame('original', $fresh->title);
@@ -74,13 +94,14 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return true;
         });
 
-        self::assertTrue($post->save());
+        $post->save();
+
         self::assertSame(1, $this->connection->table('lv_posts')->count());
     }
 
     /**
      * A `deleting` listener returning false vetoes the delete — the row
-     * stays and delete() reports false.
+     * stays and a WriteVetoException throws.
      */
     public function testDeletingVetoBlocksDelete(): void
     {
@@ -92,7 +113,12 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return false;
         });
 
-        self::assertFalse($post->delete());
+        Expectation::throwsWithMessage(
+            fn () => $post->delete(),
+            WriteVetoException::class,
+            'deleting',
+        );
+
         self::assertSame(1, $this->connection->table('lv_posts')->count());
     }
 
@@ -117,7 +143,11 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return true;
         });
 
-        self::assertFalse($post->delete());
+        Expectation::throws(
+            fn () => $post->delete(),
+            WriteVetoException::class,
+        );
+
         self::assertSame(['first'], $calls);
     }
 
@@ -138,7 +168,8 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             $calls[] = 'second:' . $model->id;
         });
 
-        self::assertTrue($post->save());
+        $post->save();
+
         self::assertSame(['first:1', 'second:1'], $calls);
     }
 
@@ -156,7 +187,8 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             $fired = $model->id;
         });
 
-        self::assertTrue($post->delete());
+        $post->delete();
+
         self::assertSame($post->id, $fired);
         self::assertSame(0, $this->connection->table('lv_posts')->count());
     }
@@ -175,7 +207,12 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return false;
         });
 
-        self::assertFalse($post->forceDelete());
+        Expectation::throwsWithMessage(
+            fn () => $post->forceDelete(),
+            WriteVetoException::class,
+            'deleting',
+        );
+
         self::assertSame(1, $this->connection->table('lv_soft_posts')->count());
     }
 
@@ -194,7 +231,12 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             return false;
         });
 
-        self::assertFalse($post->restore());
+        Expectation::throwsWithMessage(
+            fn () => $post->restore(),
+            WriteVetoException::class,
+            'restoring',
+        );
+
         self::assertTrue($post->trashed());
         self::assertSame(1, LvSoftPost::newQuery()->withTrashed()->count());
         self::assertSame(0, LvSoftPost::newQuery()->count());
@@ -215,7 +257,8 @@ final class ModelLifecycleVetoTest extends DatabaseTestCase
             $fired = true;
         });
 
-        self::assertTrue($post->restore());
+        $post->restore();
+
         self::assertTrue($fired);
         self::assertFalse($post->trashed());
     }

@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Model;
 
 use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\Exceptions\StaleRowException;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MstGuid;
 use BlueprintAU\Radiant\Tests\Unit\Model\Fixtures\MstItem;
 
@@ -49,11 +51,11 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
     {
         $item = new MstItem();
         $item->name = 'One';
-        self::assertTrue($item->save());
+        $item->save();
         self::assertSame(1, MstItem::all()->count(), 'the first save inserted');
 
         $item->name = 'One-edited';
-        self::assertTrue($item->save());
+        $item->save();
         self::assertSame(1, MstItem::all()->count(), 'the second save updated, not inserted');
 
         $fresh = MstItem::find($item->id);
@@ -92,7 +94,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
         $guid = new MstGuid();
         $guid->uuid = 'abc-123';
         $guid->label = 'First';
-        self::assertTrue($guid->save());
+        $guid->save();
         self::assertSame('abc-123', $guid->uuid, 'the caller-assigned key survives');
 
         $found = MstGuid::find('abc-123');
@@ -101,7 +103,7 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
 
         // Update via the assigned key.
         $found->label = 'Second';
-        self::assertTrue($found->save());
+        $found->save();
         self::assertSame(1, MstGuid::all()->count(), 'still one row — the update did not duplicate');
 
         $reread = MstGuid::find('abc-123');
@@ -110,11 +112,11 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
     }
 
     /**
-     * delete() on a model whose row was hard-deleted elsewhere returns
-     * false and clears exists — the model-level stale contract (pairs
-     * with the SoftDeletesTest lock on the trait's delete()).
+     * delete() on a model whose row was hard-deleted elsewhere throws a
+     * StaleRowException — the model-level stale contract (pairs with the
+     * SoftDeletesTest lock on the trait's delete()).
      */
-    public function testDeleteOnStaleInstanceReturnsFalse(): void
+    public function testDeleteOnStaleInstanceThrows(): void
     {
         $id = $this->seedItem();
 
@@ -123,13 +125,17 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
 
         $this->connection->table('mst_items')->where('id', '=', $id)->delete();
 
-        self::assertFalse($item->delete());
+        Expectation::throws(
+            fn () => $item->delete(),
+            StaleRowException::class,
+        );
+
         self::assertCount(0, MstItem::all());
     }
 
     /**
      * A second save() on a DELETED instance re-INSERTs (exists was cleared
-     * by the failed delete) — the row comes back with a NEW generated key.
+     * by the delete) — the row comes back with a NEW generated key.
      */
     public function testSaveAfterDeleteReinserts(): void
     {
@@ -137,9 +143,9 @@ final class ModelSaveRefreshTest extends DatabaseTestCase
 
         $item = MstItem::find($id);
         self::assertNotNull($item);
-        self::assertTrue($item->delete());
+        $item->delete();
 
-        self::assertTrue($item->save(), 'exists is false, so save() takes the INSERT branch');
+        $item->save(); // exists is false, so save() takes the INSERT branch
         self::assertCount(1, MstItem::all());
         self::assertSame($id, $item->id, 'the caller-assigned id carries over on the re-insert');
     }
