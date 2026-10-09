@@ -828,6 +828,7 @@ final class SqlConnectionEdgeCasesTest extends TestCase
     public function testChunkSqlWrapsQueryFailure(): void
     {
         $this->expectException(QueryException::class);
+        $this->expectExceptionMessageIsOrContains('SQL error executing query');
 
         $this->connection->chunkSql('SELECT * FROM no_such_table', [], 2, static fn (): bool => true);
     }

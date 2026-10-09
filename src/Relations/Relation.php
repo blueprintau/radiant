@@ -449,6 +449,48 @@ abstract class Relation
     }
 
     /**
+     * Add an `EXISTS (subquery)` clause to the relation's query.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Query\QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return static
+     */
+    final public function whereExists(
+        \BlueprintAU\Radiant\Database\Query\QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static {
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->whereExists($query, $boolean, $negated);
+
+        return $clone;
+    }
+
+    /**
+     * Add a `column IN (subquery)` clause to the relation's query.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  \BlueprintAU\Radiant\Database\Query\QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return static
+     */
+    final public function whereInQuery(
+        string $column,
+        \BlueprintAU\Radiant\Database\Query\QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static {
+        $clone = clone $this;
+        $clone->composed = true;
+        $clone->query = $this->compositionQuery()->whereInQuery($column, $query, $boolean, $negated);
+
+        return $clone;
+    }
+
+    /**
      * Add an "order by" clause to the relation's query.
      *
      * @param  string|Expression  $column

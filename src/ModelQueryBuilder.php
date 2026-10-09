@@ -14,6 +14,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
+use BlueprintAU\Radiant\Database\Query\SubquerySelect;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
 use BlueprintAU\Radiant\Database\Query\Expression;
@@ -124,6 +125,15 @@ final class ModelQueryBuilder extends QueryBuilder
      * @var bool
      */
     private bool $nested = false;
+
+    /**
+     * Tables qualified column specs may reference beyond this builder's
+     * own — the correlation context stamped by {@see correlateWith()}.
+     * Validation-only: never compiled.
+     *
+     * @var list<string>
+     */
+    protected array $correlationTables = [];
 
     /**
      * Create a builder bound to a model class on a connection.
@@ -651,6 +661,76 @@ final class ModelQueryBuilder extends QueryBuilder
     }
 
     /**
+     * Add an `EXISTS (subquery)` clause to the query.
+     *
+     * There is no outer column to validate — the subquery's columns were
+     * validated against its own model at declaration. Declare the
+     * correlation with {@see correlateWith()} before referencing outer
+     * tables.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return static
+     */
+    #[\Override]
+    public function whereExists(QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And, bool $negated = false): static
+    {
+        return parent::whereExists($query, $boolean, $negated);
+    }
+
+    /**
+     * Add a `column IN (subquery)` clause to the query.
+     *
+     * The outer column validates against this model's allowlist; the
+     * subquery's columns validate against its own model.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return static
+     * @throws \InvalidArgumentException
+     */
+    #[\Override]
+    public function whereInQuery(string $column, QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And, bool $negated = false): static
+    {
+        $this->validateColumn($column);
+
+        return parent::whereInQuery($column, $query, $boolean, $negated);
+    }
+
+    /**
+     * Declare this builder a correlated subquery of the given outer
+     * builder.
+     *
+     * Column validation is eager, so this must be called before the
+     * correlated clauses: afterward, qualified specs may reference the
+     * outer's tables (plus its join tables and aliases), while a
+     * foreign-table reference without it still throws at the clause call.
+     *
+     * @param  QueryBuilder  $outer  The builder this subquery correlates against.
+     * @return static
+     */
+    public function correlateWith(QueryBuilder $outer): static
+    {
+        $tables = [$outer->table];
+
+        foreach ($outer->getJoins() as $join) {
+            if (preg_match('/^(.*?)\s+as\s+(\S+)$/i', $join['table'], $m) === 1) {
+                $tables[] = trim($m[1]);
+                $tables[] = $m[2];
+            } else {
+                $tables[] = $join['table'];
+            }
+        }
+
+        $clone = clone $this;
+        $clone->correlationTables = $tables;
+        return $clone;
+    }
+
+    /**
      * Create a new builder for a nested where group.
      *
      * @return QueryBuilder
@@ -721,18 +801,18 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * Every plain-string spec WITHOUT a `.` gets this model's table
      * prefix — including a raw `*`, which becomes `table.*` IN PLACE (a
-     * mixed shape keeps its sibling specs); Aggregate, Expression and
-     * already-qualified entries pass through.
+     * mixed shape keeps its sibling specs); Aggregate, Expression,
+     * SubquerySelect and already-qualified entries pass through.
      *
-     * @param  list<string|Expression|Aggregate>  $columns
-     * @return list<string|Expression|Aggregate>
+     * @param  list<string|Expression|Aggregate|SubquerySelect>  $columns
+     * @return list<string|Expression|Aggregate|SubquerySelect>
      */
     private function qualifyColumns(array $columns): array
     {
         $qualified = [];
 
         foreach ($columns as $column) {
-            if ($column instanceof Expression || $column instanceof Aggregate) {
+            if ($column instanceof Expression || $column instanceof Aggregate || $column instanceof SubquerySelect) {
                 $qualified[] = $column;
                 continue;
             }
@@ -1668,6 +1748,9 @@ final class ModelQueryBuilder extends QueryBuilder
                 if ($column instanceof Aggregate) {
                     continue; // aggregates are computed columns, not the PK.
                 }
+                if ($column instanceof SubquerySelect) {
+                    continue; // a scalar subquery column is not the PK.
+                }
                 $bare = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $column));
 
                 if ($bare === $this->table . '.*') {
@@ -1909,11 +1992,11 @@ final class ModelQueryBuilder extends QueryBuilder
      * irrelevant: `select('*')` before or after `join()` lands on the
      * same qualified list.
      *
-     * @param  string|Expression|Aggregate  ...$columns  Each column as its own argument, or none to reset to `*`.
+     * @param  string|Expression|Aggregate|SubquerySelect  ...$columns  Each column as its own argument, or none to reset to `*`.
      * @return static
      * @throws \InvalidArgumentException
      */
-    public function select(string|Expression|Aggregate ...$columns): static
+    public function select(string|Expression|Aggregate|SubquerySelect ...$columns): static
     {
         $flat = $columns === [] ? ['*'] : array_values($columns);
 
@@ -1932,6 +2015,10 @@ final class ModelQueryBuilder extends QueryBuilder
                     if (!$column->column instanceof Expression && $column->column !== '*') {
                         $this->validateColumn($column->column);
                     }
+                } elseif ($column instanceof SubquerySelect) {
+                    // The node's sub-builder validates its columns
+                    // against its own model; the alias was validated by
+                    // the constructor. No outer validation applies.
                 } elseif (!$column instanceof Expression) {
                     $this->validateColumn($column);
                 }
@@ -1946,18 +2033,19 @@ final class ModelQueryBuilder extends QueryBuilder
             // here rather than compiling into the SQL quote-only.
             $callerOwned = (bool) array_filter(
                 $flat,
-                fn(string|Expression|Aggregate $column) => $column instanceof Expression || $column instanceof Aggregate
+                fn(string|Expression|Aggregate|SubquerySelect $column) => !is_string($column)
                     ? true
                     : str_contains($column, '.'),
             );
 
             if ($callerOwned) {
-                // Order-stable qualification: each spec qualifies IN ITS
-                // OWN POSITION — bare strings map to `table.col`, objects
-                // (Aggregate/Expression) pass through verbatim — so the
-                // compiled list matches the caller's written order.
+                // Order-stable qualification: each spec qualifies in its
+                // own position — bare strings map to `table.col`, objects
+                // (Aggregate/Expression/SubquerySelect) pass through
+                // verbatim — so the compiled list matches the caller's
+                // written order.
                 return parent::select(...array_map(
-                    fn(string|Expression|Aggregate $column) => is_string($column)
+                    fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column)
                         ? $this->qualifyForJoin([$column])[0]
                         : $column,
                     $flat,
@@ -1967,7 +2055,7 @@ final class ModelQueryBuilder extends QueryBuilder
 
         if ($this->getGroups() !== []) {
             return parent::select(...array_map(
-                fn(string|Expression|Aggregate $column) => is_string($column)
+                fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column)
                     ? $this->qualifyForJoin([$column])[0]
                     : $column,
                 $flat,
@@ -1982,7 +2070,7 @@ final class ModelQueryBuilder extends QueryBuilder
         // type system: array_unique/array_merge need strings here.
         $stringColumns = array_values(array_filter(
             $flat,
-            fn(string|Expression|Aggregate $column) => is_string($column),
+            fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column),
         ));
         $merged = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
 
@@ -2226,6 +2314,18 @@ final class ModelQueryBuilder extends QueryBuilder
             if (($this->partitions !== [] && ($this->partitions[$rest] ?? null) === $table)
                 || in_array($table, $joinTables, true)
             ) {
+                return;
+            }
+
+            // Correlation context: a table the OUTER query names (its own
+            // table, its join tables and aliases) when this builder is a
+            // whereExists subquery — the correlation references those
+            // tables by design. Their column allowlist belongs to the
+            // OUTER model, not this one, so admission here is by table
+            // only; a typo in the outer table's column is the outer
+            // builder's contract to catch (and SQL fails fast on an
+            // unknown column regardless).
+            if (in_array($table, $this->correlationTables, true)) {
                 return;
             }
 

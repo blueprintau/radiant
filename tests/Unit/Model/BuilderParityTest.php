@@ -545,6 +545,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testBulkInsertRejectsScalarRows(): void
     {
         $this->expectException(\TypeError::class);
+        $this->expectExceptionMessageIsOrContains('array');
 
         $this->runInvalid(function (): void {
             BpUser::newQuery()->insert(['name', 'age']);
@@ -633,6 +634,7 @@ final class BuilderParityTest extends DatabaseTestCase
         ArrayRowConnection::$rows = [['id' => 1, 'name' => 'ada']];
 
         $this->expectException(ModelNotFoundException::class);
+        $this->expectExceptionMessageIsOrContains('No query results for model');
 
         // The setUp seed put 2 rows in the sqlite table, but the swapped
         // connection returns exactly ONE canned (array) row — the count
@@ -687,6 +689,7 @@ final class BuilderParityTest extends DatabaseTestCase
     public function testSoleThrowsOnEmptyResult(): void
     {
         $this->expectException(ModelNotFoundException::class);
+        $this->expectExceptionMessageIsOrContains('No query results for model');
 
         OfUser::newQuery()->where('name', '=', 'nobody')->sole();
     }

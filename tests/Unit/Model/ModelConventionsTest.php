@@ -52,6 +52,7 @@ final class ModelConventionsTest extends DatabaseTestCase
         MvAuthor::newQuery()->delete();
 
         $this->expectException(\BlueprintAU\Radiant\Exceptions\ModelNotFoundException::class);
+        $this->expectExceptionMessageIsOrContains('No query results for model');
 
         MvAuthor::firstOrFail();
     }
@@ -70,6 +71,7 @@ final class ModelConventionsTest extends DatabaseTestCase
         $second->save();
 
         $this->expectException(\BlueprintAU\Radiant\Exceptions\MultipleRecordsFoundException::class);
+        $this->expectExceptionMessageIsOrContains('expected exactly 1');
 
         MvAuthor::sole();
     }

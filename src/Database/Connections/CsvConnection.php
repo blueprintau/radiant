@@ -15,6 +15,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\SqlFeature;
+use BlueprintAU\Radiant\Database\Query\SubquerySelect;
 use Override;
 
 /**
@@ -374,6 +375,8 @@ final class CsvConnection implements ConnectionInterface
             WhereType::Nested => $this->matchesWheres($where['group']->wheres, $row),
             WhereType::Raw => throw new UnsupportedFeatureException('This connection does not support raw where clauses.'),
             WhereType::Column => throw new UnsupportedFeatureException('This connection does not support column-to-column where clauses.'),
+            WhereType::Exists => throw new UnsupportedFeatureException('This connection does not support exists where clauses.'),
+            WhereType::InSub => throw new UnsupportedFeatureException('This connection does not support subquery IN where clauses.'),
             WhereType::Null => $this->matchesNull($row[$where['column']] ?? null, $where['operator']),
             WhereType::Between => $this->matchesBetween($row[$where['column']] ?? null, $where['operator'], $where['value']),
             WhereType::Basic => $this->matchesBasic($row[$where['column']] ?? null, $where['operator'], $where['value']),
@@ -586,7 +589,7 @@ final class CsvConnection implements ConnectionInterface
     /**
      * Split the requested columns into plain fields and aggregates.
      *
-     * @param  list<string|Expression|Aggregate>  $columns
+     * @param  list<string|Expression|Aggregate|SubquerySelect>  $columns
      * @return array{0: list<string>, 1: array<string, array{0: string, string|Expression}>}
      * @throws UnsupportedFeatureException
      */
@@ -597,6 +600,9 @@ final class CsvConnection implements ConnectionInterface
         foreach ($columns as $column) {
             if ($column instanceof Expression) {
                 throw new UnsupportedFeatureException('This connection does not support raw select expressions.');
+            }
+            if ($column instanceof SubquerySelect) {
+                throw new UnsupportedFeatureException('This connection does not support subquery select columns.');
             }
             if ($column instanceof Aggregate) {
                 // The read-back key: the alias when given, else the derived

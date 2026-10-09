@@ -350,4 +350,50 @@ final class CsvConnectionTest extends TestCase
         $this->expectExceptionMessageIsOrContains('read-only');
         $csv->table('users')->insert(['id' => 2, 'name' => 'Bob']);
     }
+
+    /**
+     * An EXISTS where clause is gated at the feature assert — the CSV
+     * engine never sees the clause.
+     */
+    public function testWhereExistsFails(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice'],
+        ]);
+        $sub = $csv->table('orders')->select('*');
+
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessageIsOrContains('[subquery-where]');
+        $csv->table('users')->whereExists($sub)->get();
+    }
+
+    /**
+     * A subquery select column is gated at the feature assert.
+     */
+    public function testSelectSubFails(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice'],
+        ]);
+        $sub = $csv->table('orders')->select('*');
+
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessageIsOrContains('[subquery-select]');
+        $csv->table('users')->select(new \BlueprintAU\Radiant\Database\Query\SubquerySelect($sub, 'cnt'))->get();
+    }
+
+    /**
+     * An IN-subquery where clause is gated at the feature assert.
+     */
+    public function testWhereInQueryFails(): void
+    {
+        $csv = $this->makeCsv([
+            ['id' => 1, 'name' => 'Alice'],
+        ]);
+        $sub = $csv->table('orders')->select('user_id');
+
+        $this->expectException(UnsupportedFeatureException::class);
+        $this->expectExceptionMessageIsOrContains('[subquery-where]');
+        $csv->table('users')->whereInQuery('id', $sub)->get();
+    }
 }

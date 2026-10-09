@@ -13,6 +13,7 @@ use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
+use BlueprintAU\Radiant\Database\Query\SubquerySelect;
 use BlueprintAU\Radiant\Database\Query\ToSqlValue;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
@@ -89,15 +90,21 @@ abstract class Grammar
      * Wrap a column reference, respecting an `as` alias.
      *
      * An {@see Aggregate} renders from its structured parts; an {@see Expression}
-     * is passed through.
+     * is passed through; a {@see SubquerySelect} renders the parenthesized
+     * subquery with its AS alias.
      *
-     * @param  string|Expression|Aggregate  $column
+     * @param  string|Expression|Aggregate|SubquerySelect  $column
      * @return string
      */
-    protected function wrapColumn(string|Expression|Aggregate $column): string
+    protected function wrapColumn(string|Expression|Aggregate|SubquerySelect $column): string
     {
         if ($column instanceof Expression) {
             return $column->value;
+        }
+
+        if ($column instanceof SubquerySelect) {
+            return '(' . $this->compileSelect($column->query) . ') AS '
+                . $this->wrapSegments($column->alias);
         }
 
         if ($column instanceof Aggregate) {
@@ -157,7 +164,7 @@ abstract class Grammar
     /**
      * Wrap a list of columns into a comma-separated list.
      *
-     * @param  list<string|Expression|Aggregate>  $columns
+     * @param  list<string|Expression|Aggregate|SubquerySelect>  $columns
      * @return string
      */
     protected function columnize(array $columns): string
@@ -491,6 +498,11 @@ abstract class Grammar
             WhereType::Raw => $where['sql'],
             WhereType::Column => $this->wrapSegments($where['first']) . ' ' . $where['operator']->value . ' ' . $this->wrapSegments($where['second']),
             WhereType::Nested => '(' . $this->compileWhereGroup($where['group']->wheres) . ')',
+            WhereType::Exists => ($where['negated'] ? 'NOT ' : '')
+                . 'EXISTS (' . $this->compileSelect($where['query']) . ')',
+            WhereType::InSub => $this->wrapSegments($where['column'])
+                . ($where['negated'] ? ' NOT' : '') . ' IN ('
+                . $this->compileSelect($where['query']) . ')',
         };
     }
 

@@ -86,7 +86,8 @@ The tested floor is MariaDB 11.4 LTS. Older versions are untested.
 A custom connection can pre-flight queries instead of discovering an
 unsupported shape at execution time: `SqlFeature::usedBy($query)` reports
 which features a builder's query uses (joins, having, aggregates, raw SQL,
-subquery-from, unions, row locks, distinct), and
+subquery-from, subquery-where, subquery-select, unions, row locks,
+distinct), and
 `$query->assertSupports(...)` fails fast with the named feature before any
 SQL is compiled.
 
@@ -155,6 +156,52 @@ value is what gets stored, so a discarded return adds nothing:
 ```php
 $q->whereNested(fn ($nested) => $nested->where('a', '=', 1)->orWhere('b', '=', 2));
 ```
+
+### Subqueries
+
+EXISTS constraints take a caller-built subquery — typically another
+table's builder correlated to the outer query via `whereColumn()`. The
+sub-builder is stored structurally (the Grammar renders it by recursion)
+and its bindings are captured at declaration, so compiling stays a pure
+snapshot:
+
+```php
+$users = $db->table('users')
+    ->whereExists(
+        $db->table('orders')
+            ->whereColumn('orders.user_id', '=', 'users.id')
+            ->where('total', '>', 100)
+    )
+    ->get();
+```
+
+The full family — `whereExists()`/`whereNotExists()` plus the
+`or…` variants — exists on the builder, inside `whereNested()` groups
+(via the `WhereBuilder` facade), on relations, and as `Model::` statics.
+A scalar subquery joins the select list through the `SubquerySelect`
+node — a builder + alias pair passed straight to `select()`:
+
+```php
+use BlueprintAU\Radiant\Database\Query\SubquerySelect;
+
+$rows = $db->table('users')
+    ->select(
+        Aggregate::count('*', 'total'),
+        new SubquerySelect(
+            $db->table('orders')
+                ->select(Aggregate::count())
+                ->whereColumn('orders.user_id', '=', 'users.id'),
+            'order_count',
+        ),
+    )
+    ->get();
+```
+
+Both features are SQL-only: a non-SQL connection rejects them with the
+named feature (`subquery-where` / `subquery-select`) before compiling.
+Correlated references to the OUTER query's tables ride a base builder
+(`$db->table(...)`); a model builder's column allowlist correctly refuses
+columns it does not own.
 
 Every method validates its inputs and fails fast rather than compiling
 broken SQL — an empty `whereIn([])` throws, aggregate arguments fail

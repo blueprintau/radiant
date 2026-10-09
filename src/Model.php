@@ -14,6 +14,7 @@ use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
+use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Metadata\PropertyMapping;
@@ -437,6 +438,40 @@ abstract class Model
         WhereBoolean $boolean = WhereBoolean::And,
     ): ModelQueryBuilder {
         return static::newQuery()->whereNested($callback, $boolean);
+    }
+
+    /**
+     * Start a model query with an `EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery — another model's `newQuery()`, correlated via `whereColumn()`.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return ModelQueryBuilder<static>
+     */
+    final public static function whereExists(
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): ModelQueryBuilder {
+        return static::newQuery()->whereExists($query, $boolean, $negated);
+    }
+
+    /**
+     * Start a model query with a `column IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return ModelQueryBuilder<static>
+     */
+    final public static function whereInQuery(
+        string $column,
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): ModelQueryBuilder {
+        return static::newQuery()->whereInQuery($column, $query, $boolean, $negated);
     }
 
     /**

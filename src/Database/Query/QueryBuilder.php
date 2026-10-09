@@ -24,7 +24,7 @@ use BlueprintAU\Radiant\Database\Query\Enums\WhereType;
  * backend: SQL databases compile it to SQL, while a CSV connection applies
  * the filters directly in PHP.
  *
- * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean}
+ * @phpstan-type WhereClause array{type: WhereType::Basic, column: string|Expression, operator: WhereOperator, value: mixed, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Between, column: string|Expression, operator: WhereOperator, value: array{0: mixed, 1: mixed}, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Null, column: string|Expression, operator: WhereOperator, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Raw, sql: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Column, first: string, operator: ColumnOperator, second: string, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::Nested, group: WhereGroup, boolean: WhereBoolean} | array{type: WhereType::Exists, query: QueryBuilder, negated: bool, boolean: WhereBoolean, traitScope?: class-string} | array{type: WhereType::InSub, column: string, query: QueryBuilder, negated: bool, boolean: WhereBoolean, traitScope?: class-string}
  * @phpstan-type BindingValue string|int|float|bool|null|\DateTimeInterface|Expression|ToSqlValue
  *
  * @see \BlueprintAU\Radiant\Database\Connections\ConnectionInterface
@@ -45,7 +45,7 @@ class QueryBuilder
     /**
      * The columns to select.
      *
-     * @var list<string|Expression|Aggregate>
+     * @var list<string|Expression|Aggregate|SubquerySelect>
      */
     protected array $columns = ['*'];
 
@@ -181,7 +181,30 @@ class QueryBuilder
         public readonly ConnectionInterface $connection,
         public readonly string $table,
     ) {
-        $this->from = $table;
+        $this->from = $this->normalizeTableReference($table);
+    }
+
+    /**
+     * Validate a table reference.
+     *
+     * A reference containing whitespace must use the `table as alias`
+     * spelling — the compact `profiles p1` form is rejected, so a
+     * mistyped table name cannot become a phantom alias.
+     *
+     * @param  string  $table
+     * @return string
+     * @throws \InvalidArgumentException
+     */
+    protected function normalizeTableReference(string $table): string
+    {
+        if (preg_match('/\s+as\s+/i', $table) !== 1 && preg_match('/\s/', $table) === 1) {
+            throw new \InvalidArgumentException(
+                "Invalid table reference [{$table}] — use `table` or `table as alias`"
+                . ' (the compact `table alias` spelling is not accepted).'
+            );
+        }
+
+        return $table;
     }
 
     // ---- Selection ----
@@ -190,14 +213,28 @@ class QueryBuilder
      * Set the columns to select.
      *
      * Calling with no arguments resets to the `['*']` default select.
+     * A {@see SubquerySelect} node selects a scalar subquery; its
+     * sub-builder bindings ride the Select category, derived from the
+     * column list on every call so the bucket cannot drift.
      *
-     * @param  string|Expression|Aggregate  ...$columns
+     * @param  string|Expression|Aggregate|SubquerySelect  ...$columns
      * @return static
+     *
+     * @throws \InvalidArgumentException
      */
-    public function select(string|Expression|Aggregate ...$columns): static
+    public function select(string|Expression|Aggregate|SubquerySelect ...$columns): static
     {
         $clone = clone $this;
         $clone->columns = $columns === [] ? ['*'] : array_values($columns);
+
+        $selectBindings = [];
+        foreach ($clone->columns as $column) {
+            if ($column instanceof SubquerySelect) {
+                array_push($selectBindings, ...$column->bindings());
+            }
+        }
+        $clone->bindings[BindingCategory::Select->value] = $selectBindings;
+
         return $clone;
     }
 
@@ -381,7 +418,7 @@ class QueryBuilder
         $clone = clone $this;
         $clone->joins[] = [
             'type' => $type,
-            'table' => $table,
+            'table' => $this->normalizeTableReference($table),
             'wheres' => $second === ''
                 ? []
                 : [[
@@ -577,6 +614,117 @@ class QueryBuilder
         $clone = clone $this;
         $clone->wheres[] = ['type' => WhereType::Column, 'first' => $first, 'operator' => $resolved, 'second' => $second, 'boolean' => $boolean];
         return $clone;
+    }
+
+    /**
+     * Add an `EXISTS (subquery)` clause to the query.
+     *
+     * The subquery is a caller-built builder, typically correlated to
+     * the outer query with `whereColumn()`. Its bindings are captured
+     * eagerly into the Where category, so compiling stays a snapshot.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return static
+     */
+    public function whereExists(QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And, bool $negated = false): static
+    {
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::Exists, 'query' => $query, 'negated' => $negated, 'boolean' => $boolean];
+        array_push($clone->bindings[BindingCategory::Where->value], ...$query->getBindings());
+        return $clone;
+    }
+
+    /**
+     * Add a `NOT EXISTS (subquery)` clause to the query.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @return static
+     */
+    public function whereNotExists(QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->whereExists($query, $boolean, true);
+    }
+
+    /**
+     * Add an OR-connected `EXISTS (subquery)` clause to the query.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return static
+     */
+    public function orWhereExists(QueryBuilder $query): static
+    {
+        return $this->whereExists($query, WhereBoolean::Or);
+    }
+
+    /**
+     * Add an OR-connected `NOT EXISTS (subquery)` clause to the query.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return static
+     */
+    public function orWhereNotExists(QueryBuilder $query): static
+    {
+        return $this->whereExists($query, WhereBoolean::Or, true);
+    }
+
+    /**
+     * Add a `column IN (subquery)` clause to the query.
+     *
+     * The subquery must select exactly one column; its bindings are
+     * captured eagerly into the Where category, like `whereExists()`.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return static
+     */
+    public function whereInQuery(string $column, QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And, bool $negated = false): static
+    {
+        $clone = clone $this;
+        $clone->wheres[] = ['type' => WhereType::InSub, 'column' => $column, 'query' => $query, 'negated' => $negated, 'boolean' => $boolean];
+        array_push($clone->bindings[BindingCategory::Where->value], ...$query->getBindings());
+        return $clone;
+    }
+
+    /**
+     * Add a `column NOT IN (subquery)` clause to the query.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @return static
+     */
+    public function whereNotInQuery(string $column, QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->whereInQuery($column, $query, $boolean, true);
+    }
+
+    /**
+     * Add an OR-connected `column IN (subquery)` clause to the query.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return static
+     */
+    public function orWhereInQuery(string $column, QueryBuilder $query): static
+    {
+        return $this->whereInQuery($column, $query, WhereBoolean::Or);
+    }
+
+    /**
+     * Add an OR-connected `column NOT IN (subquery)` clause to the query.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return static
+     */
+    public function orWhereNotInQuery(string $column, QueryBuilder $query): static
+    {
+        return $this->whereInQuery($column, $query, WhereBoolean::Or, true);
     }
 
     /**
@@ -1138,7 +1286,7 @@ class QueryBuilder
     /**
      * The columns to select.
      *
-     * @return list<string|Expression|Aggregate>
+     * @return list<string|Expression|Aggregate|SubquerySelect>
      */
     final public function getColumns(): array
     {

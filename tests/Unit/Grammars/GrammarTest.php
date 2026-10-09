@@ -15,6 +15,7 @@ use BlueprintAU\Radiant\Database\Query\SqlFeature;
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
+use BlueprintAU\Radiant\Database\Query\SubquerySelect;
 use BlueprintAU\Radiant\Database\Query\ToSqlValue;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Tests\Support\NullConnection;
@@ -394,6 +395,296 @@ final class GrammarTest extends TestCase
         );
         self::assertSame(
             'SELECT "status", count(*) AS "total" FROM "users" GROUP BY "status" HAVING count(*) > ?',
+            $sql,
+        );
+    }
+
+    /**
+     * An EXISTS subquery compiles to `EXISTS (…)`, recursively compiling
+     * the sub-builder's select.
+     */
+    public function testWhereExists(): void
+    {
+        $sub = $this->builder('orders')->select('*')->whereColumn('orders.user_id', '=', 'users.id');
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->whereExists($sub),
+        );
+        self::assertSame(
+            'SELECT * FROM "users" WHERE EXISTS (SELECT * FROM "orders" WHERE "orders"."user_id" = "users"."id")',
+            $sql,
+        );
+    }
+
+    /**
+     * A negated exists compiles to `NOT EXISTS (…)`; orWhereExists keeps
+     * the boolean at the clause edge.
+     */
+    public function testWhereNotExistsAndOrVariants(): void
+    {
+        $exists = $this->builder('orders')->select('*')->whereColumn('orders.user_id', '=', 'users.id');
+        $builder = $this->builder()
+            ->where('active', WhereOperator::Eq, 1)
+            ->whereNotExists($exists)
+            ->orWhereExists($exists);
+
+        $sql = (new SqliteGrammar())->compileSelect($builder);
+        self::assertSame(
+            'SELECT * FROM "users" WHERE "active" = ? AND NOT EXISTS (SELECT * FROM "orders" WHERE "orders"."user_id" = "users"."id")'
+                . ' OR EXISTS (SELECT * FROM "orders" WHERE "orders"."user_id" = "users"."id")',
+            $sql,
+        );
+    }
+
+    /**
+     * The exists subquery's bindings are captured EAGERLY at declaration
+     * into the Where category, in sub-builder order, interleaved at the
+     * clause's position — so a correlated subquery with values actually
+     * filters when the statement executes.
+     */
+    public function testWhereExistsBindingsAreCaptured(): void
+    {
+        $sub = $this->builder('orders')
+            ->select('*')
+            ->where('total', WhereOperator::Gt, 100)
+            ->whereColumn('orders.user_id', '=', 'users.id')
+            ->where('status', WhereOperator::Eq, 'paid');
+        $outer = $this->builder()
+            ->where('active', WhereOperator::Eq, 1)
+            ->whereExists($sub)
+            ->where('region', WhereOperator::Eq, 'eu');
+
+        $sql = (new SqliteGrammar())->compileSelect($outer);
+        self::assertSame(
+            'SELECT * FROM "users" WHERE "active" = ? AND EXISTS (SELECT * FROM "orders" WHERE "total" > ?'
+                . ' AND "orders"."user_id" = "users"."id" AND "status" = ?) AND "region" = ?',
+            $sql,
+        );
+        // Interleave order: outer-where, then the subquery's bindings at
+        // the clause position, then the trailing outer where.
+        self::assertSame([1, 100, 'paid', 'eu'], $outer->getBindings());
+    }
+
+    /**
+     * Compiling an exists clause is a PURE snapshot: repeated compiles
+     * never duplicate the captured subquery bindings.
+     */
+    public function testWhereExistsBindingsNotDuplicatedOnRecompile(): void
+    {
+        $sub = $this->builder('orders')->select('*')->where('total', WhereOperator::Gt, 100);
+        $outer = $this->builder()->whereExists($sub);
+        $grammar = new SqliteGrammar();
+
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+
+        self::assertSame([100], $outer->getBindings([BindingCategory::Where]));
+    }
+
+    /**
+     * A scalar subquery select column compiles to `(SELECT …) AS alias`
+     * alongside sibling specs — the SubquerySelect node passed directly
+     * to select().
+     */
+    public function testSelectSub(): void
+    {
+        $sub = $this->builder('orders')
+            ->select(Aggregate::count())
+            ->whereColumn('orders.user_id', '=', 'users.id');
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->select('name', new SubquerySelect($sub, 'order_count')),
+        );
+        self::assertSame(
+            'SELECT "name", (SELECT count(*) FROM "orders" WHERE "orders"."user_id" = "users"."id") AS "order_count" FROM "users"',
+            $sql,
+        );
+    }
+
+    /**
+     * select() DERIVES the Select binding bucket from the node specs —
+     * the subquery's bindings land in the dedicated Select category
+     * (canonical order: Select before From before Where, matching SQL
+     * text order), and the derivation is idempotent: reselecting drops
+     * stale node bindings instead of drifting from the list.
+     */
+    public function testSelectSubBindingsLandInSelectCategory(): void
+    {
+        $sub = $this->builder('orders')
+            ->select(Aggregate::count())
+            ->whereColumn('orders.user_id', '=', 'users.id')
+            ->where('total', WhereOperator::Gt, 50);
+        $outer = $this->builder()
+            ->select(new SubquerySelect($sub, 'order_count'))
+            ->where('active', WhereOperator::Eq, 1);
+
+        $sql = (new SqliteGrammar())->compileSelect($outer);
+        self::assertSame(
+            'SELECT (SELECT count(*) FROM "orders" WHERE "orders"."user_id" = "users"."id" AND "total" > ?) AS "order_count" FROM "users" WHERE "active" = ?',
+            $sql,
+        );
+        self::assertSame([50], $outer->getBindings([BindingCategory::Select]));
+        self::assertSame([1], $outer->getBindings([BindingCategory::Where]));
+        // Canonical order: the Select-category bindings precede the Where ones.
+        self::assertSame([50, 1], $outer->getBindings());
+
+        // Reselecting without the node drops its bindings — the bucket
+        // always mirrors the CURRENT column list.
+        $plain = $outer->select('name');
+        self::assertSame([], $plain->getBindings([BindingCategory::Select]));
+    }
+
+    /**
+     * An invalid subquery select alias fails fast at declaration.
+     */
+    public function testSelectSubRejectsInvalidAlias(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('A subquery select alias must be a bare identifier');
+        $this->builder()->select(new SubquerySelect($this->builder('orders')->select('*'), 'bad alias!'));
+    }
+
+    /**
+     * A selectSub column is gated by the SubquerySelect feature.
+     */
+    public function testSubqueryFeaturesAreReported(): void
+    {
+        $existsSub = $this->builder('orders')->select('*')->whereColumn('orders.user_id', '=', 'users.id');
+        $selectSub = $this->builder('orders')
+            ->select(Aggregate::count())
+            ->whereColumn('orders.user_id', '=', 'users.id');
+
+        $existsQuery = $this->builder()->whereExists($existsSub);
+        self::assertSame([SqlFeature::SubqueryWhere], SqlFeature::usedBy($existsQuery));
+
+        $selectQuery = $this->builder()->select(new SubquerySelect($selectSub, 'cnt'));
+        self::assertSame([SqlFeature::SubquerySelect], SqlFeature::usedBy($selectQuery));
+    }
+
+    /**
+     * An IN-subquery compiles to `col IN (SELECT …)`; the negated pair
+     * renders `NOT IN (SELECT …)`.
+     */
+    public function testWhereInQuery(): void
+    {
+        $sub = $this->builder('orders')->select('user_id')->where('total', WhereOperator::Gt, 100);
+
+        $inSql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->whereInQuery('id', $sub),
+        );
+        self::assertSame(
+            'SELECT * FROM "users" WHERE "id" IN (SELECT "user_id" FROM "orders" WHERE "total" > ?)',
+            $inSql,
+        );
+
+        $notInSql = (new MySqlGrammar())->compileSelect(
+            $this->builder()->whereNotInQuery('id', $sub),
+        );
+        self::assertSame(
+            'SELECT * FROM `users` WHERE `id` NOT IN (SELECT `user_id` FROM `orders` WHERE `total` > ?)',
+            $notInSql,
+        );
+    }
+
+    /**
+     * The IN-subquery's bindings are captured EAGERLY at declaration into
+     * the Where category, interleaved at the clause position.
+     */
+    public function testWhereInQueryBindingsAreCaptured(): void
+    {
+        $sub = $this->builder('orders')
+            ->select('user_id')
+            ->where('total', WhereOperator::Gt, 100)
+            ->where('status', WhereOperator::Eq, 'paid');
+        $outer = $this->builder()
+            ->where('active', WhereOperator::Eq, 1)
+            ->whereInQuery('id', $sub)
+            ->where('region', WhereOperator::Eq, 'eu');
+
+        $sql = (new SqliteGrammar())->compileSelect($outer);
+        self::assertSame(
+            'SELECT * FROM "users" WHERE "active" = ? AND "id" IN (SELECT "user_id" FROM "orders"'
+                . ' WHERE "total" > ? AND "status" = ?) AND "region" = ?',
+            $sql,
+        );
+        self::assertSame([1, 100, 'paid', 'eu'], $outer->getBindings());
+    }
+
+    /**
+     * Compiling an IN-subquery is a PURE snapshot — recompiles never
+     * duplicate the captured bindings.
+     */
+    public function testWhereInQueryBindingsNotDuplicatedOnRecompile(): void
+    {
+        $sub = $this->builder('orders')->select('user_id')->where('total', WhereOperator::Gt, 100);
+        $outer = $this->builder()->whereInQuery('id', $sub);
+        $grammar = new SqliteGrammar();
+
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+        $grammar->compileSelect($outer);
+
+        self::assertSame([100], $outer->getBindings([BindingCategory::Where]));
+    }
+
+    /**
+     * An already-canonical `as` alias passes through the normalizer
+     * untouched — no `as as` doubling.
+     */
+    public function testCanonicalAliasPassesThrough(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder('profiles as p1')->select('p1.id'),
+        );
+        self::assertSame('SELECT "p1"."id" FROM "profiles" AS "p1"', $sql);
+    }
+
+    /**
+     * The compact alias spelling is rejected — a space without `as` is
+     * not silently rewritten into an alias.
+     */
+    public function testCompactAliasIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Invalid table reference');
+        $this->builder('profiles p1');
+    }
+
+    /**
+     * A compact alias on a JOIN is rejected the same way.
+     */
+    public function testCompactJoinAliasIsRejected(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Invalid table reference');
+        $this->builder()->join('profiles p2', 'p2.handle', '>', 'p1.handle');
+    }
+
+    /**
+     * The canonical `as` alias and a schema-qualified table validate.
+     */
+    public function testCanonicalAliasAndQualifiedTableValidate(): void
+    {
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder('app.profiles as p1')->select('p1.id'),
+        );
+        self::assertSame('SELECT "p1"."id" FROM "app"."profiles" AS "p1"', $sql);
+    }
+
+    /**
+     * select() accepts a SubquerySelect node directly — the single select
+     * surface for a scalar subquery column.
+     */
+    public function testSelectAcceptsSubqueryNode(): void
+    {
+        $node = new SubquerySelect(
+            $this->builder('orders')->select(Aggregate::count()),
+            'order_count',
+        );
+        $sql = (new SqliteGrammar())->compileSelect(
+            $this->builder()->select('name', $node),
+        );
+        self::assertSame(
+            'SELECT "name", (SELECT count(*) FROM "orders") AS "order_count" FROM "users"',
             $sql,
         );
     }

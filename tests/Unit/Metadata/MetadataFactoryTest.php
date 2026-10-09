@@ -553,6 +553,7 @@ final class MetadataFactoryTest extends TestCase
 
         // The failed build left no cache entry — the strict path throws.
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('empty column list');
         MetadataFactory::for(EmptyFkColumnsModel::class);
     }
 

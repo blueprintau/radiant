@@ -26,4 +26,21 @@ enum WhereType: string
 
     /** A nested group of wheres — keys: query, boolean. */
     case Nested = 'nested';
+
+    /**
+     * An `EXISTS`/`NOT EXISTS` subquery — keys: query, negated, boolean.
+     *
+     * One case covers both spellings: `negated` decides whether the
+     * Grammar prefixes `NOT`.
+     */
+    case Exists = 'exists';
+
+    /**
+     * A `column IN (SELECT …)` / `column NOT IN (SELECT …)` subquery —
+     * keys: column, query, negated, boolean.
+     *
+     * One case covers both spellings: `negated` decides whether the
+     * Grammar inserts `NOT`.
+     */
+    case InSub = 'in-sub';
 }

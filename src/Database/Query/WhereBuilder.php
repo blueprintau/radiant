@@ -65,6 +65,40 @@ final class WhereBuilder
     }
 
     /**
+     * Add an `EXISTS (subquery)` clause to the query.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return static
+     */
+    public function whereExists(
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static {
+        return new self($this->query->whereExists($query, $boolean, $negated));
+    }
+
+    /**
+     * Add a `column IN (subquery)` clause to the query.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return static
+     */
+    public function whereInQuery(
+        string $column,
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static {
+        return new self($this->query->whereInQuery($column, $query, $boolean, $negated));
+    }
+
+    /**
      * Add a raw where clause to the query.
      *
      * @param  string  $sql

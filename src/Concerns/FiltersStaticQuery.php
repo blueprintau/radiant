@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Concerns;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Model;
 use BlueprintAU\Radiant\ModelQueryBuilder;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
@@ -108,6 +109,112 @@ trait FiltersStaticQuery
     public static function orWhereNested(callable $callback): ModelQueryBuilder
     {
         return static::whereNested($callback, WhereBoolean::Or);
+    }
+
+    /**
+     * Start a model query with an `EXISTS (subquery)` clause.
+     *
+     * The subquery is a caller-built builder, typically another model's
+     * `newQuery()` correlated to the outer query via `whereColumn()`.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return ModelQueryBuilder<static>
+     */
+    abstract public static function whereExists(
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): ModelQueryBuilder;
+
+    /**
+     * Start a model query with a `NOT EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @return ModelQueryBuilder<static>
+     */
+    public static function whereNotExists(QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    {
+        return static::whereExists($query, $boolean, true);
+    }
+
+    /**
+     * Start a model query with an OR-connected `EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return ModelQueryBuilder<static>
+     */
+    public static function orWhereExists(QueryBuilder $query): ModelQueryBuilder
+    {
+        return static::whereExists($query, WhereBoolean::Or);
+    }
+
+    /**
+     * Start a model query with an OR-connected `NOT EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return ModelQueryBuilder<static>
+     */
+    public static function orWhereNotExists(QueryBuilder $query): ModelQueryBuilder
+    {
+        return static::whereExists($query, WhereBoolean::Or, true);
+    }
+
+    /**
+     * Start a model query with a `column IN (subquery)` clause.
+     *
+     * The subquery must select exactly one column.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return ModelQueryBuilder<static>
+     */
+    abstract public static function whereInQuery(
+        string $column,
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): ModelQueryBuilder;
+
+    /**
+     * Start a model query with a `column NOT IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @return ModelQueryBuilder<static>
+     */
+    public static function whereNotInQuery(string $column, QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): ModelQueryBuilder
+    {
+        return static::whereInQuery($column, $query, $boolean, true);
+    }
+
+    /**
+     * Start a model query with an OR-connected `column IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return ModelQueryBuilder<static>
+     */
+    public static function orWhereInQuery(string $column, QueryBuilder $query): ModelQueryBuilder
+    {
+        return static::whereInQuery($column, $query, WhereBoolean::Or);
+    }
+
+    /**
+     * Start a model query with an OR-connected `column NOT IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return ModelQueryBuilder<static>
+     */
+    public static function orWhereNotInQuery(string $column, QueryBuilder $query): ModelQueryBuilder
+    {
+        return static::whereInQuery($column, $query, WhereBoolean::Or, true);
     }
 
     /**

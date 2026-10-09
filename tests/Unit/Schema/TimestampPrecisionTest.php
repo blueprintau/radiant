@@ -150,6 +150,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
     public function testPrecisionOutOfRangeFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('out of range');
         (new Blueprint('t'))->timestamp('started_at', 7);
     }
 
@@ -159,6 +160,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
     public function testPrecisionZeroFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('out of range');
         (new Blueprint('t'))->timestamp('started_at', 0);
     }
 
@@ -496,6 +498,7 @@ final class TimestampPrecisionTest extends DatabaseTestCase
     public function testPrecisionOnIntTimestampColumnFailsFast(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains('Unix-timestamp column');
 
         MetadataProbe::trigger();
     }

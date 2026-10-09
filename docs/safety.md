@@ -51,6 +51,18 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
   but returned nothing usable) throws — under the immutable builder API a
   callback MUST return the `WhereBuilder` it constrained.
 - Aggregate arguments fail closed on non-column shapes.
+- A table reference containing whitespace must use the `table as alias`
+  spelling — the compact `profiles p1` form throws instead of being
+  silently rewritten into an alias (a mistyped table name must not
+  become a phantom alias).
+- A subquery select alias must be a bare identifier — a `SubquerySelect`
+  node with `bad alias!` throws at declaration instead of compiling
+  broken AS
+  SQL.
+- A non-SQL connection rejects EXISTS constraints and subquery select
+  columns by name (`subquery-where` / `subquery-select`) before any
+  compilation — the CSV engine never walks a clause shape it cannot
+  evaluate.
 - A corrupt JSON or datetime cell throws with the column named, instead of
   silently loading wrong data into the model.
 - A where value that is invalid for its column's type throws naming the

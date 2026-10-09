@@ -6,18 +6,19 @@ namespace BlueprintAU\Radiant\Concerns;
 
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\WhereBuilder;
 
 /**
  * The shared where-family vocabulary — the one definition of every
  * where-derived helper.
  *
- * Every helper funnels into the {@see FiltersWhere::where()} sink — the
- * one abstract member (plus the {@see FiltersWhere::whereNested()}
- * structural sink) — so a host implementing the two sinks gets the whole
- * vocabulary for free. Hosts are immutable: both sinks return a new host,
- * and every helper returns the sink's result directly. Column parameters
- * accept `string|Expression`.
+ * Every helper funnels into one of the abstract sink members — the
+ * {@see FiltersWhere::where()} value sink plus the whereNested(),
+ * whereExists() and whereInQuery() structural sinks — so a host
+ * implementing the sinks gets the whole vocabulary for free. Hosts are
+ * immutable: every sink returns a new host, and every helper returns the
+ * sink's result directly. Column parameters accept `string|Expression`.
  *
  * Consumers:
  * - {@see \BlueprintAU\Radiant\Database\Query\QueryBuilder}
@@ -105,6 +106,112 @@ trait FiltersWhere
     public function orWhereNested(callable $callback): static
     {
         return $this->whereNested($callback, WhereBoolean::Or);
+    }
+
+    /**
+     * Add an `EXISTS (subquery)` clause to the query.
+     *
+     * The subquery is a caller-built builder, typically another model's
+     * `newQuery()` correlated to the outer query via `whereColumn()`.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT EXISTS`.
+     * @return static
+     */
+    abstract public function whereExists(
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static;
+
+    /**
+     * Add a `NOT EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @param  WhereBoolean  $boolean
+     * @return static
+     */
+    public function whereNotExists(QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->whereExists($query, $boolean, true);
+    }
+
+    /**
+     * Add an OR-connected `EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return static
+     */
+    public function orWhereExists(QueryBuilder $query): static
+    {
+        return $this->whereExists($query, WhereBoolean::Or);
+    }
+
+    /**
+     * Add an OR-connected `NOT EXISTS (subquery)` clause.
+     *
+     * @param  QueryBuilder  $query  The existential subquery.
+     * @return static
+     */
+    public function orWhereNotExists(QueryBuilder $query): static
+    {
+        return $this->whereExists($query, WhereBoolean::Or, true);
+    }
+
+    /**
+     * Add a `column IN (subquery)` clause to the query.
+     *
+     * The subquery must select exactly one column.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @param  bool  $negated  True renders `NOT IN`.
+     * @return static
+     */
+    abstract public function whereInQuery(
+        string $column,
+        QueryBuilder $query,
+        WhereBoolean $boolean = WhereBoolean::And,
+        bool $negated = false,
+    ): static;
+
+    /**
+     * Add a `column NOT IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @param  WhereBoolean  $boolean
+     * @return static
+     */
+    public function whereNotInQuery(string $column, QueryBuilder $query, WhereBoolean $boolean = WhereBoolean::And): static
+    {
+        return $this->whereInQuery($column, $query, $boolean, true);
+    }
+
+    /**
+     * Add an OR-connected `column IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return static
+     */
+    public function orWhereInQuery(string $column, QueryBuilder $query): static
+    {
+        return $this->whereInQuery($column, $query, WhereBoolean::Or);
+    }
+
+    /**
+     * Add an OR-connected `column NOT IN (subquery)` clause.
+     *
+     * @param  string  $column  The outer column the NOT IN constrains.
+     * @param  QueryBuilder  $query  The single-column value subquery.
+     * @return static
+     */
+    public function orWhereNotInQuery(string $column, QueryBuilder $query): static
+    {
+        return $this->whereInQuery($column, $query, WhereBoolean::Or, true);
     }
 
     /**

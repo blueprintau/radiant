@@ -204,6 +204,7 @@ final class RelationCacheReadsTest extends DatabaseTestCase
 
         // fresh: reaches the live database — also empty, also throws.
         $this->expectException(ModelNotFoundException::class);
+        $this->expectExceptionMessageIsOrContains('No query results for model');
         $loaded->posts()->firstOrFail(fresh: true);
     }
 
@@ -261,6 +262,7 @@ final class RelationCacheReadsTest extends DatabaseTestCase
         self::assertNotNull($emptied);
 
         $this->expectException(ModelNotFoundException::class);
+        $this->expectExceptionMessageIsOrContains('No query results for model');
         $emptied->posts()->sole();
     }
 
