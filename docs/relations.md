@@ -93,6 +93,18 @@ run against it; the scalar reads cannot compose — the related table is
 not known until the type column resolves, so they throw
 `LogicException`.
 
+The row-read family also creates. `firstOrCreate()` treats the
+relation's constraint as the match: the constraint's equality clauses
+(the FK pointing at the parent, a morph pair's key) become fills, so
+the created model always satisfies the very match that failed to find
+it — `$author->posts()->firstOrCreate(['title' => 'First'])` inserts a
+post carrying the parent's `user_id`. `findOrCreate($id, $values)`
+finds within the constraint or creates carrying both the key and the
+constraint. On `morphTo()` the resolved pair's key equality inverts
+into the fill — the created target's primary key equals the parent's
+morph key; an unresolved (null) pair fails the inversion. A hit reads
+the model's `$wasRecentlyCreated` as `false`, a miss as `true`.
+
 ## Grouped aggregates
 
 `countBy()` counts the related rows per group of a column in a single

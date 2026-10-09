@@ -184,6 +184,45 @@ trait FetchesResults
     }
 
     /**
+     * Return the first related model, or create one carrying the
+     * relation's constraint.
+     *
+     * The constraint's equality clauses (the FK pointing at the parent, a
+     * morph pair's key) become fills, so the created model satisfies the
+     * match that failed to find it. Not served from an eagerly-loaded
+     * result — a create must consult the database. For MorphTo, the
+     * resolved pair's key equality inverts into the fill, so the created
+     * target's primary key equals the parent's morph key; an unresolved
+     * pair fails the audit.
+     *
+     * @param  array<string, mixed>  $values  Extra column values for the created model.
+     * @return TRelated
+     * @throws \InvalidArgumentException
+     */
+    final public function firstOrCreate(array $values = []): Model
+    {
+        return $this->readQuery()->firstOrCreate($values);
+    }
+
+    /**
+     * Find a related model by its primary key, or create one carrying
+     * that key and the relation's constraint.
+     *
+     * The constraint Eqs become fills exactly as in
+     * {@see self::firstOrCreate()}; a hit reads the model's
+     * `wasRecentlyCreated` as false, a miss as true.
+     *
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @param  array<string, mixed>  $values  Extra column values for the created model.
+     * @return TRelated
+     * @throws \InvalidArgumentException
+     */
+    final public function findOrCreate(int|string|null|array $id, array $values = []): Model
+    {
+        return $this->readQuery()->findOrCreate($id, $values);
+    }
+
+    /**
      * Count the related rows matching the relation's constraint.
      *
      * Served from an eagerly-loaded result when one applies — the count

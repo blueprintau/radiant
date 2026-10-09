@@ -60,9 +60,22 @@ abstract class Model
     /**
      * Whether the model exists in the database.
      *
+     * Set by the write paths and by hydration. Public read; writes stay
+     * inside the class hierarchy.
+     *
      * @var bool
      */
-    protected bool $exists = false;
+    public protected(set) bool $exists = false;
+
+    /**
+     * Whether the model was created by the current request.
+     *
+     * True right after a successful INSERT; false on hydration and on
+     * every other path.
+     *
+     * @var bool
+     */
+    public protected(set) bool $wasRecentlyCreated = false;
 
     /**
      * Loaded relation results, keyed by relation name.
@@ -213,6 +226,23 @@ abstract class Model
     final public static function sole(): static
     {
         return static::newQuery()->sole();
+    }
+
+    /**
+     * Find a model by its primary key, or create one carrying that key.
+     *
+     * The PK map is both the match and the fill, so a miss always
+     * creates an addressable row. A hit reads
+     * {@see static::$wasRecentlyCreated} as false, a miss as true.
+     *
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @param  array<string, mixed>  $values  Extra column values for the created model.
+     * @return static
+     * @throws \InvalidArgumentException
+     */
+    final public static function findOrCreate(int|string|null|array $id, array $values = []): static
+    {
+        return static::newQuery()->findOrCreate($id, $values);
     }
 
     /**
@@ -858,6 +888,7 @@ abstract class Model
             }
 
             $this->exists = false;
+            $this->wasRecentlyCreated = false;
 
             // MTI reports success when at least one partition row went
             // away — a cascade may legitimately remove some levels' rows
@@ -871,6 +902,7 @@ abstract class Model
         // rows and reporting false.
         $deleted = $this->newQuery()->withTrashed()->whereKey($this->getKeyForRefresh())->delete();
         $this->exists = false;
+        $this->wasRecentlyCreated = false;
 
         return $deleted > 0;
     }
@@ -916,6 +948,7 @@ abstract class Model
         }
 
         $this->exists = true;
+        $this->wasRecentlyCreated = true;
         $this->materializeDefaults();
         $this->syncOriginal();
         $this->fireLifecycle('saved');
@@ -1106,6 +1139,7 @@ abstract class Model
         });
 
         $this->exists = true;
+        $this->wasRecentlyCreated = true;
         $this->materializeDefaults();
         $this->syncOriginal();
 
@@ -1422,6 +1456,21 @@ abstract class Model
     // ---- Hydration (reconstitution, not creation) ----
 
     /**
+     * Build a blank instance of this model class.
+     *
+     * The single construction seam shared by reconstitution and the
+     * create-family helpers: no constructor runs, no property is
+     * initialized. Override to swap in custom construction — the method
+     * never takes constructor args, so an override receives none either.
+     *
+     * @return static
+     */
+    public static function newInstance(): static
+    {
+        return (new \ReflectionClass(static::class))->newInstanceWithoutConstructor();
+    }
+
+    /**
      * Reconstitute a model from a raw row.
      *
      * Hydration does not run the constructor; each column property is
@@ -1432,7 +1481,7 @@ abstract class Model
      */
     final public static function fromRow(\stdClass $row): static
     {
-        $instance = (new \ReflectionClass(static::class))->newInstanceWithoutConstructor();
+        $instance = static::newInstance();
 
         foreach (static::getProperties() as $mapping) {
             $columnName = $mapping->columnName;
@@ -1457,6 +1506,7 @@ abstract class Model
         }
 
         $instance->exists = true;
+        $instance->wasRecentlyCreated = false;
         $instance->syncOriginal();
 
         // Pivot columns from a BelongsToMany eager select ride the row as
@@ -1567,6 +1617,33 @@ abstract class Model
         }
 
         $this->syntheticValues[$columnName] = $value;
+    }
+
+    /**
+     * Write a column's value — the write twin of {@see attribute()}.
+     *
+     * A typed-property-backed column writes through the hydration
+     * machinery. Synthetic columns throw — write them through
+     * {@see setAttribute()} explicitly.
+     *
+     * @param  string  $columnName
+     * @param  mixed  $value
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    final public function setColumn(string $columnName, mixed $value): void
+    {
+        $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
+
+        if ($mapping->property === null) {
+            throw new \InvalidArgumentException(
+                'Column [' . $columnName . '] on model [' . static::class . '] is a synthetic '
+                . 'column (declared by a trait, no PHP property backs it); write it through '
+                . 'setAttribute() explicitly if you need a runtime override.'
+            );
+        }
+
+        $this->hydrateProperty($mapping, $value);
     }
 
     // ---- Metadata (delegating to the MetadataFactory cache) ----

@@ -360,10 +360,10 @@ final class ModelQueryBuilder extends QueryBuilder
         }
 
         // A relation method takes no arguments and returns a Relation.
-        // Invoke it on a detached instance (hydration without constructor —
-        // the same trick fromRow() uses) so the parent's attribute reads
+        // Invoke it on a detached instance (the newInstance() hook —
+        // hydration without constructor) so the parent's attribute reads
         // see nulls rather than an uninitialized-property error.
-        $prototype = (new \ReflectionClass($class))->newInstanceWithoutConstructor();
+        $prototype = $class::newInstance();
 
         /** @var mixed $result */
         $result = $reflection->invoke($prototype);
@@ -1056,6 +1056,230 @@ final class ModelQueryBuilder extends QueryBuilder
         }
 
         return $model;
+    }
+
+    // ---- Find-or-create ----
+
+    /**
+     * Return the first matching model, or create one carrying the wheres.
+     *
+     * The builder's wheres are the match. Every simple `column = value`
+     * clause over a declared column becomes both a match clause and a
+     * fill, so the created model satisfies the match that failed to find
+     * it; non-invertible wheres fail fast unless their column is carried
+     * in `$values` (trait scopes never seed a fill). The lookup-then-insert
+     * is not atomic: against a `#[Unique]`-backed column a lost race
+     * surfaces as a QueryException.
+     *
+     * @param  array<string, mixed>  $values  Extra column values for the created model.
+     * @return TModel
+     * @throws \InvalidArgumentException
+     */
+    public function firstOrCreate(array $values = []): Model
+    {
+        $model = $this->first();
+
+        if ($model !== null) {
+            return $model;
+        }
+
+        return $this->createModel($this->invertibleWhereFills($values), $values);
+    }
+
+    /**
+     * Find a model by primary key, or create one carrying that key.
+     *
+     * The key map is both the match and the fill, so a miss always
+     * creates an addressable row; a scalar expands to the single PK, a
+     * composite key passes the full column => value map. A
+     * non-auto-generated key left without a value fails fast. The
+     * lookup-then-insert is not atomic: against a `#[Unique]`-backed key
+     * a lost race surfaces as a QueryException.
+     *
+     * @param  KeyValue  $id  The primary-key value, or a column => value map for a composite key.
+     * @param  array<string, mixed>  $values  Extra column values for the created model.
+     * @return TModel
+     * @throws \InvalidArgumentException
+     */
+    public function findOrCreate(int|string|null|array $id, array $values = []): Model
+    {
+        $model = $this->find($id);
+
+        if ($model !== null) {
+            return $model;
+        }
+
+        // The key is authoritative; the builder's invertible wheres fill
+        // beneath it. PHP's + keeps the left operand's entries on collision.
+        return $this->createModel($this->keyFills($id) + $this->invertibleWhereFills($values), $values);
+    }
+
+    /**
+     * Build, fill, and save a new model.
+     *
+     * The shared miss path. A `save()` reporting `false` returns the
+     * unsaved model — the model's flags tell the truth. Synthetic
+     * columns route through {@see Model::setAttribute()}; typed-property
+     * columns through {@see Model::setColumn()}.
+     *
+     * @param  array<string, mixed>  $match  The match-derived fills.
+     * @param  array<string, mixed>  $values  The caller's create-only extras.
+     * @return TModel The created model, or the unsaved model when the save was vetoed.
+     * @throws \InvalidArgumentException
+     */
+    private function createModel(array $match, array $values): Model
+    {
+        $metadata = MetadataFactory::for($this->modelClass);
+
+        // Auto-increment single PKs skip the guard — the INSERT generates
+        // the key. A caller-assigned or composite key must be fully
+        // covered by the fills, or the row is born unaddressable.
+        $pks = $metadata->primaryKeys;
+        $generated = count($pks) === 1 && $pks[0]->autoIncrement;
+
+        if (!$generated) {
+            $missing = [];
+
+            foreach ($pks as $pk) {
+                $name = $pk->name;
+
+                if ($name !== null && !array_key_exists($name, $match) && !array_key_exists($name, $values)) {
+                    $missing[] = $name;
+                }
+            }
+
+            if ($missing !== []) {
+                throw new \InvalidArgumentException(
+                    'Creating model [' . $this->modelClass . '] needs its primary-key column(s) '
+                        . '[' . implode(', ', $missing) . '] in the match or the values — the key is '
+                        . 'not auto-generated, so the INSERT would produce a row no later lookup '
+                        . 'can address.'
+                );
+            }
+        }
+
+        /** @var TModel $model */
+        $model = $this->modelClass::newInstance();
+
+        foreach ($match + $values as $column => $value) {
+            if ($metadata->mappingFor($column)->property === null) {
+                $model->setAttribute($column, $value);
+
+                continue;
+            }
+
+            $model->setColumn($column, $value);
+        }
+
+        $model->save();
+
+        return $model;
+    }
+
+    /**
+     * Extract the invertible where fills from the builder's where state.
+     *
+     * A simple `column = value` over a declared column is invertible —
+     * the clause's value seeds the column. Trait-scope-marked groups
+     * (the soft-delete filter) are framework-owned and skipped, as is a
+     * non-invertible where whose column `$values` covers. Every other
+     * shape fails fast.
+     *
+     * @param  array<string, mixed>  $values  The caller's create-only extras — the seeded constraint check.
+     * @return array<string, mixed>
+     * @throws \InvalidArgumentException
+     */
+    private function invertibleWhereFills(array $values): array
+    {
+        $fills = [];
+
+        foreach ($this->getWheres() as $where) {
+            // Trait scopes are the framework's own filter (the soft-delete
+            // `deleted_at IS NULL` group) — they must filter the lookup
+            // but never seed a fill.
+            if (array_key_exists('traitScope', $where)) {
+                continue;
+            }
+
+            if ($where['type'] === WhereType::Basic
+                && $where['operator'] === WhereOperator::Eq
+                && is_string($where['column'])
+            ) {
+                $column = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $where['column']));
+
+                if (MetadataFactory::for($this->modelClass)->hasColumn($column)) {
+                    $fills[$column] = $where['value'];
+
+                    continue;
+                }
+            }
+
+            // A non-invertible shape whose column the caller seeds in
+            // `$values` is satisfied by that value.
+            if ($where['type'] === WhereType::Basic && is_string($where['column'])) {
+                $column = trim((string) preg_replace('/\s+as\s+\S+$/i', '', $where['column']));
+
+                if (array_key_exists($column, $values)
+                    && MetadataFactory::for($this->modelClass)->hasColumn($column)
+                ) {
+                    continue;
+                }
+            }
+
+            throw new \InvalidArgumentException(
+                'firstOrCreate() cannot invert the where clause into a fill — only simple '
+                    . '`column = value` clauses over declared columns can seed the created model, '
+                    . 'or the constraint\'s column can be carried in the values explicitly. '
+                    . 'Compose the constraint so every filter is an equality on the builder.'
+            );
+        }
+
+        return $fills;
+    }
+
+    /**
+     * The PK fills for a findOrCreate miss — the key map itself.
+     *
+     * The lookup already validated the shapes (whereKey's guards run on
+     * the read); this only asserts the value side is present so the map
+     * is directly writable. The mixed parameter is the runtime boundary —
+     * the KeyValue contract on the public method is PHPDoc-only, so the
+     * list/null shapes are still checked here.
+     *
+     * @param  mixed  $id  The validated KeyValue from the public method.
+     * @return array<string, mixed>
+     *
+     * @throws \InvalidArgumentException
+     */
+    private function keyFills(mixed $id): array
+    {
+        if ($id === null) {
+            throw new \InvalidArgumentException(
+                'findOrCreate() cannot create from a null key — the created model would have '
+                    . 'no primary key.'
+            );
+        }
+
+        if (is_array($id) && array_is_list($id)) {
+            throw new \InvalidArgumentException(
+                'findOrCreate() takes a single key (scalar or column => value map), not a key '
+                    . 'list — a list matches several rows, and a create has exactly one target.'
+            );
+        }
+
+        if (is_array($id)) {
+            return $id;
+        }
+
+        $pkName = MetadataFactory::for($this->modelClass)->primaryKeys[0]->name;
+
+        if ($pkName === null) {
+            throw new \InvalidArgumentException(
+                "Model [{$this->modelClass}] has an unnamed primary key; pass a column => value map."
+            );
+        }
+
+        return [$pkName => $id];
     }
 
     // ---- Scalar reads (decoded through the column casts) ----

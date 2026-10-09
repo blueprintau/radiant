@@ -76,6 +76,46 @@ over `newQuery()`. Relations
 carry the same read family instance-side, scoped to the relation's
 constraint.
 
+### Find or create
+
+`findOrCreate()` finds by primary key, or creates a row carrying that
+key and returns the model. The created model carries the key as a
+column value, so a miss always produces an addressable row:
+
+```php
+$user = User::findOrCreate(42);                          // static
+$post = Post::findOrCreate(7, ['title' => 'Imported']);  // with extras
+$region = Region::newQuery()->findOrCreate(['id' => 5, 'country' => 'US']); // composite
+```
+
+A hit reads the model's `$wasRecentlyCreated` as `false`; a miss as
+`true`. The flag is set by every INSERT, cleared on hydration and
+delete, and survives a re-save (re-saving is not re-creating).
+
+`firstOrCreate()` is the builder's own method — the builder's wheres
+are the match. Every simple `column = value` clause over a declared
+column becomes both a match clause and a fill, so the created model
+always satisfies the very match that failed to find it. Extra values
+are passed as the argument and only land on the create:
+
+```php
+$user = User::newQuery()
+    ->where('email', '=', 'ada@example.com')
+    ->firstOrCreate(['name' => 'Ada']);   // the create-only extra
+```
+
+A non-invertible where (`>`, `<`, `IN`, `BETWEEN`, raw, nested) fails
+fast — its value cannot seed a new row. Trait scopes (the auto-applied
+soft-delete filter) are excluded from the inversion: they filter the
+lookup but never seed a fill. The lookup-then-insert is not atomic —
+against a `#[Unique]`-backed column a lost race surfaces as a
+`QueryException`, loudly, by design.
+
+Relations expose both: `$author->posts()->firstOrCreate(['title' =>
+'First'])` creates a post carrying the parent's `user_id`, and
+`->findOrCreate(7, [...])` finds within the constraint or creates
+carrying it.
+
 Every `#[Column]` property must declare a single named PHP type — untyped,
 union, and intersection types fail at metadata build. A `?Carbon` property
 on a DateTime column round-trips `Carbon` instances; an `int` property on
