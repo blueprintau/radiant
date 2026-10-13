@@ -41,6 +41,14 @@ final class ClassMetadata
     private readonly array $columnsByDbName;
 
     /**
+     * A declared morph column → its sibling's column name, precomputed
+     * in the constructor.
+     *
+     * @var array<string, string>
+     */
+    private readonly array $morphPairSiblings;
+
+    /**
      * Create class metadata.
      *
      * @param  string|null  $tableName
@@ -56,6 +64,7 @@ final class ClassMetadata
      * @param  list<array{trait: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>  $traitScopes
      * @param  list<array{trait: class-string, hook: \BlueprintAU\Radiant\Attributes\Hook, method: string}>  $writeHooks
      * @param  list<array{trait: class-string, hook: \BlueprintAU\Radiant\Attributes\Hook, method: string}>  $rowHooks
+     * @param  list<array{related: class-string<Model>, foreignKey: string, typeColumn: string, action: \BlueprintAU\Radiant\Attributes\MorphDeleteAction}>  $morphDeletes
      */
     public function __construct(
         public readonly ?string $tableName,
@@ -71,6 +80,7 @@ final class ClassMetadata
         public readonly array $traitScopes = [],
         public readonly array $writeHooks = [],
         public readonly array $rowHooks = [],
+        public readonly array $morphDeletes = [],
     ) {
         // Eager precompute: the class is built once per process (the
         // MetadataFactory cache), so deriving the lookup map here costs
@@ -85,6 +95,39 @@ final class ClassMetadata
 
         $this->columnsByDbName = $columnsByDbName;
         $this->tablePartitions = $tablePartitions;
+
+        // Morph pairs come from the synthetic-column declarations: each
+        // #[Morphs] emits exactly a `{name}_type` + `{name}_id` column
+        // pair, so the sibling lookup is a suffix mirror over the column
+        // names already present in the properties map.
+        $siblings = [];
+
+        foreach ($properties as $mapping) {
+            $column = $mapping->columnName;
+
+            if (str_ends_with($column, '_type')) {
+                $key = substr($column, 0, -strlen('_type')) . '_id';
+
+                if (isset($columnsByDbName[$key])) {
+                    $siblings[$column] = $key;
+                    $siblings[$key] = $column;
+                }
+            }
+        }
+
+        $this->morphPairSiblings = $siblings;
+    }
+
+    /**
+     * The sibling column of a declared morph pair member — null when
+     * the column is not part of a `{name}_type`/`{name}_id` pair.
+     *
+     * @param  string  $columnName
+     * @return string|null
+     */
+    public function morphPairSibling(string $columnName): string|null
+    {
+        return $this->morphPairSiblings[$columnName] ?? null;
     }
 
     /**

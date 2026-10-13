@@ -77,6 +77,15 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
 - A through relation whose two hop keys disagree in shape (one scalar, one
   composite, or mismatched arity) throws at construction — the join is
   unbuildable.
+- A HALF-NULL morph pair — one column of a `#[Morphs]` pair valued, its
+  sibling null — throws instead of reading as "no parent": a flush that
+  would land the shape throws at the model layer (both halves must be
+  null or set together), and a row corrupted OUTSIDE the ORM (manual SQL,
+  a second writer) throws when a `morphTo()` resolves it. Note the guard
+  covers the single-valued inverse only — a one-to-many morph filter
+  (`WHERE attachable_id = ? AND attachable_type = ?`) can never match a
+  half-null row, so orphans of that shape are invisible to relation reads;
+  auditing them requires a DB-side scan.
 
 Dialects refuse what they cannot express honestly, rather than emitting
 SQL with different semantics: SQLite rejects row locks (no syntax);

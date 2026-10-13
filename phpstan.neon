@@ -11,7 +11,10 @@ parameters:
         analyseAndScan:
             - tests/Unit/PHPStan/Fixtures/NarrowUnionFixture.php
             - tests/Unit/PHPStan/Fixtures/NarrowUnionCallSite.php
-
+            # A metadata-error fixture feeding a deliberately NON-model
+            # class-string to #[MorphDelete] — the runtime is_a gate in
+            # MetadataFactory::collectMorphDeletes() is the real check.
+            - tests/Unit/Metadata/Fixtures/MdNonModelParent.php
 services:
     -
         class: BlueprintAU\Radiant\PHPStan\Rules\RequireStrictTypesRule

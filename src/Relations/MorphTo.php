@@ -136,8 +136,25 @@ final class MorphTo extends Relation
     private function aliasOf(Model $parent): string|null
     {
         $alias = $parent->attribute($this->typeColumn);
+        $key = $parent->attribute($this->getForeignKey());
 
-        if ($alias === null) {
+        $aliasNull = $alias === null;
+        $keyNull = $key === null;
+
+        if ($aliasNull !== $keyNull) {
+            $direction = $keyNull
+                ? 'the type is set but the key is not'
+                : 'the key is set but the type is not';
+
+            throw new \InvalidArgumentException(
+                'Morph pair [' . $this->typeColumn . ', ' . $this->getForeignKey()
+                . '] on [' . $parent::class . '] is half-null — ' . $direction
+                . '. A half-set pair is an unresolvable reference (data '
+                . 'corruption); null both columns or restore the missing half.'
+            );
+        }
+
+        if ($aliasNull) {
             return null;
         }
 
@@ -366,7 +383,23 @@ final class MorphTo extends Relation
             $alias = $parent->attribute($this->typeColumn);
             $fk = $parent->attribute($this->getForeignKey());
 
-            if (!is_string($alias) || $fk === null) {
+            $aliasNull = $alias === null || $alias === '';
+            $fkNull = $fk === null;
+
+            if ($aliasNull !== $fkNull) {
+                $direction = $fkNull
+                    ? 'the type is set but the key is not'
+                    : 'the key is set but the type is not';
+
+                throw new \InvalidArgumentException(
+                    'Morph pair [' . $this->typeColumn . ', ' . $this->getForeignKey()
+                    . '] on [' . $parent::class . '] is half-null — ' . $direction
+                    . '. A half-set pair is an unresolvable reference (data '
+                    . 'corruption); null both columns or restore the missing half.'
+                );
+            }
+
+            if ($aliasNull) {
                 // No (type, key) pair → the single-valued relation loads
                 // as NULL (an empty collection would lie about cardinality).
                 $parent->setRelation($name, null);

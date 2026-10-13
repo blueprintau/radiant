@@ -9,6 +9,8 @@ use BlueprintAU\Radiant\Attributes\Check;
 use BlueprintAU\Radiant\Attributes\Column;
 use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Attributes\ModelScope;
+use BlueprintAU\Radiant\Attributes\MorphDelete;
+use BlueprintAU\Radiant\Attributes\MorphDeleteAction;
 use BlueprintAU\Radiant\Attributes\RowHook;
 use BlueprintAU\Radiant\Attributes\WriteHook;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
@@ -189,6 +191,7 @@ final class MetadataFactory
             traitScopes: self::collectTraitScopes($reflection, $class, $properties),
             writeHooks: self::collectWriteHooks($reflection, $class),
             rowHooks: self::collectRowHooks($reflection, $class),
+            morphDeletes: self::collectMorphDeletes($reflection, $class),
         );
     }
 
@@ -315,6 +318,102 @@ final class MetadataFactory
         }
 
         return $hooks;
+    }
+
+    /**
+     * Collect the class-level parent-delete morph actions.
+     *
+     * Each `#[MorphDelete]` names a RELATED model and the morph name the
+     * two models share; the entry is resolved to the related table's
+     * column pair at build. Cross-class invariants are validated against
+     * the related class's metadata — the same build-time resolution the
+     * #[ForeignKey] attribute performs through {@see ReferenceResolver}.
+     *
+     * @param  \ReflectionClass<Model>  $reflection
+     * @param  class-string<Model>  $class
+     * @return list<array{related: class-string<Model>, foreignKey: string, typeColumn: string, action: MorphDeleteAction}>
+     * @throws \InvalidArgumentException
+     */
+    private static function collectMorphDeletes(\ReflectionClass $reflection, string $class): array
+    {
+        $attributes = $reflection->getAttributes(MorphDelete::class);
+
+        if ($attributes === []) {
+            return [];
+        }
+
+        $entries = [];
+        $seen = [];
+
+        foreach ($attributes as $attribute) {
+            /** @var \BlueprintAU\Radiant\Attributes\MorphDelete $morphDelete */
+            $morphDelete = $attribute->newInstance();
+            $action = $morphDelete->action;
+            $related = $morphDelete->related;
+
+            // Attribute args are runtime strings; the docblock's
+            // class-string<Model> is an aspiration PHPStan treats as
+            // certain — the is_a gate is the REAL check, so its constant-
+            // truth under that assumption is suppressed knowingly.
+            //
+            // @phpstan-ignore function.alreadyNarrowedType (the docblock type is aspirational; untyped attribute args make the is_a a live runtime check)
+            if (!class_exists($related) || !is_a($related, Model::class, true)) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[MorphDelete] against [{$related}], "
+                    . 'which is not a model class.'
+                );
+            }
+
+            $key = $related . '|' . $morphDelete->morphName;
+
+            if (isset($seen[$key])) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[MorphDelete] for [{$related}::{$morphDelete->morphName}] "
+                    . 'twice; one relation takes one action.'
+                );
+            }
+
+            $seen[$key] = true;
+
+            $typeColumn = $morphDelete->morphName . '_type';
+            $foreignKey = $morphDelete->morphName . '_id';
+
+            // The related class's metadata resolves BOTH morph columns —
+            // injected synthetics (its own #[Morphs]) or user-declared
+            // columns shadowing the names. A build failure here is the
+            // declaration's problem, not the parent's.
+            $relatedMetadata = self::for($related);
+
+            foreach ([$typeColumn, $foreignKey] as $column) {
+                if (!$relatedMetadata->hasColumn($column)) {
+                    throw new \InvalidArgumentException(
+                        "Model [{$class}] declares #[MorphDelete] for [{$related}::{$morphDelete->morphName}], "
+                        . "but [{$related}] declares no [{$column}] column — declare the morph "
+                        . "pair with #[Morphs(name: '{$morphDelete->morphName}')] first."
+                    );
+                }
+            }
+
+            if ($action === MorphDeleteAction::Detach
+                && (!$relatedMetadata->mappingFor($typeColumn)->column->nullable
+                    || !$relatedMetadata->mappingFor($foreignKey)->column->nullable)
+            ) {
+                throw new \InvalidArgumentException(
+                    "Model [{$class}] declares #[MorphDelete(action: Detach)] for "
+                    . "[{$related}::{$morphDelete->morphName}], but the pair's columns are NOT "
+                    . 'nullable — a detach would write NULL into NOT NULL columns. Declare the '
+                    . "pair nullable (#[Morphs(nullable: true)]) or use the Delete/Restrict action."
+                );
+            }
+            $entries[] = [
+                'related' => $related,
+                'foreignKey' => $foreignKey,
+                'typeColumn' => $typeColumn,
+                'action' => $action,
+            ];
+        }
+
+        return $entries;
     }
 
     /**

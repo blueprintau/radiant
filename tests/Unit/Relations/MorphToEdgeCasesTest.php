@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Tests\Unit\Relations;
 
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
+use BlueprintAU\Radiant\Tests\Support\Expectation;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyComment;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyPost;
 use BlueprintAU\Radiant\Tests\Unit\Relations\Fixtures\PolyVideo;
@@ -52,10 +53,12 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
     }
 
     /**
-     * A null FK (with a set type) resolves empty — the type alone is not
-     * a target.
+     * A null FK (with a set type) is a HALF-NULL morph pair — data
+     * corruption that throws, not an empty result. (The pre-guard
+     * contract resolved empty; the pair-integrity policy reclassified
+     * the half-set shape.)
      */
-    public function testNullForeignKeyResolvesEmpty(): void
+    public function testNullForeignKeyThrows(): void
     {
         $this->connection->table('poly_comments')->insert([
             ['id' => 3, 'body' => 'type-only', 'commentable_type' => PolyPost::class, 'commentable_id' => null],
@@ -64,7 +67,13 @@ final class MorphToEdgeCasesTest extends DatabaseTestCase
         $comment = PolyComment::newQuery()->find(3);
         self::assertNotNull($comment);
 
-        self::assertCount(0, $comment->commentable()->get());
+        $exception = Expectation::throws(
+            fn () => $comment->commentable()->get(),
+            \InvalidArgumentException::class,
+        );
+
+        self::assertStringContainsString('half-null', $exception->getMessage());
+        self::assertStringContainsString('[commentable_type, commentable_id]', $exception->getMessage());
     }
 
     /**

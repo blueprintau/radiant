@@ -7,16 +7,19 @@ namespace BlueprintAU\Radiant;
 use BlueprintAU\Collections\Collection as BaseCollection;
 use BlueprintAU\Radiant\Concerns\FiltersStaticQuery;
 use BlueprintAU\Radiant\Database\Connections\ConnectionInterface;
+use BlueprintAU\Radiant\Exceptions\MorphRestrictException;
 use BlueprintAU\Radiant\Exceptions\StaleRowException;
 use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
 use BlueprintAU\Radiant\Attributes\Column;
+use BlueprintAU\Radiant\Attributes\MorphDeleteAction;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Attributes\Hook;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
+use BlueprintAU\Radiant\Metadata\ClassMetadata;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Metadata\PropertyMapping;
 
@@ -116,9 +119,9 @@ abstract class Model
         if (str_starts_with($column, self::RESERVED_PREFIX)) {
             throw new \InvalidArgumentException(
                 "The {$role} [{$column}] starts with the reserved prefix ["
-                . self::RESERVED_PREFIX . '] — the ORM uses that namespace for its internal '
-                . 'select aliases (radiant_pivot_*, radiant_scalar, radiant_through_parent_*). '
-                . 'Rename the column.'
+                    . self::RESERVED_PREFIX . '] — the ORM uses that namespace for its internal '
+                    . 'select aliases (radiant_pivot_*, radiant_scalar, radiant_through_parent_*). '
+                    . 'Rename the column.'
             );
         }
     }
@@ -164,8 +167,8 @@ abstract class Model
         if ($tableName === null) {
             throw new \LogicException(
                 'Model [' . static::class . '] declares no columns of its own and resolves no '
-                . 'table. Add #[Column] properties, or extend a table-owning model '
-                . 'behavior-only (no new columns, no #[Table]).'
+                    . 'table. Add #[Column] properties, or extend a table-owning model '
+                    . 'behavior-only (no new columns, no #[Table]).'
             );
         }
 
@@ -701,9 +704,9 @@ abstract class Model
         if ($softDeleteColumn !== null && ($this->original[$softDeleteColumn] ?? null) !== null) {
             throw new \LogicException(
                 'The model [' . static::class . '] is soft-deleted — its UPDATE would carry the '
-                . 'auto-applied `deleted_at IS NULL` scope, match 0 rows, and report success for '
-                . 'a write that never landed. Call restore() first (or forceDelete() to remove '
-                . 'the row permanently).'
+                    . 'auto-applied `deleted_at IS NULL` scope, match 0 rows, and report success for '
+                    . 'a write that never landed. Call restore() first (or forceDelete() to remove '
+                    . 'the row permanently).'
             );
         }
 
@@ -896,6 +899,39 @@ abstract class Model
 
         $metadata = MetadataFactory::for(static::class);
 
+        // The declared morph-delete actions wrap the whole delete — parent
+        // row removal AND the child cleanups — in ONE transaction: a
+        // Restrict refusal aborts before anything happens, and a cleanup
+        // failure rolls the parent delete back. Zero declarations pay
+        // nothing (no wrap, no dispatch). Runs on the hard-delete path
+        // ONLY: a SoftDeletes claimant never reaches performDelete(), so
+        // a soft-deleted parent keeps its children referenced.
+        if ($metadata->morphDeletes !== []) {
+            SqlConnection::from(static::connection())->transaction(
+                fn(): bool => $this->deleteWithMorphActions($metadata),
+            );
+
+            return;
+        }
+
+        $this->runDeleteBody($metadata);
+    }
+
+    /**
+     * The row-removal body shared by every hard delete — MTI partitions
+     * leaf-first up the chain, else the single-table delete — plus the
+     * exists bookkeeping.
+     *
+     * The morph-delete transaction reuses it VERBATIM so a parent of any
+     * shape (MTI included) leaves its row through the same deletes the
+     * unadorned path runs, and the stale-row contract holds identically.
+     *
+     * @param  ClassMetadata  $metadata  This class's metadata.
+     * @return void
+     * @throws StaleRowException
+     */
+    private function runDeleteBody(ClassMetadata $metadata): void
+    {
         // MTI: leaf-first deletes up the chain — each level removes its own
         // row. (The schema-level ON DELETE CASCADE is the backstop; the
         // explicit deletes are the runtime path, portable across dialects
@@ -965,6 +1001,83 @@ abstract class Model
     }
 
     /**
+     * Delete with the declared morph-delete actions applied.
+     *
+     * The transaction wrapper lives in {@see Model::performDelete()}; this
+     * body runs INSIDE it. Ordering: Restrict counts BEFORE the parent
+     * delete (a refusal leaves everything untouched), the parent delete
+     * second (a stale row throws before any child is touched), the
+     * Detach/Delete cleanups AFTER (they only run for a parent row that
+     * actually left the table).
+     *
+     * @param  ClassMetadata  $metadata  This class's metadata.
+     * @return bool  Always true — the transaction's commit value.
+     * @throws MorphRestrictException
+     * @throws StaleRowException
+     */
+    private function deleteWithMorphActions(ClassMetadata $metadata): bool
+    {
+        $key = $this->getKeyForRefresh();
+        \assert(is_int($key) || is_string($key));
+
+        foreach ($metadata->morphDeletes as $entry) {
+            if ($entry['action'] !== MorphDeleteAction::Restrict) {
+                continue;
+            }
+
+            $count = $this->morphChildrenQuery($entry, $key)->count();
+
+            if ($count > 0) {
+                throw new MorphRestrictException(static::class, $key, $entry['related'], $entry['foreignKey'], $count);
+            }
+        }
+
+        // The parent row leaves the table through the SAME body the
+        // unadorned delete runs — MTI partitions included — so the
+        // stale-row contract holds identically for every model shape.
+        $this->runDeleteBody($metadata);
+
+        foreach ($metadata->morphDeletes as $entry) {
+            $query = $this->morphChildrenQuery($entry, $key);
+
+            if ($entry['action'] === MorphDeleteAction::Detach) {
+                // Both halves go NULL together — a half-null pair is
+                // corruption. Rides the CHILD's model-aware builder:
+                // its RowHooks (Timestamps stamping) dispatch and the
+                // columns encode through the child's casts.
+                $query->update([
+                    $entry['foreignKey'] => null,
+                    $entry['typeColumn'] => null,
+                ]);
+            } elseif ($entry['action'] === MorphDeleteAction::Delete) {
+                $query->delete();
+            }
+        }
+
+        $this->exists = false;
+        $this->wasRecentlyCreated = false;
+
+        return true;
+    }
+
+    /**
+     * The child-side query matching THIS parent's morph children —
+     * key equality AND alias equality, trashed children included
+     * (a soft-deleted child still references the parent).
+     *
+     * @param  array{related: class-string<Model>, foreignKey: string, typeColumn: string, action: MorphDeleteAction}  $entry
+     * @param  int|string|null  $key
+     * @return \BlueprintAU\Radiant\ModelQueryBuilder<Model>
+     */
+    private function morphChildrenQuery(array $entry, int|string|null $key): \BlueprintAU\Radiant\ModelQueryBuilder
+    {
+        return $entry['related']::newQuery()
+            ->withTrashed()
+            ->where($entry['foreignKey'], WhereOperator::Eq, $key)
+            ->where($entry['typeColumn'], WhereOperator::Eq, static::class);
+    }
+
+    /**
      * INSERT the model.
      *
      * @return void
@@ -973,6 +1086,11 @@ abstract class Model
     final protected function performInsert(): void
     {
         $metadata = MetadataFactory::for(static::class);
+
+        // A half-set morph pair would land as an unresolvable reference —
+        // the integrity contract is checked BEFORE the payload builds so
+        // no INSERT can produce a lying row.
+        $this->assertMorphPairsIntact();
 
         // MTI: split the insert per table — root first (generating the id),
         // then each descendant, in ONE transaction on a SQL connection.
@@ -1275,6 +1393,10 @@ abstract class Model
         $dirty = $this->getDirty();
 
         if ($dirty !== []) {
+            // Only the CHANGED columns pay the guard — an untouched half
+            // of a pair is already intact from its last flush.
+            $this->assertMorphPairsIntact(array_keys($dirty));
+
             // A null key would compile to `WHERE pk IS NULL` — the UPDATE
             // would match nothing yet report success.
             $this->assertKeyResolvedForWrite();
@@ -1460,11 +1582,11 @@ abstract class Model
 
         throw new \LogicException(
             'The write on model [' . static::class . '] cannot target its row — primary-key '
-            . 'column(s) [' . implode(', ', $missing) . '] hold no value (the model was never '
-            . 'saved, or its key was never hydrated). The statement would compile to '
-            . '`WHERE pk IS NULL`, matching nothing — or, on dialects that permit NULL keys, '
-            . 'the wrong rows. Save the model to generate its key, or assign a caller-managed '
-            . 'key first.'
+                . 'column(s) [' . implode(', ', $missing) . '] hold no value (the model was never '
+                . 'saved, or its key was never hydrated). The statement would compile to '
+                . '`WHERE pk IS NULL`, matching nothing — or, on dialects that permit NULL keys, '
+                . 'the wrong rows. Save the model to generate its key, or assign a caller-managed '
+                . 'key first.'
         );
     }
 
@@ -1491,9 +1613,9 @@ abstract class Model
 
         throw new \LogicException(
             'The MTI insert on model [' . static::class . '] needs its caller-assigned '
-            . 'primary key [' . $pkName . '] set — the root table does not auto-generate '
-            . 'one, so the root INSERT would omit the key and the descendant partitions '
-            . 'would have nothing to link against.'
+                . 'primary key [' . $pkName . '] set — the root table does not auto-generate '
+                . 'one, so the root INSERT would omit the key and the descendant partitions '
+                . 'would have nothing to link against.'
         );
     }
 
@@ -1656,7 +1778,7 @@ abstract class Model
         if ($mapping->property !== null) {
             throw new \InvalidArgumentException(
                 'Column [' . $columnName . '] on model [' . static::class . '] is backed by a typed '
-                . 'property; write the property directly instead of setAttribute().'
+                    . 'property; write the property directly instead of setAttribute().'
             );
         }
 
@@ -1682,8 +1804,8 @@ abstract class Model
         if ($mapping->property === null) {
             throw new \InvalidArgumentException(
                 'Column [' . $columnName . '] on model [' . static::class . '] is a synthetic '
-                . 'column (declared by a trait, no PHP property backs it); write it through '
-                . 'setAttribute() explicitly if you need a runtime override.'
+                    . 'column (declared by a trait, no PHP property backs it); write it through '
+                    . 'setAttribute() explicitly if you need a runtime override.'
             );
         }
 
@@ -1932,7 +2054,7 @@ abstract class Model
         if (is_array($localKey)) {
             throw new \LogicException(
                 'morphMany() does not support composite keys; the morph (type, key) '
-                . 'pair is a scalar-key convention.'
+                    . 'pair is a scalar-key convention.'
             );
         }
 
@@ -1974,7 +2096,7 @@ abstract class Model
         if (is_array($localKey)) {
             throw new \LogicException(
                 'morphOne() does not support composite keys; the morph (type, key) '
-                . 'pair is a scalar-key convention.'
+                    . 'pair is a scalar-key convention.'
             );
         }
 
@@ -2050,7 +2172,7 @@ abstract class Model
 
         throw new \InvalidArgumentException(
             "A morph relation on [{$model}] needs a morph name (or an explicit "
-            . '`_type`-suffixed type column) to derive its column names.'
+                . '`_type`-suffixed type column) to derive its column names.'
         );
     }
 
@@ -2079,7 +2201,7 @@ abstract class Model
 
         throw new \InvalidArgumentException(
             "A morph relation on [{$model}] needs a morph name (or an explicit "
-            . '`_id`-suffixed foreign key) to derive its column names.'
+                . '`_id`-suffixed foreign key) to derive its column names.'
         );
     }
 
@@ -2290,8 +2412,8 @@ abstract class Model
         if (is_array($key)) {
             throw new \LogicException(
                 'A relation over a composite key cannot derive its counterpart columns by '
-                . 'convention; declare both sides explicitly as matching column lists, e.g. '
-                . 'hasMany(Post::class, [\'region_id\', \'country\']).'
+                    . 'convention; declare both sides explicitly as matching column lists, e.g. '
+                    . 'hasMany(Post::class, [\'region_id\', \'country\']).'
             );
         }
     }
@@ -2396,9 +2518,9 @@ abstract class Model
         if ($primaryKey->type !== $declared) {
             throw new \InvalidArgumentException(
                 "The morph key column [{$keyColumn}] on [{$holder}] is [{$declared->value}], but "
-                . "[{$target}]'s primary key is [{$primaryKey->type->value}]. A morph pair can "
-                . 'only point at models whose primary-key type matches the key column — '
-                . 'declare the pair with a matching keyType (or uuidMorphs()).'
+                    . "[{$target}]'s primary key is [{$primaryKey->type->value}]. A morph pair can "
+                    . 'only point at models whose primary-key type matches the key column — '
+                    . 'declare the pair with a matching keyType (or uuidMorphs()).'
             );
         }
     }
@@ -2417,11 +2539,78 @@ abstract class Model
         if (count($keys) !== 1 || $keys[0]->name === null) {
             throw new \LogicException(
                 "A morph target requires a single named primary key; model [{$class}] "
-                . 'declares none, a composite key, or an unnamed key.'
+                    . 'declares none, a composite key, or an unnamed key.'
             );
         }
 
         return $keys[0];
+    }
+
+    /**
+     * Assert every declared morph pair on this model is intact — both
+     * halves null or both set — over the whole attribute set (inserts)
+     * or just the written columns (updates).
+     *
+     * An uninitialized typed half counts as NULL: a flush-time guard
+     * judges the row as it would land, not the caller's partial edits.
+     *
+     * @param  list<string>|null  $columns  The columns to check; null checks every declared pair.
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private function assertMorphPairsIntact(array|null $columns = null): void
+    {
+        $metadata = MetadataFactory::for(static::class);
+
+        foreach ($metadata->properties as $mapping) {
+            $column = $mapping->columnName;
+            $sibling = $metadata->morphPairSibling($column);
+
+            if ($sibling === null) {
+                continue;
+            }
+
+            if (
+                $columns !== null
+                && !in_array($column, $columns, true)
+                && !in_array($sibling, $columns, true)
+            ) {
+                continue; // neither half touched by THIS write
+            }
+
+            if ($this->morphHalfSet($mapping) !== $this->morphHalfSet($metadata->mappingFor($sibling))) {
+                throw new \InvalidArgumentException(
+                    "Model [" . static::class . "] leaves the morph pair "
+                        . "[{$column}, {$sibling}] half-set — one column holds a value while "
+                        . 'the other is null, an unresolvable reference. Set both columns '
+                        . 'together, or null both.'
+                );
+            }
+        }
+    }
+
+    /**
+     * Whether one morph-pair half currently holds a value.
+     *
+     * A synthetic half reads the runtime store over the loaded snapshot
+     * (the same fallback {@see Model::attribute()} applies); an unset
+     * typed property reads as NULL.
+     *
+     * @param  PropertyMapping  $mapping
+     * @return bool
+     */
+    private function morphHalfSet(PropertyMapping $mapping): bool
+    {
+        if ($mapping->property === null) {
+            if (array_key_exists($mapping->columnName, $this->syntheticValues)) {
+                return $this->syntheticValues[$mapping->columnName] !== null;
+            }
+
+            return ($this->original[$mapping->columnName] ?? null) !== null;
+        }
+
+        return $mapping->property->isInitialized($this)
+            && $mapping->property->getValue($this) !== null;
     }
 
     /**
@@ -2461,7 +2650,7 @@ abstract class Model
 
         throw new \InvalidArgumentException(
             "Unknown {$role} column [{$column}] on model [{$model}]. A relation's columns "
-            . 'must match the model\'s declared column names.'
+                . 'must match the model\'s declared column names.'
         );
     }
 }
