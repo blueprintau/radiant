@@ -107,3 +107,9 @@ Bulk key lists never scale past driver limits:
   at the call site.
 - `chunkSql()` streams fixed-size chunks so a bulk read never
   materializes the whole result set.
+- Retention pruning (`Prunable`/`MassPrunable`, see
+  [Pruning old rows](orm.md#pruning-old-rows)) never materializes the
+  candidate set: `Prunable` hydrates one bounded chunk at a time behind a
+  keyset cursor, and `MassPrunable` reads one bounded PK list per
+  statement — an expiry sweep over millions of rows runs in constant
+  memory.

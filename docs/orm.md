@@ -12,6 +12,7 @@ multi-table inheritance. Relations are covered in
 - [Saving and primary keys](#saving-and-primary-keys)
 - [Timestamps](#timestamps)
 - [Soft deletes](#soft-deletes)
+- [Pruning old rows](#pruning-old-rows)
 - [Lifecycle callbacks](#lifecycle-callbacks)
 - [Multi-table inheritance](#multi-table-inheritance)
 - [Metadata lifecycle](#metadata-lifecycle)
@@ -536,6 +537,95 @@ class Post extends Model
     public ?\Carbon\Carbon $removedAt;
 }
 ```
+
+## Pruning old rows
+
+Retention pruning — deleting rows past an expiry — ships as two traits.
+Both read their candidates from the same abstract predicate and both
+chunk their work; they differ in HOW each row dies:
+
+| Trait | Path | Row-level hooks? | Use when |
+| --- | --- | --- | --- |
+| `Prunable` | Per-instance `prune()` (hydrate → delete) | Yes — full lifecycle, vetoes honored | You need per-row semantics: listeners, `WriteVetoException`, MTI children |
+| `MassPrunable` | Bulk `DELETE ... WHERE pk IN (...)` | No — `#[RowHook]` only (see [Bulk writes](#bulk-writes-on-the-builder)) | Throughput on big expired sets: one statement per chunk |
+
+Declare the predicate by implementing `prunable()` — an abstract static
+returning a builder for the calling model:
+
+```php
+use BlueprintAU\Radiant\Model;
+use BlueprintAU\Radiant\MassPrunable;
+
+class Session extends Model
+{
+    use MassPrunable;
+
+    public static function prunable(): ModelQueryBuilder
+    {
+        // Rows idle past an hour are candidates.
+        return static::newQuery()->where('last_seen_at', '<', now()->subHour());
+    }
+}
+
+$pruned = Session::pruneAll();   // chunked drain, returns affected count
+```
+
+Every matching row is a candidate — write the predicate as the WHOLE
+retention rule. To cap retention to the oldest N rows, encode the cap in
+the predicate itself (e.g. a cutoff column computed elsewhere);
+`prunable()` MUST NOT call `limit()` — `pruneAll()` bounds every batch
+itself, and a caller-set limit would be silently replaced, so a limit in
+`prunable()` throws `LogicException`.
+
+**Guards (fail-fast, both traits).** A composite primary key rejects —
+keyset traversal and bulk `IN` deletes are single-column contracts. A
+`prunable()` returning another model's builder rejects — the prune would
+walk or delete the wrong table with this model's key column. A `chunkSize`
+below 1 rejects. `MassPrunable` additionally rejects MTI children — a
+bulk `DELETE` would orphan the ancestor-table rows; use `Prunable`, whose
+per-instance deletes walk the table chain leaf-first. On `Prunable`, a
+`prunable()` ordering the primary key DESCENDING also rejects — its keyset
+cursor walks ascending and a DESC order matches nothing after the first
+batch (the caller's other orders are kept; they shape visitation order,
+never WHICH rows prune).
+
+**Chunking and resumability.** `pruneAll(int $chunkSize = 1000)` is
+non-transactional by design: each chunk commits on its own, and a failed
+or restarted run converges (pruning is idempotent-by-predicate — the
+already-pruned rows simply stop matching). `Prunable` walks with a keyset
+cursor (`pk > last`, first pass un-cursored, PK ordered ascending);
+`MassPrunable` drains-by-deletion — each round deletes exactly what it
+reads, so the next read only sees fresh candidates. Loop control rides the
+READ count, not the delete's affected count, so a concurrently-removed row
+cannot strand the tail. Work on a cron by just calling `pruneAll()`; a run
+interrupted midway is resumed by running it again.
+
+**Failure semantics.** The per-row `prune()` follows the house write
+contract — returns void, throws on failure: a vetoed delete throws
+`WriteVetoException`, an already-gone row throws `StaleRowException`.
+Inside `pruneAll()`, such a failure aborts the run and throws
+`PruneException` naming the failing row's model class and primary-key
+value (`$pruned` reports how many rows this run pruned before the
+failure), with the original exception chained on `getPrevious()` — rows
+pruned before the failure stay pruned.
+
+**Soft deletes compose.** A soft-deletable prunable model prunes HARD:
+`prune()` calls `forceDelete()` (trashed or not, the row leaves the
+table), and the candidate read rides `withTrashed()` so trashed rows are
+reachable — without it, the trait's `deleted_at IS NULL` scope would hide
+them from pruning forever. (Applied by the trait itself — `withTrashed()`
+is idempotent, so restating it in `prunable()` changes nothing. A
+trashed-only sweep is expressed in the predicate directly:
+`static::newQuery()->onlyTrashed()->where(...)`.)
+
+**Key constraint.** The traversal key is the primary key, so PK columns
+must be `NOT NULL` — a nullable PK cannot order or cursor a traversal.
+
+**One trait per model.** Applying both `Prunable` and `MassPrunable` to a
+class is a PHP fatal — both define `pruneAll()` — and deliberately so:
+per-row hook-faithful semantics and hookless bulk drain contradict on one
+model. Pick the trait matching the semantics you need; a host wanting two
+sweeps calls each trait's static on separate models.
 
 ## Multi-table inheritance
 
