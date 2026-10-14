@@ -41,7 +41,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $live = $this->connection->schemaInspector->table('sync_users');
         $names = array_column($live->columns, 'name');
 
-        self::assertSame(['id', 'email', 'roleId'], $names);
+        self::assertSame(['id', 'email', 'role_id'], $names);
         self::assertTrue($live->columns[0]['primaryKey']);
         self::assertFalse($live->columns[0]['nullable']);
     }
@@ -58,7 +58,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $live = $this->connection->schemaInspector->table('sync_posts');
 
         self::assertCount(1, $live->foreignKeys);
-        self::assertSame(['roleId'], $live->foreignKeys[0]['columns']);
+        self::assertSame(['role_id'], $live->foreignKeys[0]['columns']);
         self::assertSame('sync_users', $live->foreignKeys[0]['referencesTable']);
         self::assertSame(['id'], $live->foreignKeys[0]['referencesColumns']);
     }
@@ -282,7 +282,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         );
 
         self::assertContains(['email'], $uniqueColumns);
-        self::assertContains(['roleId'], $plainColumns);
+        self::assertContains(['role_id'], $plainColumns);
     }
 
     /**
@@ -354,9 +354,9 @@ final class SchemaSyncTest extends DatabaseTestCase
         // hand to mirror SyncPost's shape).
         $articles = (new Blueprint('sync_articles'))
             ->id()
-            ->column(ColumnType::BigInt, 'roleId', index: true)
+            ->column(ColumnType::BigInt, 'role_id', index: true)
             ->column(ColumnType::String, 'title', length: 64)
-            ->foreignKey(['roleId'], 'sync_users', ['id']);
+            ->foreignKey(['role_id'], 'sync_users', ['id']);
         $desired = [$articles];
 
         $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff($desired);
@@ -587,7 +587,7 @@ final class SchemaSyncTest extends DatabaseTestCase
         $this->expectExceptionMessageIsOrContains('composite primary key');
         $blueprint->column(
             ColumnType::BigInt,
-            'ownerId',
+            'owner_id',
             foreign: SyncCompositePk::class,
         );
     }

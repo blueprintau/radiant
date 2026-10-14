@@ -21,6 +21,7 @@ use BlueprintAU\Radiant\Database\Query\QueryBuilder;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereOperator;
 use BlueprintAU\Radiant\Metadata\ClassMetadata;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
+use BlueprintAU\Radiant\Metadata\Naming;
 use BlueprintAU\Radiant\Metadata\PropertyMapping;
 
 /**
@@ -2428,7 +2429,7 @@ abstract class Model
     {
         $short = (new \ReflectionClass(static::class))->getShortName();
 
-        return strtolower((string) preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $short)) . '_id';
+        return Naming::foreignKey($short);
     }
 
     /**
@@ -2442,7 +2443,7 @@ abstract class Model
     {
         $short = (new \ReflectionClass($related))->getShortName();
 
-        return strtolower((string) preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $short)) . '_id';
+        return Naming::foreignKey($short);
     }
 
     /**

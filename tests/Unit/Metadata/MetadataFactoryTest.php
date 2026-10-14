@@ -7,6 +7,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Metadata;
 use BlueprintAU\Radiant\Metadata\ClassMetadata;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
+use BlueprintAU\Radiant\Metadata\Naming;
 use BlueprintAU\Radiant\Metadata\PropertyMapping;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\Admin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\AlignedDefaultModel;
@@ -38,6 +39,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\SoftDeletingPost;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\TableRedeclaringAdmin;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UnionTypedModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\UnknownConstraintColumnModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ProviderSettings;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\User;
 use PHPUnit\Framework\TestCase;
 
@@ -62,8 +64,10 @@ final class MetadataFactoryTest extends TestCase
             array_keys($properties),
         );
         self::assertInstanceOf(PropertyMapping::class, $properties['id']);
+        // camelCase property over a snake column via #[Column(name: 'role_id')]
+        // — the explicit-name override is verbatim, never transformed.
         self::assertSame('roleId', $properties['roleId']->propertyName);
-        self::assertSame('roleId', $properties['roleId']->columnName);
+        self::assertSame('role_id', $properties['roleId']->columnName);
         self::assertSame('emailVerifiedAt', $properties['emailVerifiedAt']->columnName);
     }
 
@@ -209,6 +213,43 @@ final class MetadataFactoryTest extends TestCase
     }
 
     /**
+     * A name whose final word already reads as plural stays unpluralized,
+     * whether compound (`ProviderSettings`) or single-word (`Settings`).
+     */
+    public function testAlreadyPluralNameIsNotRepluralized(): void
+    {
+        self::assertSame('provider_settings', MetadataFactory::for(ProviderSettings::class)->tableName);
+    }
+
+    /**
+     * The naming helper's acronym handling: a capital run splits as one
+     * word (`APIKey` → `api_keys`).
+     */
+    public function testAcronymRunsSnakeCaseWhole(): void
+    {
+        self::assertSame('api_key', Naming::snake('APIKey'));
+        self::assertSame('api_keys', Naming::table('APIKey'));
+        self::assertSame('https_connection', Naming::snake('HTTPSConnection'));
+    }
+
+    /**
+     * The naming helper's pluralization table: sibilant clusters take
+     * `-es`, vowel+s takes `-es`, plain consonant+s stays, consonant+y
+     * swaps to `-ies`.
+     */
+    public function testNamingPluralizationTable(): void
+    {
+        self::assertSame('addresses', Naming::table('Address'));
+        self::assertSame('statuses', Naming::table('Status'));
+        self::assertSame('buses', Naming::table('Bus'));
+        self::assertSame('churches', Naming::table('Church'));
+        self::assertSame('news', Naming::pluralize('news'));
+        self::assertSame('series', Naming::pluralize('series'));
+        self::assertSame('settings', Naming::pluralize('settings'));
+        self::assertSame('categories', Naming::pluralize('category'));
+    }
+
+    /**
      * An explicit #[Table(name: ...)] wins over the convention.
      */
     public function testExplicitTableNameWins(): void
@@ -340,7 +381,7 @@ final class MetadataFactoryTest extends TestCase
         $metadata = MetadataFactory::for(MtiAdmin::class);
 
         self::assertSame('users', $metadata->tableFor('email'));
-        self::assertSame('users', $metadata->tableFor('roleId'));
+        self::assertSame('users', $metadata->tableFor('role_id'));
         self::assertSame('admins', $metadata->tableFor('level'));
         self::assertSame('admins', $metadata->tableFor('id'), 'the derived key lives on the child table');
     }

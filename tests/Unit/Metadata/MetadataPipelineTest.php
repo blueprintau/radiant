@@ -20,7 +20,7 @@ use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\User;
  * End-to-end metadata pipeline tests: metadata → Blueprint → DDL → live
  * SQLite round-trips (save / find / update / soft delete).
  *
- * The users table is built by hand — the User fixture's roleId column
+ * The users table is built by hand — the User fixture's role_id column
  * declares a foreign key to `roles.id`, and this suite never creates a
  * roles table (SQLite enforces FKs), so the metadata-driven DDL would
  * fail. The point is proving the metadata drives real queries.
@@ -38,7 +38,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
             ->column(ColumnType::String, 'email', length: 255, unique: true)
             ->column(ColumnType::String, 'password', length: 255)
             ->column(ColumnType::DateTime, 'emailVerifiedAt', nullable: true)
-            ->column(ColumnType::BigInt, 'roleId', index: true)
+            ->column(ColumnType::BigInt, 'role_id', index: true)
             ->column(ColumnType::Json, 'meta', nullable: true);
 
         $this->createTables($users, SoftDeletingPost::class);
@@ -341,7 +341,7 @@ final class MetadataPipelineTest extends DatabaseTestCase
         $id = $query->insert([
             'email' => 'dave@example.com',
             'password' => 'x',
-            'roleId' => 1,
+            'role_id' => 1,
         ]);
 
         self::assertGreaterThan(0, (int) $id);

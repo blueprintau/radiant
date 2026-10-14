@@ -35,5 +35,5 @@ class SyncUser extends Model
      * @var int
      */
     #[Column(type: ColumnType::BigInt, index: true)]
-    public int $roleId;
+    public int $role_id;
 }

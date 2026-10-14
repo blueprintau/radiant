@@ -40,7 +40,8 @@ class User extends Model
     public string $password;
 
     /**
-     * A nullable datetime column, cast to Carbon.
+     * A nullable datetime column, cast to Carbon — the camelCase property
+     * IS the column (verbatim property-name convention).
       *
      * @var \Carbon\Carbon|null
      */
@@ -48,11 +49,12 @@ class User extends Model
     public ?\Carbon\Carbon $emailVerifiedAt;
 
     /**
-     * An indexed FK column.
+     * An indexed FK column — camelCase property, snake column via the
+     * #[Column(name:)] override.
       *
      * @var int
      */
-    #[Column(type: ColumnType::BigInt, foreign: 'roles.id', index: true, onDelete: ForeignKeyAction::Cascade)]
+    #[Column(type: ColumnType::BigInt, name: 'role_id', foreign: 'roles.id', index: true, onDelete: ForeignKeyAction::Cascade)]
     public int $roleId;
 
     /**

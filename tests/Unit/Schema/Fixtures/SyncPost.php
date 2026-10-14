@@ -12,7 +12,7 @@ use BlueprintAU\Radiant\Model;
 /**
  * A composite-constraint model — exercises the class-level attribute path.
  */
-#[ForeignKey(columns: ['roleId'], references: 'sync_users', referencesColumns: ['id'])]
+#[ForeignKey(columns: ['role_id'], references: 'sync_users', referencesColumns: ['id'])]
 class SyncPost extends Model
 {
     /**
@@ -29,7 +29,7 @@ class SyncPost extends Model
      * @var int
      */
     #[Column(type: ColumnType::BigInt)]
-    public int $roleId;
+    public int $role_id;
 
     /**
      * A plain column.

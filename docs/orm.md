@@ -156,9 +156,14 @@ expression re-applied by the database on UPDATE, e.g.
 
 A model's table defaults to the snake-cased plural of its class name —
 `User` → `users`, `EmailVerificationToken` →
-`email_verification_tokens`. Declare `#[Table(name: '...')]` when the
-default would be wrong: irregular plurals (`Person` → `people`), prefixed
-tables, or shared tables.
+`email_verification_tokens`. Consecutive capitals read as one acronym
+(`APIKey` → `api_keys`). A name that already ends in a plural-looking
+suffix stays as it is — `ProviderSettings` → `provider_settings`,
+`Settings` → `settings`, `News` → `news` — while `ss` endings still take
+`-es` (`Address` → `addresses`) and vowel+s too (`Status` → `statuses`).
+Declare `#[Table(name: '...')]` when the default would be wrong:
+irregular plurals (`Person` → `people`, `Media`), prefixed tables, or
+shared tables.
 
 The attribute is designed to grow other table-level settings later, so
 `name` is optional there — `#[Table]` with no name keeps the convention
@@ -176,6 +181,12 @@ The attribute is designed to grow other table-level settings later, so
 - `name:` — explicit DB column name when it differs from the property.
 - `unique:`, `index:`, `foreign:` — single-column flags (see below).
 - `default:` — a scalar or SQL expression default.
+
+Without `name:`, the column takes the property name verbatim — the
+property IS the column (`emailVerifiedAt` maps to a column of exactly
+that name). Pass `name:` when the column should differ — commonly a
+snake_case name for a camelCase property (`#[Column(name:
+'email_verified_at')]`). Neither form is case-transformed.
 
 Column names starting with the reserved `radiant_` prefix fail fast at
 metadata build — the prefix is reserved for the framework's internal

@@ -1104,10 +1104,10 @@ final class MetadataFactory
                 );
             }
 
-            return [$name ?? self::defaultTableName($reflection->getShortName()), null];
+            return [$name ?? Naming::table($reflection->getShortName()), null];
         }
 
-        return [self::defaultTableName($reflection->getShortName()), null]; // rule 5
+        return [Naming::table($reflection->getShortName()), null]; // rule 5
     }
 
     /**
@@ -1388,34 +1388,6 @@ final class MetadataFactory
 
         return null;
     }
-
-    /**
-     * The default table name for a class: snake-cased plural of its short
-     * name (`User` → `users`).
-     *
-     * @param  string  $shortName
-     * @return string
-     */
-    private static function defaultTableName(string $shortName): string
-    {
-        // camelCase / PascalCase → snake_case: insert _ before each
-        // uppercase that follows a lowercase or digit, then lowercase all.
-        $snake = strtolower((string) preg_replace('/(?<=[a-z0-9])([A-Z])/', '_$1', $shortName));
-
-        // Naive plural: -es after s, x, z, ch, sh; consonant+y → -ies;
-        // otherwise -s.
-        if (preg_match('/(s|x|z|ch|sh)$/', $snake) === 1) {
-            return $snake . 'es';
-        }
-
-        if (preg_match('/[^aeiou]y$/', $snake) === 1) {
-            return substr($snake, 0, -1) . 'ies';
-        }
-
-        return $snake . 's';
-    }
-
-    // ---- Multi-table inheritance (MTI) derivation ----
 
     /**
      * Derive an MTI child's primary-key mapping from its parent's.

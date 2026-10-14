@@ -8,7 +8,7 @@ namespace BlueprintAU\Radiant\Attributes;
  * Overrides table-level metadata for a model.
  *
  * Fully optional: a model without it gets the snake-cased plural of its
- * short class name (see {@see \BlueprintAU\Radiant\Metadata\MetadataFactory::defaultTableName()}), and
+ * short class name (see {@see \BlueprintAU\Radiant\Metadata\Naming::table()}), and
  * `name` itself is optional so the attribute can carry ONLY other
  * table-level settings without duplicating the default name — duplicating
  * it would silently drift when the class is renamed. When `name` is null

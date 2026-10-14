@@ -21,8 +21,8 @@ final class ConstraintNamerTest extends TestCase
     public function testDerivesTableColumnsSuffix(): void
     {
         self::assertSame(
-            'users_regionId_country_unique',
-            ConstraintNamer::derive('users', ['regionId', 'country'], 'unique'),
+            'users_region_id_country_unique',
+            ConstraintNamer::derive('users', ['region_id', 'country'], 'unique'),
         );
     }
 
@@ -45,10 +45,10 @@ final class ConstraintNamerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'A derived constraint name requires a non-empty table, suffix, and columns; '
-            . "got table [], suffix [unique], columns [regionId].",
+            . "got table [], suffix [unique], columns [region_id].",
         );
 
-        ConstraintNamer::derive('', ['regionId'], 'unique');
+        ConstraintNamer::derive('', ['region_id'], 'unique');
     }
 
     /**
@@ -59,10 +59,10 @@ final class ConstraintNamerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'A derived constraint name requires a non-empty table, suffix, and columns; '
-            . 'got table [users], suffix [], columns [regionId].',
+            . 'got table [users], suffix [], columns [region_id].',
         );
 
-        ConstraintNamer::derive('users', ['regionId'], '');
+        ConstraintNamer::derive('users', ['region_id'], '');
     }
 
     /**
@@ -88,9 +88,9 @@ final class ConstraintNamerTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessageIsOrContains(
             'A derived constraint name requires a non-empty table, suffix, and columns; '
-            . 'got table [users], suffix [unique], columns [regionId, ].',
+            . 'got table [users], suffix [unique], columns [region_id, ].',
         );
 
-        ConstraintNamer::derive('users', ['regionId', ''], 'unique');
+        ConstraintNamer::derive('users', ['region_id', ''], 'unique');
     }
 }

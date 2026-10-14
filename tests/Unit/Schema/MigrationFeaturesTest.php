@@ -241,20 +241,20 @@ final class MigrationFeaturesTest extends DatabaseTestCase
     {
         $desired = (new Blueprint('users'))
             ->id()
-            ->column(ColumnType::BigInt, 'roleId', foreign: 'roles.id')
+            ->column(ColumnType::BigInt, 'role_id', foreign: 'roles.id')
             ->check('id > 0', 'positive')
-            ->index(null, ['roleId']);
+            ->index(null, ['role_id']);
 
         $statements = $this->sqlite->compileRebuildTable(
             $desired,
             'users__radiant_new',
-            ['id', 'roleId'],
+            ['id', 'role_id'],
             foreignKeyConstraintsEnabled: false,
         );
 
         $create = $statements[0];
 
-        self::assertStringContainsString('FOREIGN KEY ("roleId") REFERENCES "roles" ("id")', $create);
+        self::assertStringContainsString('FOREIGN KEY ("role_id") REFERENCES "roles" ("id")', $create);
         // The CHECK name is VERBATIM (check() takes the name as the whole
         // final name — same rule as index()), so the temp CREATE carries
         // the declared name unchanged.

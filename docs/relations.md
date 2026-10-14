@@ -149,9 +149,11 @@ back as the driver delivered them (`count` is always an int).
 ## Key conventions
 
 FK/local-key defaults follow the snake_case convention (`user_id`, the
-model's primary key) and are overridable with explicit arguments. Every
-column a relation names is validated against the model's declared columns
-at construction — an unknown FK throws immediately.
+model's primary key; acronyms split as one word — `APIKey` →
+`api_key_id`) and are overridable with explicit arguments. Foreign keys
+are derived from the model's snake-cased class name and never pluralized.
+Every column a relation names is validated against the model's declared
+columns at construction — an unknown FK throws immediately.
 
 **Composite keys.** The FK and local-key arguments accept a column list —
 `hasMany(Shipment::class, ['region_id', 'country'])` — and both sides
