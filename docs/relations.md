@@ -11,6 +11,7 @@ return relation objects; the method name is the relation's key.
 - [The model Collection](#the-model-collection)
 - [Through relations](#through-relations)
 - [Polymorphic relations](#polymorphic-relations)
+- [Parent-delete morph actions](#parent-delete-morph-actions)
 - [Many-to-many relations](#many-to-many-relations)
 - [Portability and semantics](#portability-and-semantics)
 
@@ -342,6 +343,72 @@ throws; on `morphTo` the check that a target's primary-key type matches
 the key column's declared type runs at read/eager **resolution** time
 (the related class is dynamic until then) — on the direct directions
 (`morphMany`/`morphOne`) the equivalent check runs at construction.
+
+## Parent-delete morph actions
+
+A polymorphic pair cannot carry a real foreign key — the type column
+holds class-strings, not table references — so the schema layer's
+`onDelete:` actions are unusable there. The `#[MorphDelete]` class
+attribute supplies the missing referential action on the PARENT model:
+when a row of the declaring model is deleted, the declared action runs
+against the related model's matching children (same `{name}_id` as the
+parent's key AND same `{name}_type` as the parent's class-string):
+
+```php
+use BlueprintAU\Radiant\Attributes\MorphDelete;
+use BlueprintAU\Radiant\Attributes\MorphDeleteAction;
+
+#[MorphDelete(Media::class, 'attachable', MorphDeleteAction::Detach)]
+#[MorphDelete(Comment::class, 'attachable')]           // Restrict — the default
+#[MorphDelete(Attachment::class, 'attachable', MorphDeleteAction::Delete)]
+class Post extends Model
+{
+    // ...
+}
+```
+
+The three actions mirror the SQL referential actions a foreign key
+could express:
+
+- **`Restrict`** (the default — a fail-safe posture): refuse the parent
+  delete while any child still references it. The count check runs
+  BEFORE anything else, the parent row is untouched, and a
+  `BlueprintAU\Radiant\Exceptions\MorphRestrictException` throws naming
+  the parent, the child model and how many rows block it.
+- **`Detach`**: both morph columns go NULL on every matching child in
+  one UPDATE — the rows survive, unreferenced. Requires the child's
+  `#[Morphs]` pair to be `nullable: true`; validating at metadata build
+  (a Detach declared against NOT NULL columns throws at build, not on
+  the first delete).
+- **`Delete`**: matching children are removed outright.
+
+Every action runs inside ONE transaction with the parent's own delete:
+a Restrict refusal aborts before anything happens, and a cleanup
+failure rolls the parent delete back. Ordering matters — Restrict
+counts first, the parent row removal second, then the child cleanups —
+so a stale parent (already deleted elsewhere, `StaleRowException`)
+never leaves half-cleaned children behind.
+
+**Hard deletes only.** The actions fire on the row-leaves-the-table
+path: `delete()` with no delete-hook claimant, and `forceDelete()`. A
+soft delete leaves the parent row in place, so its children stay
+referenced — the same semantics a SQL foreign key would enforce (the
+row is still there, trashed or not).
+
+MTI parents compose: the parent row leaves through the same
+leaf-first partition deletes an unadorned delete runs, and the cleanups
+ride the same transaction.
+
+**Validation at build.** The related class must be a model declaring
+both morph columns (its own `#[Morphs]` or user-declared columns of the
+same names); one action per (related, morph name) pair; Detach requires
+the nullable pair. A duplicate or an unknown morph name throws when the
+metadata builds — at class touch, not at delete time.
+
+**Bulk deletes bypass.** Builder-level bulk deletes
+(`Model::newQuery()->...->delete()`) run no per-row machinery — no
+hooks, no morph-delete actions. Use the instance path (`foreach` over
+the candidates calling `delete()`) when the actions must fire.
 
 ## Many-to-many relations
 
