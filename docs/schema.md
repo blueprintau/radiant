@@ -98,6 +98,12 @@ $blueprint->check('price >= 0', 'price_positive'); // named — used verbatim
 $blueprint->check('stock >= 0'); // unnamed — derived: {table}_{columns}_check
 ```
 
+Omitting `onDelete:` / `onUpdate:` compiles no action clause, so the SQL
+standard applies: **`NO ACTION`** — a delete or update touching referenced
+rows fails (MySQL's InnoDB enforces it identically to `RESTRICT`). This is
+the deliberate fail-safe posture, mirroring `#[MorphDelete]`'s default:
+referential cleanup must be declared, never assumed.
+
 ## Creating, altering, dropping
 
 ```php
