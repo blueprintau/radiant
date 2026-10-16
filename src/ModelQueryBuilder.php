@@ -13,6 +13,7 @@ use BlueprintAU\Radiant\Exceptions\WriteVetoException;
 use BlueprintAU\Radiant\Database\Query\Aggregate;
 use BlueprintAU\Radiant\Database\Query\Enums\ColumnOperator;
 use BlueprintAU\Radiant\Database\Query\Enums\JoinType;
+use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
 use BlueprintAU\Radiant\Database\Query\Enums\SortDirection;
 use BlueprintAU\Radiant\Database\Query\Enums\WhereBoolean;
 use BlueprintAU\Radiant\Database\Query\SubquerySelect;
@@ -207,8 +208,9 @@ final class ModelQueryBuilder extends QueryBuilder
             $this->insertIdColumn = $primaryKeys[0]->name;
             $this->insertIdAutoIncrement = $primaryKeys[0]->autoIncrement;
         }
-        // Auto-apply every trait-declared scope. A trait's conditions group
-        // in ONE nested where group marked with the trait (`traitScope`
+        // Auto-apply every declared model scope. Each declaring class's
+        // (trait or class body) conditions group
+        // in ONE nested where group marked with the declaring class (`traitScope`
         // marker) so the opt-outs (withTrashed/withoutScope/withoutScopes)
         // strip the trait's whole scope atomically by MARKER, not positional
         // index. Between traits the groups always AND — each trait's scope
@@ -217,15 +219,15 @@ final class ModelQueryBuilder extends QueryBuilder
         // Nested builders skip this entirely — the scopes ride the OUTER
         // builder; applying them here would recurse (whereNested →
         // newNestedBuilder → ctor → whereNested).
-        $conditionsByTrait = [];
+        $conditionsByDeclaring = [];
 
         if (!$this->nested) {
-            foreach ($metadata->traitScopes as ['trait' => $scopeTrait, 'condition' => $condition]) {
-                $conditionsByTrait[$scopeTrait][] = $condition;
+            foreach ($metadata->traitScopes as ['declaring' => $scopeDeclaring, 'condition' => $condition]) {
+                $conditionsByDeclaring[$scopeDeclaring][] = $condition;
             }
         }
 
-        foreach ($conditionsByTrait as $scopeTrait => $conditions) {
+        foreach ($conditionsByDeclaring as $scopeDeclaring => $conditions) {
             // The constructor is the ONE place a builder finalizes its own
             // state: the scope rides the instance being built, then is
             // marked for marker-based removal.
@@ -253,7 +255,7 @@ final class ModelQueryBuilder extends QueryBuilder
                     return $builder;
                 },
             );
-            $scoped->markLastWhereTraitScope($scopeTrait);
+            $scoped->markLastWhereTraitScope($scopeDeclaring);
             $this->wheres = $scoped->getWheres();
             // The group's VALUE bindings ride the clone whereNested()
             // returned — copy them back alongside the wheres, or a scope
@@ -921,20 +923,9 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     public function withoutScope(string $trait): static
     {
-        $wheres = $this->getWheres();
-
-        $filtered = array_values(array_filter(
-            $wheres,
+        return $this->stripScopeWheres(
             fn(array $where): bool => ($where['traitScope'] ?? null) !== $trait,
-        ));
-
-        if ($filtered === $wheres) {
-            return $this; // nothing to remove — reuse the instance.
-        }
-
-        $clone = clone $this;
-        $clone->wheres = $filtered;
-        return $clone;
+        );
     }
 
     /**
@@ -944,12 +935,29 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     public function withoutScopes(): static
     {
+        return $this->stripScopeWheres(
+            fn(array $where): bool => !array_key_exists('traitScope', $where),
+        );
+    }
+
+    /**
+     * Strip the where clauses matching `$keep` AND their WHERE-category
+     * bindings — a scope group's value bindings ride the same strip, or
+     * a stripped query keeps orphaned placeholders and the driver sees
+     * more `?`s than bound values (a hard query error). Bindings cannot
+     * be matched per clause (the array is flat, clause↔binding order is
+     * the contract), so the remnant's bindings are re-derived by walking
+     * the kept clauses: nested groups re-collect theirs, basic/other
+     * shapes contribute per their compile order.
+     *
+     * @param  callable(array<string, mixed>): bool  $keep  True keeps the clause.
+     * @return static
+     */
+    private function stripScopeWheres(callable $keep): static
+    {
         $wheres = $this->getWheres();
 
-        $filtered = array_values(array_filter(
-            $wheres,
-            fn(array $where): bool => !array_key_exists('traitScope', $where),
-        ));
+        $filtered = array_values(array_filter($wheres, $keep));
 
         if ($filtered === $wheres) {
             return $this; // nothing to remove — reuse the instance.
@@ -957,7 +965,63 @@ final class ModelQueryBuilder extends QueryBuilder
 
         $clone = clone $this;
         $clone->wheres = $filtered;
+        $clone->bindings[BindingCategory::Where->value] = $this->deriveWhereBindings($filtered);
         return $clone;
+    }
+
+    /**
+     * Derive the WHERE-category bindings a clause list needs, in compile
+     * order — the strip-time rebuild for {@see stripScopeWheres()}.
+     *
+     * @param  list<array>  $wheres
+     * @return list<mixed>
+     */
+    private function deriveWhereBindings(array $wheres): array
+    {
+        $bindings = [];
+
+        foreach ($wheres as $where) {
+            switch ($where['type']) {
+                case WhereType::Basic:
+                    if (in_array($where['operator'], [WhereOperator::In, WhereOperator::NotIn], true)
+                        || in_array($where['operator'], [WhereOperator::Between, WhereOperator::NotBetween], true)
+                    ) {
+                        foreach ($where['value'] as $item) {
+                            if (!$item instanceof Expression && !$item instanceof ToSqlValue) {
+                                $bindings[] = $item;
+                            }
+                        }
+                    } elseif ($where['operator'] !== WhereOperator::Null
+                        && $where['operator'] !== WhereOperator::NotNull
+                    ) {
+                        if (!$where['value'] instanceof Expression
+                            && !$where['value'] instanceof ToSqlValue
+                        ) {
+                            $bindings[] = $where['value'];
+                        }
+                    }
+                    break;
+
+                case WhereType::Nested:
+                    array_push($bindings, ...$this->deriveWhereBindings($where['group']->wheres));
+                    break;
+
+                case WhereType::Raw:
+                    array_push($bindings, ...($where['bindings'] ?? []));
+                    break;
+
+                case WhereType::Exists:
+                case WhereType::InSub:
+                    array_push($bindings, ...$where['query']->getBindings());
+                    break;
+
+                // Column comparisons carry no bindings.
+                case WhereType::Column:
+                    break;
+            }
+        }
+
+        return $bindings;
     }
 
     // ---- Execution (hydration) ----

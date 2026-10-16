@@ -6,6 +6,12 @@ namespace BlueprintAU\Radiant\Tests\Unit\Metadata;
 
 use BlueprintAU\Radiant\Metadata\MetadataFactory;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\AncestorUniqueFlagModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyHookStaticModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyRowHookBadReturnModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyRowHookDeleteHookModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyRowHookNonStaticModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyScopeParameterizedModel;
+use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\BodyTraitCollisionModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\ChildUniqueAttributeModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\CompositePkRootModel;
 use BlueprintAU\Radiant\Tests\Unit\Metadata\Fixtures\DuplicateMorphsModel;
@@ -236,6 +242,97 @@ final class MetadataFactoryValidationTest extends TestCase
         );
 
         MetadataFactory::for(Fixtures\RowHookDeleteHookModel::class);
+    }
+
+    // ---- Class-body declarations ----
+
+    /**
+     * The contracts cover CLASS-BODY declarations too: a static body
+     * #[WriteHook] fails the instance-method contract.
+     */
+    public function testBodyWriteHookStaticThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[WriteHook] method [' . BodyHookStaticModel::class
+            . '::onInsertStatic] must be an instance method.',
+        );
+
+        MetadataFactory::for(BodyHookStaticModel::class);
+    }
+
+    /**
+     * A non-static body #[RowHook] fails the static contract.
+     */
+    public function testBodyRowHookNonStaticThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook] method [' . BodyRowHookNonStaticModel::class
+            . '::onInsertNotStatic] must be a static method.',
+        );
+
+        MetadataFactory::for(BodyRowHookNonStaticModel::class);
+    }
+
+    /**
+     * A body #[RowHook] with a string return fails the void-or-bool
+     * contract.
+     */
+    public function testBodyRowHookBadReturnThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook] method [' . BodyRowHookBadReturnModel::class
+            . '::onInsertStringReturn] must declare a void or bool return type; got string.',
+        );
+
+        MetadataFactory::for(BodyRowHookBadReturnModel::class);
+    }
+
+    /**
+     * A body #[RowHook(Hook::Delete)] fails — no bulk delete path,
+     * wherever the hook is declared.
+     */
+    public function testBodyRowHookDeleteHookThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[RowHook(Hook::delete)] on [' . BodyRowHookDeleteHookModel::class
+            . '::onDeleteRows] is invalid — bulk hooks support Hook::Insert and Hook::Update only.',
+        );
+
+        MetadataFactory::for(BodyRowHookDeleteHookModel::class);
+    }
+
+    /**
+     * A body #[ModelScope] with a parameter fails the static/zero-param
+     * contract.
+     */
+    public function testBodyScopeParameterizedThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            '#[ModelScope] method [' . BodyScopeParameterizedModel::class
+            . '::activeWithParam] must be static and take no parameters.',
+        );
+
+        MetadataFactory::for(BodyScopeParameterizedModel::class);
+    }
+
+    /**
+     * A model whose trait AND class body declare the same hook path is a
+     * build error — one path, one declaration.
+     */
+    public function testBodyTraitHookCollisionThrows(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'Model [' . BodyTraitCollisionModel::class . '] declares the insert hook '
+            . 'on both its class body',
+        );
+
+        MetadataFactory::for(BodyTraitCollisionModel::class);
     }
 
     // ---- Nested traits ----

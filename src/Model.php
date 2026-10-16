@@ -760,9 +760,9 @@ abstract class Model
     }
 
     /**
-     * Dispatch one hook path's trait methods in collection order.
+     * Dispatch one hook path's declared methods in collection order.
      *
-     * A `true` return means a trait claimed the write; a failed claim
+     * A `true` return means a hook claimed the write; a failed claim
      * throws {@see WriteVetoException}.
      *
      * @param  Hook  $hook
@@ -783,7 +783,7 @@ abstract class Model
                     throw WriteVetoException::hook(
                         static::class,
                         $hook->value,
-                        $entry['trait'],
+                        $entry['declaring'],
                         $entry['method'],
                     );
                 }
@@ -829,7 +829,7 @@ abstract class Model
                 throw WriteVetoException::rowHook(
                     $modelClass,
                     $entry['hook']->value,
-                    $entry['trait'],
+                    $entry['declaring'],
                     $entry['method'],
                 );
             }
@@ -869,7 +869,7 @@ abstract class Model
                 throw WriteVetoException::rowHook(
                     $modelClass,
                     $entry['hook']->value,
-                    $entry['trait'],
+                    $entry['declaring'],
                     $entry['method'],
                 );
             }

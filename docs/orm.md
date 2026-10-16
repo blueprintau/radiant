@@ -342,9 +342,9 @@ User::newQuery()->insert([
 Post::newQuery()->where('status', '=', 'stale')->update(['archived' => 1]);
 ```
 
-**Bulk writes run the `#[RowHook]` traits, bypass the `#[WriteHook]` ones.**
+**Bulk writes run the `#[RowHook]` hooks, bypass the `#[WriteHook]` ones.**
 `insert()`/`insertGetId()`/`update()` on the builder dispatch every
-`#[RowHook]` method — static trait methods receiving the rows (or the
+`#[RowHook]` method — static hook methods receiving the rows (or the
 update values map) by reference, in PHP value space before encoding —
 then validate and encode. No instance behaviors and no lifecycle
 listeners run. Concretely:
@@ -388,6 +388,19 @@ trait AuditsWrites
     }
 }
 ```
+
+**Hooks may live in the model's class body too.** A `#[WriteHook]`,
+`#[RowHook]`, or `#[ModelScope]` method declared directly on a model
+subclass collects and dispatches like a trait-declared one, attributed
+to the model class. Ordering: body hooks run before the traits' at the
+same class level (so a body claim preempts a trait claim); inherited
+body hooks ride the ancestor walk — a parent's body hook applies to its
+subclasses, and a child's body hook runs before the parent's. One path,
+one declaration per model: a body hook on the same path a trait covers
+is a build error naming both. `#[WriteHook]` and `#[RowHook]` keep
+their instance/static contracts regardless of where they are declared;
+body-declared scopes strip via `withoutScope(ModelClass::class)` like
+trait scopes strip via `withoutScope(TraitClass::class)`.
 
 `save()` and `delete()` remain the full-semantics paths — claims
 (soft-delete interception), `$this` bookkeeping, lifecycle listeners.
@@ -452,7 +465,9 @@ lifecycle. Attempt listeners (`saving`, `deleting`, `restoring`) may
 return `false` to veto the action — nothing is written and a
 `WriteVetoException` naming the event throws; success listeners
 (`saved`, `deleted`, `restored`) run only after the row state actually
-changed:
+changed. Listeners are per-INSTANCE and runtime-registered; for
+declarative, class-level behavior declare a `#[WriteHook]`/`#[RowHook]`
+method on a trait or the model body instead:
 
 ```php
 $post->saving(function (Post $post): void {

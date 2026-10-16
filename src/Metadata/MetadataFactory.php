@@ -174,6 +174,11 @@ final class MetadataFactory
             $partitions[$mapping->columnName] = $table;
         }
 
+        $writeHooks = self::collectWriteHooks($reflection, $class);
+        $rowHooks = self::collectRowHooks($reflection, $class);
+        self::assertNoBodyTraitHookCollision($class, $writeHooks);
+        self::assertNoBodyTraitHookCollision($class, $rowHooks);
+
         return new ClassMetadata(
             tableName: $tableName,
             properties: $properties,
@@ -189,83 +194,94 @@ final class MetadataFactory
             parentModel: $parentModel,
             tablePartitions: $partitions,
             traitScopes: self::collectTraitScopes($reflection, $class, $properties),
-            writeHooks: self::collectWriteHooks($reflection, $class),
-            rowHooks: self::collectRowHooks($reflection, $class),
+            writeHooks: $writeHooks,
+            rowHooks: $rowHooks,
             morphDeletes: self::collectMorphDeletes($reflection, $class),
         );
     }
 
     /**
-     * Collect the trait-declared query scopes for a class.
-     *
-     * Walks the class's traits recursively (declaration order, then
-     * ancestors) and invokes every `#[ModelScope]`-annotated static
-     * method. Columns are validated against the merged metadata — an
+     * Collect the query scopes declared on a class: class-body methods
+     * first, then the traits (recursively — declaration order, then
+     * ancestors). Every `#[ModelScope]`-annotated static method is
+     * invoked. Columns are validated against the merged metadata — an
      * unknown scope column fails fast at build.
      *
      * @param  \ReflectionClass<Model>  $reflection
      * @param  class-string<Model>  $class
      * @param  PropertyMapping[]  $properties  The class's merged column mappings (collected earlier in build()) — validating against these avoids a self::for() call, which would recurse (build() is what invokes this).
-     * @return list<array{trait: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>
+     * @return list<array{declaring: class-string, condition: \BlueprintAU\Radiant\ScopeCondition}>
      * @throws \InvalidArgumentException
      */
     private static function collectTraitScopes(\ReflectionClass $reflection, string $class, array $properties): array
     {
         $scopes = [];
 
-        foreach (self::traitsOf($reflection) as $trait) {
-            foreach ($trait->getMethods() as $method) {
-                $attributes = $method->getAttributes(ModelScope::class);
+        foreach (self::scopeAndHookSources($reflection) as [$declaring, $method]) {
+            $attributes = $method->getAttributes(ModelScope::class);
 
-                if ($attributes === []) {
-                    continue;
-                }
+            if ($attributes === []) {
+                continue;
+            }
 
-                if (!$method->isStatic() || $method->getNumberOfParameters() > 0) {
+            if (!$method->isStatic() || $method->getNumberOfParameters() > 0) {
+                throw new \InvalidArgumentException(
+                    "The #[ModelScope] method [{$declaring}::{$method->name}] must be static "
+                    . 'and take no parameters.'
+                );
+            }
+
+            // Invoke through the MODEL class, not the declaring class —
+            // the method's `self::` calls must late-bind to the using
+            // class (e.g. SoftDeletes::deletedAtColumn() overrides).
+            // A closure scoped to the model keeps protected static body
+            // methods callable from this factory scope (trait methods are
+            // equally reachable through the same bind). The closure is
+            // UNTYPED on purpose: a scope method declaring a bad return
+            // type must surface as the InvalidArgumentException contract
+            // error below, not a TypeError from this trampoline.
+            $invoke = \Closure::bind(
+                static function (string $calledClass, string $method) {
+                    return $calledClass::{$method}();
+                },
+                null,
+                $class,
+            );
+
+            $conditions = $invoke($class, $method->name);
+
+            if (!is_array($conditions)) {
+                throw new \InvalidArgumentException(
+                    "The #[ModelScope] method [{$declaring}::{$method->name}] must return an array "
+                    . 'of ScopeCondition instances.'
+                );
+            }
+
+            foreach ($conditions as $condition) {
+                if (!$condition instanceof ScopeCondition) {
                     throw new \InvalidArgumentException(
-                        "The #[ModelScope] method [{$trait->name}::{$method->name}] must be static "
-                        . 'and take no parameters.'
+                        "The #[ModelScope] method [{$declaring}::{$method->name}] must return an array "
+                        . 'of ScopeCondition instances; got ' . get_debug_type($condition) . '.'
                     );
                 }
 
-                // Invoke through the MODEL class, not the trait — the
-                // method's `self::` calls must late-bind to the using class
-                // (e.g. SoftDeletes::deletedAtColumn() overrides).
-                $conditions = $class::{$method->name}();
+                $known = false;
 
-                if (!is_array($conditions)) {
+                foreach ($properties as $mapping) {
+                    if ($mapping->columnName === $condition->column) {
+                        $known = true;
+                        break;
+                    }
+                }
+
+                if (!$known) {
                     throw new \InvalidArgumentException(
-                        "The #[ModelScope] method [{$trait->name}::{$method->name}] must return an array "
-                        . 'of ScopeCondition instances.'
+                        "The #[ModelScope] on [{$declaring}] declares the column [{$condition->column}]"
+                        . ", which does not exist on model [{$class}]."
                     );
                 }
 
-                foreach ($conditions as $condition) {
-                    if (!$condition instanceof ScopeCondition) {
-                        throw new \InvalidArgumentException(
-                            "The #[ModelScope] method [{$trait->name}::{$method->name}] must return an array "
-                            . 'of ScopeCondition instances; got ' . get_debug_type($condition) . '.'
-                        );
-                    }
-
-                    $known = false;
-
-                    foreach ($properties as $mapping) {
-                        if ($mapping->columnName === $condition->column) {
-                            $known = true;
-                            break;
-                        }
-                    }
-
-                    if (!$known) {
-                        throw new \InvalidArgumentException(
-                            "The #[ModelScope] on [{$trait->name}] declares the column [{$condition->column}]"
-                            . ", which does not exist on model [{$class}]."
-                        );
-                    }
-
-                    $scopes[] = ['trait' => $trait->name, 'condition' => $condition];
-                }
+                $scopes[] = ['declaring' => $declaring, 'condition' => $condition];
             }
         }
 
@@ -273,51 +289,87 @@ final class MetadataFactory
     }
 
     /**
-     * Collect the trait-declared write hooks for a class.
-     *
-     * Walks the class's traits recursively (declaration order, then
-     * ancestors). Within one trait, methods run in declaration order.
-     * `Hook::Destroy` methods must return void — the hard DELETE is
+     * Collect the write hooks declared on a class: class-body methods
+     * first, then the traits (recursively — declaration order, then
+     * ancestors). Within one declaring class, methods run in declaration
+     * order. `Hook::Destroy` methods must return void — the hard DELETE is
      * unclaimable.
      *
      * @param  \ReflectionClass<Model>  $reflection
      * @param  class-string<Model>  $class
-     * @return list<array{trait: class-string, hook: Hook, method: string}>
+     * @return list<array{declaring: class-string, hook: Hook, method: string}>
      * @throws \InvalidArgumentException
      */
     private static function collectWriteHooks(\ReflectionClass $reflection, string $class): array
     {
         $hooks = [];
 
-        foreach (self::traitsOf($reflection) as $trait) {
-            foreach ($trait->getMethods() as $method) {
-                foreach ($method->getAttributes(WriteHook::class) as $attribute) {
-                    /** @var WriteHook $writeHook */
-                    $writeHook = $attribute->newInstance();
+        foreach (self::scopeAndHookSources($reflection) as [$declaring, $method]) {
+            foreach ($method->getAttributes(WriteHook::class) as $attribute) {
+                /** @var WriteHook $writeHook */
+                $writeHook = $attribute->newInstance();
 
-                    if ($method->isStatic()) {
-                        throw new \InvalidArgumentException(
-                            "The #[WriteHook] method [{$trait->name}::{$method->name}] must be an instance method."
-                        );
-                    }
-
-                    if (
-                        $writeHook->hook === Hook::Destroy
-                        && $method->hasReturnType()
-                        && (string) $method->getReturnType() !== 'void'
-                    ) {
-                        throw new \InvalidArgumentException(
-                            "The #[WriteHook(Hook::Destroy)] method [{$trait->name}::{$method->name}] must "
-                            . 'return void — the hard DELETE is unclaimable.'
-                        );
-                    }
-
-                    $hooks[] = ['trait' => $trait->name, 'hook' => $writeHook->hook, 'method' => $method->name];
+                if ($method->isStatic()) {
+                    throw new \InvalidArgumentException(
+                        "The #[WriteHook] method [{$declaring}::{$method->name}] must be an instance method."
+                    );
                 }
+
+                if (
+                    $writeHook->hook === Hook::Destroy
+                    && $method->hasReturnType()
+                    && (string) $method->getReturnType() !== 'void'
+                ) {
+                    throw new \InvalidArgumentException(
+                        "The #[WriteHook(Hook::Destroy)] method [{$declaring}::{$method->name}] must "
+                        . 'return void — the hard DELETE is unclaimable.'
+                    );
+                }
+
+                $hooks[] = ['declaring' => $declaring, 'hook' => $writeHook->hook, 'method' => $method->name];
             }
         }
 
         return $hooks;
+    }
+
+    /**
+     * Fail fast when a model's CLASS BODY declares a hook path that one of
+     * its traits also declares — one path, one declaration per model (the
+     * PHP trait-collision analogue). Body-vs-body duplicates across levels
+     * (a parent and its child) are precedence, not a collision.
+     *
+     * @param  class-string<Model>  $class
+     * @param  list<array{declaring: class-string, hook: Hook, method: string}>  $hooks  The model's collected hook entries (all levels).
+     * @return void
+     * @throws \InvalidArgumentException
+     */
+    private static function assertNoBodyTraitHookCollision(string $class, array $hooks): void
+    {
+        // A trait-declared hook's `declaring` name is a trait, not a class
+        // in the ancestor chain — anything else (the leaf's own body, a
+        // parent's body) is a BODY entry and precedence, not a collision.
+        $traitPaths = [];
+
+        foreach ($hooks as $entry) {
+            if (!trait_exists($entry['declaring'])) {
+                continue; // body entries are checked against the trait paths
+            }
+
+            $traitPaths[$entry['hook']->value] = true;
+        }
+
+        foreach ($hooks as $entry) {
+            if (trait_exists($entry['declaring']) || !isset($traitPaths[$entry['hook']->value])) {
+                continue;
+            }
+
+            throw new \InvalidArgumentException(
+                "Model [{$class}] declares the {$entry['hook']->value} hook on both its class body "
+                . "([{$entry['declaring']}::{$entry['method']}]) and a trait — one path, one "
+                . 'declaration; drop one of the declarations.'
+            );
+        }
     }
 
     /**
@@ -417,54 +469,51 @@ final class MetadataFactory
     }
 
     /**
-     * Collect the trait-declared bulk-write hooks for a class.
-     *
-     * Walks the class's traits recursively (declaration order, then
-     * ancestors). Within one trait, methods run in declaration order.
-     * Methods must be static and declare a void or bool return type —
-     * `Hook::Delete` and `Hook::Destroy` have no bulk path.
+     * Collect the bulk-write hooks declared on a class: class-body methods
+     * first, then the traits (recursively — declaration order, then
+     * ancestors). Within one declaring class, methods run in declaration
+     * order. Methods must be static and declare a void or bool return
+     * type — `Hook::Delete` and `Hook::Destroy` have no bulk path.
      *
      * @param  \ReflectionClass<Model>  $reflection
      * @param  class-string<Model>  $class
-     * @return list<array{trait: class-string, hook: Hook, method: string}>
+     * @return list<array{declaring: class-string, hook: Hook, method: string}>
      * @throws \InvalidArgumentException
      */
     private static function collectRowHooks(\ReflectionClass $reflection, string $class): array
     {
         $hooks = [];
 
-        foreach (self::traitsOf($reflection) as $trait) {
-            foreach ($trait->getMethods() as $method) {
-                foreach ($method->getAttributes(RowHook::class) as $attribute) {
-                    /** @var RowHook $rowHook */
-                    $rowHook = $attribute->newInstance();
+        foreach (self::scopeAndHookSources($reflection) as [$declaring, $method]) {
+            foreach ($method->getAttributes(RowHook::class) as $attribute) {
+                /** @var RowHook $rowHook */
+                $rowHook = $attribute->newInstance();
 
-                    if (!$method->isStatic()) {
-                        throw new \InvalidArgumentException(
-                            "The #[RowHook] method [{$trait->name}::{$method->name}] must be a static method."
-                        );
-                    }
-
-                    $returnType = $method->hasReturnType() ? (string) $method->getReturnType() : null;
-
-                    if ($returnType !== 'void' && $returnType !== 'bool') {
-                        $declared = $returnType ?? 'none';
-
-                        throw new \InvalidArgumentException(
-                            "The #[RowHook] method [{$trait->name}::{$method->name}] must declare a void or "
-                            . "bool return type; got {$declared}."
-                        );
-                    }
-
-                    if ($rowHook->hook !== Hook::Insert && $rowHook->hook !== Hook::Update) {
-                        throw new \InvalidArgumentException(
-                            "The #[RowHook(Hook::{$rowHook->hook->value})] on [{$trait->name}::{$method->name}] "
-                            . 'is invalid — bulk hooks support Hook::Insert and Hook::Update only.'
-                        );
-                    }
-
-                    $hooks[] = ['trait' => $trait->name, 'hook' => $rowHook->hook, 'method' => $method->name];
+                if (!$method->isStatic()) {
+                    throw new \InvalidArgumentException(
+                        "The #[RowHook] method [{$declaring}::{$method->name}] must be a static method."
+                    );
                 }
+
+                $returnType = $method->hasReturnType() ? (string) $method->getReturnType() : null;
+
+                if ($returnType !== 'void' && $returnType !== 'bool') {
+                    $declared = $returnType ?? 'none';
+
+                    throw new \InvalidArgumentException(
+                        "The #[RowHook] method [{$declaring}::{$method->name}] must declare a void or "
+                        . "bool return type; got {$declared}."
+                    );
+                }
+
+                if ($rowHook->hook !== Hook::Insert && $rowHook->hook !== Hook::Update) {
+                    throw new \InvalidArgumentException(
+                        "The #[RowHook(Hook::{$rowHook->hook->value})] on [{$declaring}::{$method->name}] "
+                        . 'is invalid — bulk hooks support Hook::Insert and Hook::Update only.'
+                    );
+                }
+
+                $hooks[] = ['declaring' => $declaring, 'hook' => $rowHook->hook, 'method' => $method->name];
             }
         }
 
@@ -472,39 +521,88 @@ final class MetadataFactory
     }
 
     /**
-     * The class's traits, recursively — declaration order on the class,
-     * then ancestors. Deduplicated.
+     * The method sources for scope/hook collection, in dispatch order —
+     * `(declaring class-string, ReflectionMethod)` pairs:
+     *
+     * 1. Per class level (leaf first, then ancestors): the class BODY's
+     *    own methods — declaring class == the level, excluding trait
+     *    contributions (PHP flattens trait methods into every using
+     *    class and even reports the USING class as their declaring
+     *    class) and excluding ancestors' body methods (their own levels
+     *    collect them).
+     * 2. Then that level's traits (declaration order, plus traits used by
+     *    traits), deduplicated, all methods.
+     *
+     * Body hooks/scopes therefore preempt trait-declared ones at the same
+     * level; ancestors' body hooks inherit into descendants.
      *
      * @param  \ReflectionClass<Model>  $reflection
-     * @return list<\ReflectionClass<object>>
+     * @return list<array{class-string, \ReflectionMethod}>
      */
-    private static function traitsOf(\ReflectionClass $reflection): array
+    private static function scopeAndHookSources(\ReflectionClass $reflection): array
     {
-        $traits = [];
-        $seen = [];
+        $sources = [];
+        $seenTraits = [];
 
         for ($current = $reflection; $current !== false; $current = $current->getParentClass()) {
+            $levelName = $current->name;
+
+            // A class's getMethods() ALSO surfaces its traits' flattened
+            // methods (and even attributes THEM to the class, per PHP:
+            // getDeclaringClass() returns the using class, not the trait)
+            // AND its ancestors' body methods (which the ancestor levels
+            // collect). Filter to this level's OWN body: the declaring
+            // class must be the level itself, and the method must not be
+            // a trait contribution — trait contributions carry the level
+            // as their declaring class, so the trait-method-name set is
+            // still needed to exclude them.
+            $traitMethodNames = [];
+
             foreach ($current->getTraitNames() as $traitName) {
-                if (isset($seen[$traitName])) {
+                $traitMethodNames += array_flip(array_map(
+                    fn (\ReflectionMethod $method): string => $method->name,
+                    (new \ReflectionClass($traitName))->getMethods(),
+                ));
+            }
+
+            foreach ($current->getMethods() as $method) {
+                if (
+                    !isset($traitMethodNames[$method->name])
+                    && $method->getDeclaringClass()->name === $levelName
+                ) {
+                    $sources[] = [$levelName, $method];
+                }
+            }
+
+            foreach ($current->getTraitNames() as $traitName) {
+                if (isset($seenTraits[$traitName])) {
                     continue;
                 }
 
-                $seen[$traitName] = true;
-                $traits[] = new \ReflectionClass($traitName);
+                $seenTraits[$traitName] = true;
+                $trait = new \ReflectionClass($traitName);
+
+                foreach ($trait->getMethods() as $method) {
+                    $sources[] = [$traitName, $method];
+                }
 
                 // Traits used BY the trait count too.
                 foreach (class_uses($traitName) ?: [] as $nested) {
-                    if (isset($seen[$nested])) {
+                    if (isset($seenTraits[$nested])) {
                         continue;
                     }
 
-                    $seen[$nested] = true;
-                    $traits[] = new \ReflectionClass($nested);
+                    $seenTraits[$nested] = true;
+                    $nestedTrait = new \ReflectionClass($nested);
+
+                    foreach ($nestedTrait->getMethods() as $method) {
+                        $sources[] = [$nested, $method];
+                    }
                 }
             }
         }
 
-        return $traits;
+        return $sources;
     }
 
     /**
