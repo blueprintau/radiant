@@ -111,7 +111,9 @@ final class Blueprint
      * A copy of this blueprint holding only the named columns.
      *
      * Constraints, indexes and renames are not carried: a subset is a
-     * column list, not a table.
+     * column list, not a table. Backfills declared on the named columns
+     * ARE carried — a change compiled from the subset (an add or a
+     * modify) still needs its backfill instructions.
      *
      * @param  list<string>  $names
      * @return static
@@ -124,6 +126,12 @@ final class Blueprint
             $this->columns,
             fn (array $column) => in_array($column['name'], $names, true),
         ));
+
+        $copy->backfills = array_filter(
+            $this->backfills,
+            fn (string $name) => in_array($name, $names, true),
+            ARRAY_FILTER_USE_KEY,
+        );
 
         return $copy;
     }
@@ -1072,9 +1080,9 @@ final class Blueprint
                 onUpdate: $column->onUpdate,
             );
 
-            // A model-declared backfill rides the column's ADD — inert on
-            // a fresh create (backfills are consulted only for added
-            // columns) and inert once the column exists live.
+            // A model-declared backfill rides the column's ADD (filling
+            // existing rows) or its nullability tighten (filling NULL rows
+            // ahead of SET NOT NULL) — inert on a fresh create.
             if ($mapping->backfill !== null) {
                 $blueprint = $blueprint->backfill($mapping->columnName, $mapping->backfill);
             }

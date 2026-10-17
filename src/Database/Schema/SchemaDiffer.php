@@ -821,9 +821,73 @@ final class SchemaDiffer
                 implode(', ', $drops),
                 implode(', ', $additions),
             );
+
+            $description .= "\n  " . $this->dataMoveSkeleton($table, $additions, $drops);
         }
 
         return new SchemaChange($table, SchemaOperation::DropColumn, $blueprint, true, $description, $possibleRename, null, $drops);
+    }
+
+    /**
+     * A DRAFT data-move skeleton for an add+drop plan — the guarded
+     * UPDATEs and the verification query the user edits and runs between
+     * the ADD and this DROP.
+     *
+     * Output-only guidance: the framework cannot verify the semantics
+     * (which added column derives from which dropped one is the user's
+     * knowledge, never a guess), so every added column is an EDIT
+     * placeholder. Never executed by the library.
+     *
+     * @param  string  $table
+     * @param  list<string>  $additions
+     * @param  list<string>  $drops
+     * @return string
+     */
+    private function dataMoveSkeleton(string $table, array $additions, array $drops): string
+    {
+        $assignments = implode(', ', array_map(
+            fn (string $added) => $this->wrapColumn($added) . " = '<EDIT>'",
+            $additions,
+        ));
+
+        $updates = [];
+
+        foreach ($drops as $dropped) {
+            $updates[] = sprintf(
+                'UPDATE %s SET %s WHERE %s IS NOT NULL;',
+                $table,
+                $assignments,
+                $this->wrapColumn($dropped),
+            );
+        }
+
+        $sources = implode(' OR ', array_map(
+            fn (string $dropped) => $this->wrapColumn($dropped) . ' IS NOT NULL',
+            $drops,
+        ));
+
+        return sprintf(
+            "Draft data-move skeleton (EDIT BEFORE RUNNING — the framework cannot verify\n"
+            . "  these semantics; run between the ADD and this DROP, verify counts, then apply):\n"
+            . "%s"
+            . "  Verify before dropping: SELECT COUNT(*) FROM %s WHERE %s IS NULL AND (%s);  -- expect 0",
+            implode("\n", array_map(fn (string $update) => '  ' . $update, $updates)),
+            $table,
+            $this->wrapColumn($additions[0]),
+            $sources,
+        );
+    }
+
+    /**
+     * A column name as it renders in skeleton text — bare (no quoting);
+     * these are edit drafts, not statements the library executes.
+     *
+     * @param  string  $column
+     * @return string
+     */
+    private function wrapColumn(string $column): string
+    {
+        return $column;
     }
 
     /**
@@ -848,16 +912,26 @@ final class SchemaDiffer
             $detailed[] = $detail === [] ? $name : sprintf('%s (%s)', $name, implode(', ', $detail));
         }
 
+        // Nullability tighten: point at the escape hatch the way the
+        // POSSIBLE-RENAME advisory points at renameColumn() — the
+        // backfill fills the violating rows before the tighten, but the
+        // change STAYS destructive (rows may violate other constraints,
+        // and the UPDATE itself mutates data).
+        $hint = in_array('nullable -> not null', $details === [] ? [] : array_merge(...array_values($details)), true)
+            ? '; a #[Backfill] / Blueprint::backfill() on the column fills the violating rows before the tighten'
+            : '';
+
         return new SchemaChange(
             $table,
             SchemaOperation::ModifyColumn,
             $blueprint,
             $destructive,
             sprintf(
-                'modify column(s) on [%s]: [%s]%s',
+                'modify column(s) on [%s]: [%s]%s%s',
                 $table,
                 implode(', ', $detailed),
                 $destructive ? ' — DESTRUCTIVE: existing rows may violate the new shape' : '',
+                $destructive ? $hint : '',
             ),
             false,
             null,

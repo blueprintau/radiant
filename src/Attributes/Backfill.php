@@ -6,12 +6,14 @@ namespace BlueprintAU\Radiant\Attributes;
 
 /**
  * Declares the one-time value existing rows receive when the property's
- * column is added to a table that already has data.
+ * column is added to a table that already has data — or filled before a
+ * nullability tightening (nullable -> NOT NULL) modifies it.
  *
- * It must ride a property that also declares {@see Column}, and it is
- * consulted only when the column is being added — on a fresh create it
- * is a no-op. A null value is a mis-declaration and fails fast at
- * metadata build.
+ * It must ride a property that also declares {@see Column}. On an add
+ * the value fills existing rows; on a tightening modify it fills the
+ * NULL rows ahead of the SET NOT NULL (the modify stays flagged
+ * destructive). On a fresh create it is a no-op. A null value is a
+ * mis-declaration and fails fast at metadata build.
  */
 #[\Attribute(\Attribute::TARGET_PROPERTY)]
 final class Backfill

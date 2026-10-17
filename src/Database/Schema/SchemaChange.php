@@ -22,6 +22,8 @@ final class SchemaChange
      * @param  bool  $possibleRename  Whether this change is half of a rename-shaped diff.
      * @param  string|null  $renameOf  The paired change's table, when part of a flagged pair.
      * @param  list<string>|null  $subject  The columns this change acts on; null means the whole blueprint.
+     * @param  list<string>  $statements  The raw SQL statements a DataStep executes, in order — one statement per
+     *      element, never split here. Ignored by every other operation.
      */
     public function __construct(
         public readonly string $table,
@@ -32,5 +34,6 @@ final class SchemaChange
         public readonly bool $possibleRename = false,
         public readonly string|null $renameOf = null,
         public readonly array|null $subject = null,
+        public readonly array $statements = [],
     ) {}
 }

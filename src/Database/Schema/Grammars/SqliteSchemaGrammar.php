@@ -139,19 +139,31 @@ final class SqliteSchemaGrammar extends SchemaGrammar
 
         $backfills = $blueprint->getBackfills();
 
+        // Expression backfills never render as a DEFAULT — a DEFAULT
+        // cannot reference other columns. They ride the post-add UPDATE
+        // below; the nullable add itself uses no backfill value.
+        $temporaryDefaults = array_filter(
+            $backfills,
+            fn (mixed $value): bool => !($value instanceof \BlueprintAU\Radiant\Database\Query\Expression),
+        );
+
         // A NOT NULL column without a default cannot be added to a
-        // non-empty table — its backfill renders as a temporary inline
-        // DEFAULT so the ADD succeeds and fills the existing rows (the
-        // rebuild, not this path, produces the no-final-default shape).
+        // non-empty table — its scalar backfill renders as a temporary
+        // inline DEFAULT so the ADD succeeds and fills the existing rows
+        // (the rebuild, not this path, produces the no-final-default
+        // shape). An Expression backfill takes the same route: the
+        // expression is evaluated row-wise in the rebuild's copy
+        // projection, never as a (non-constant, invalid) DEFAULT.
         $statements = array_map(
             fn (array $column): string => 'ALTER TABLE ' . $this->wrap($table)
-                . ' ADD COLUMN ' . $this->compileAddColumn($this->withTemporaryDefault($column, $backfills)),
+                . ' ADD COLUMN ' . $this->compileAddColumn($this->withTemporaryDefault($column, $temporaryDefaults)),
             $columns,
         );
 
         // SQLite cannot SET/DROP a column default in place, so a backfill
-        // on an in-place (nullable) add is an UPDATE of the existing rows.
-        // A NOT NULL-no-default column already got its backfill from the
+        // on an in-place (nullable) add is an UPDATE of the existing rows
+        // — scalar or Expression alike, both evaluate row-wise here. A
+        // NOT NULL-no-default column already got its backfill from the
         // inline DEFAULT above — no UPDATE for it.
         foreach ($backfills as $column => $value) {
             if ($this->addedNotNullWithoutDefault($blueprint, $column)) {
@@ -275,8 +287,19 @@ final class SqliteSchemaGrammar extends SchemaGrammar
         $declaredBackfills = $desired->getBackfills();
         $backfills = [];
 
+        // A backfill on a column that ALREADY exists live is a nullability
+        // tighten's fill: the copy projects it as
+        // COALESCE(col, value) — scalar or Expression, both evaluate
+        // row-wise — so the rebuilt table holds no NULL in the tightened
+        // column.
+        $copyCoalesces = [];
+
         foreach ($desired->getColumns() as $column) {
             if (in_array($column['name'], $liveColumns, true)) {
+                if (array_key_exists($column['name'], $declaredBackfills)) {
+                    $copyCoalesces[$column['name']] = $declaredBackfills[$column['name']];
+                }
+
                 continue; // Not an added column — it has a copy source.
             }
 
@@ -303,7 +326,7 @@ final class SqliteSchemaGrammar extends SchemaGrammar
         $statements = array_values(array_filter([
             $foreignKeyConstraintsEnabled ? 'PRAGMA foreign_keys = OFF' : null,
             'CREATE TABLE ' . $this->wrap($tempName) . ' (' . $this->compileTableBody($tempBlueprint) . ')',
-            $this->compileCopyTableWithBackfill($table, $tempName, $copyColumns, $backfills),
+            $this->compileCopyTableWithBackfill($table, $tempName, $copyColumns, $backfills, $copyCoalesces),
             $this->compileDrop($table),
             $this->compileRenameTable($tempName, $table),
             $foreignKeyConstraintsEnabled ? 'PRAGMA foreign_keys = ON' : null,
@@ -314,26 +337,31 @@ final class SqliteSchemaGrammar extends SchemaGrammar
 
     /**
      * Compile the data-copy statement, backfilling the added NOT NULL
-     * columns with their values.
+     * columns with their values and coalescing the tightened columns'
+     * NULL rows.
      *
      * @param  string  $from
      * @param  string  $to
      * @param  list<string>  $columns  The live ∩ desired projection.
      * @param  array<string, mixed>  $backfills  Added column => backfill value.
+     * @param  array<string, mixed>  $coalesces  Live column => fill value for its NULL rows.
      * @return string
      */
-    private function compileCopyTableWithBackfill(string $from, string $to, array $columns, array $backfills): string
+    private function compileCopyTableWithBackfill(string $from, string $to, array $columns, array $backfills, array $coalesces = []): string
     {
-        if ($backfills === []) {
+        if ($backfills === [] && $coalesces === []) {
             return $this->compileCopyTable($from, $to, $columns);
         }
 
         $targetColumns = [...$columns, ...array_keys($backfills)];
 
-        $selectExpressions = array_map(
-            fn (string $column): string => $this->wrap($column),
-            $columns,
-        );
+        $selectExpressions = [];
+
+        foreach ($columns as $column) {
+            $selectExpressions[] = array_key_exists($column, $coalesces)
+                ? 'COALESCE(' . $this->wrap($column) . ', ' . $this->compileDefault($coalesces[$column]) . ')'
+                : $this->wrap($column);
+        }
 
         foreach ($backfills as $default) {
             $selectExpressions[] = $this->compileDefault($default);

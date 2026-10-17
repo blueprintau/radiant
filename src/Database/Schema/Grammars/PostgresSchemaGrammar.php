@@ -160,8 +160,68 @@ final class PostgresSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * Compile the statement that tightens a nullable column to NOT NULL.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
+     */
+    #[\Override]
+    protected function compileSetColumnNotNull(string $table, string $column): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ALTER COLUMN ' . $this->wrap($column) . ' SET NOT NULL';
+    }
+
+    /**
+     * The guarded UPDATEs that fill NULL rows before a nullability
+     * tighten — one per backfilled column, ahead of the ALTERs.
+     *
+     * @param  Blueprint  $blueprint
+     * @return list<string>
+     */
+    final protected function compileTightenBackfills(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+
+        $statements = [];
+
+        foreach ($blueprint->getColumns() as $column) {
+            if (!array_key_exists($column['name'], $blueprint->getBackfills())) {
+                continue;
+            }
+
+            $statements[] = $this->compileBackfillUpdate(
+                $table,
+                $column['name'],
+                $blueprint->getBackfills()[$column['name']],
+            );
+        }
+
+        return $statements;
+    }
+
+    /**
+     * The guarded UPDATE that fills a column's NULL rows before its shape
+     * tightens.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @param  mixed  $value  A scalar or an Expression — inlined verbatim.
+     * @return string
+     */
+    final protected function compileBackfillUpdate(string $table, string $column, mixed $value): string
+    {
+        return 'UPDATE ' . $this->wrap($table) . ' SET ' . $this->wrap($column)
+            . ' = ' . $this->compileDefault($value)
+            . ' WHERE ' . $this->wrap($column) . ' IS NULL';
+    }
+
+    /**
      * Compile the `ALTER TABLE ... ALTER COLUMN` statements — Postgres'
      * in-place content-drift form.
+     *
+     * A backfilled column emits a guarded UPDATE first: the nullability
+     * tighten would reject the rows the backfill exists to fill.
      *
      * @param  Blueprint  $blueprint
      * @return list<string>
@@ -174,7 +234,9 @@ final class PostgresSchemaGrammar extends SchemaGrammar
             throw new \InvalidArgumentException('Cannot modify columns with no columns defined.');
         }
 
-        $statements = [];
+        $statements = $this->compileTightenBackfills($blueprint);
+
+        $alters = [];
 
         foreach ($columns as $column) {
             $name = $this->wrap($column['name']);
@@ -189,20 +251,20 @@ final class PostgresSchemaGrammar extends SchemaGrammar
             // Decimal(10,2) stays numeric(10,2) — otherwise the second
             // diff sees a perpetual drift.
             $type = $this->type($column['type'], $column['length'], $column['precision'], $column['scale']);
-            $statements[] = $base . ' TYPE ' . $type . ' USING ' . $name . '::' . $type;
+            $alters[] = $base . ' TYPE ' . $type . ' USING ' . $name . '::' . $type;
 
             // Nullability second: SET NOT NULL validates existing rows, so
             // it must come after the type conversion.
-            $statements[] = $column['nullable'] ? $base . ' DROP NOT NULL' : $base . ' SET NOT NULL';
+            $alters[] = $column['nullable'] ? $base . ' DROP NOT NULL' : $base . ' SET NOT NULL';
 
             // Default last: a null desired default means DROP DEFAULT (the
             // column carries no default); anything else renders the literal.
-            $statements[] = $column['default'] === null
+            $alters[] = $column['default'] === null
                 ? $base . ' DROP DEFAULT'
                 : $base . ' SET DEFAULT ' . $this->compileDefault($column['default']);
         }
 
-        return $statements;
+        return [...$statements, ...$alters];
     }
 
     /**

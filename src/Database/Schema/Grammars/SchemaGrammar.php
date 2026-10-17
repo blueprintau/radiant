@@ -157,6 +157,13 @@ abstract class SchemaGrammar
      * The base joins every column into one statement; SQLite overrides to
      * emit one statement per column.
      *
+     * A scalar backfill renders as a temporary DEFAULT (existing rows get
+     * it) that is restored or dropped after the add. An Expression
+     * backfill never touches the default at all — a DEFAULT cannot
+     * reference other columns in any dialect, so the expression compiles
+     * as a post-add UPDATE: the column is added nullable, filled with an
+     * unscoped UPDATE, then tightened with SET NOT NULL.
+     *
      * @param  Blueprint  $blueprint
      * @return list<string>
      * @throws \InvalidArgumentException
@@ -171,16 +178,63 @@ abstract class SchemaGrammar
         $backfills = $blueprint->getBackfills();
         $table = $blueprint->getTable();
 
-        // A NOT NULL column with a backfill is added with the backfill as
-        // a TEMPORARY default (existing rows get it), then the default is
-        // restored to the declared one (new rows get that) or dropped.
-        $statements = ['ALTER TABLE ' . $this->wrap($table) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
-            fn (array $column) => $this->compileAddColumn($this->withTemporaryDefault($column, $backfills)),
-            $columns,
-        ))];
+        // Scalars ride the temporary-default swap; expressions ride the
+        // nullable-add + UPDATE + SET NOT NULL route.
+        $temporaryDefaults = $this->scalarBackfills($backfills);
+        $expressionBackfills = array_diff_key($backfills, $temporaryDefaults);
 
+        $statements = [];
+
+        // An added NOT NULL column whose backfill is an Expression must
+        // reach the fill with a nullable shape: a bare `ADD COLUMN ...
+        // NOT NULL` fails on a non-empty table in Postgres and (in strict
+        // mode) MySQL — the same violation the tighten backfill guards.
+        $nulledForExpression = [];
+        $columnsToCompile = array_map(
+            fn (array $column): array => isset($expressionBackfills[$column['name']])
+                ? [...$column, 'nullable' => true]
+                : $column,
+            $columns,
+        );
+
+        // A NOT NULL column with a scalar backfill is added with the
+        // backfill as a TEMPORARY default (existing rows get it), then the
+        // default is restored to the declared one (new rows get that) or
+        // dropped.
+        $statements[] = 'ALTER TABLE ' . $this->wrap($table) . ' ADD COLUMN ' . implode(', ADD COLUMN ', array_map(
+            fn (array $column) => $this->compileAddColumn($this->withTemporaryDefault($column, $temporaryDefaults)),
+            $columnsToCompile,
+        ));
+
+        // Expression backfills: fill every row (the column is brand-new
+        // and was added nullable), then tighten to the declared shape.
+        $declaredNullable = array_flip(array_map(
+            fn (array $column): string => $column['name'],
+            array_filter($columns, fn (array $column): bool => $column['nullable'] === true),
+        ));
+
+        foreach ($columnsToCompile as $column) {
+            $name = $column['name'];
+
+            if (!isset($expressionBackfills[$name])) {
+                continue;
+            }
+
+            $statements[] = 'UPDATE ' . $this->wrap($table)
+                . ' SET ' . $this->wrap($name) . ' = ' . $this->compileDefault($expressionBackfills[$name]);
+
+            // Only tighten when the column was declared NOT NULL — the
+            // nullable flag on $columnsToCompile was this route's own
+            // relaxation.
+            if (!isset($declaredNullable[$name])) {
+                $statements[] = $this->compileSetColumnNotNull($table, $name);
+            }
+        }
+
+        // Scalar backfills: restore the declared default (new rows get
+        // that) or drop the temporary one.
         foreach ($columns as $column) {
-            if (!array_key_exists($column['name'], $backfills)) {
+            if (!array_key_exists($column['name'], $temporaryDefaults)) {
                 continue;
             }
 
@@ -190,6 +244,36 @@ abstract class SchemaGrammar
         }
 
         return $statements;
+    }
+
+    /**
+     * The backfill values that can ride a DEFAULT clause — the scalars.
+     *
+     * An Expression cannot: a DEFAULT never references other columns in
+     * any dialect, which is the entire point of an Expression backfill.
+     *
+     * @param  array<string, mixed>  $backfills
+     * @return array<string, mixed>
+     */
+    private function scalarBackfills(array $backfills): array
+    {
+        return array_filter(
+            $backfills,
+            fn (mixed $value): bool => !($value instanceof \BlueprintAU\Radiant\Database\Query\Expression),
+        );
+    }
+
+    /**
+     * Compile the statement that tightens a nullable column to NOT NULL.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
+     * @throws UnsupportedFeatureException
+     */
+    protected function compileSetColumnNotNull(string $table, string $column): string
+    {
+        throw new UnsupportedFeatureException('This dialect does not support altering a column nullability in place.');
     }
 
     /**

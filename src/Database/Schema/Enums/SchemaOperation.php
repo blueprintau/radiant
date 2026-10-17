@@ -46,4 +46,15 @@ enum SchemaOperation: string
 
     /** Drop a CHECK constraint from an existing table. */
     case DropCheck = 'drop_check';
+
+    /**
+     * Execute hand-authored SQL — a data step between schema phases
+     * (ADD columns, run a transform, DROP the sources).
+     *
+     * NEVER emitted by the differ: the framework cannot infer a data
+     * transform, so the user authors and owns every data step. The
+     * change carries the statements; destructive by default because a
+     * data step mutates rows (insert-only steps opt out).
+     */
+    case DataStep = 'data_step';
 }

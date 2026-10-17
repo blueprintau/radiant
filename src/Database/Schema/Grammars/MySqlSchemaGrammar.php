@@ -132,8 +132,24 @@ final class MySqlSchemaGrammar extends SchemaGrammar
     }
 
     /**
+     * Compile the statement that tightens a nullable column to NOT NULL.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @return string
+     */
+    #[\Override]
+    protected function compileSetColumnNotNull(string $table, string $column): string
+    {
+        return 'ALTER TABLE ' . $this->wrap($table) . ' ALTER COLUMN ' . $this->wrap($column) . ' SET NOT NULL';
+    }
+
+    /**
      * Compile an `ALTER TABLE ... MODIFY COLUMN` statement — MySQL's
      * in-place content-drift form.
+     *
+     * A backfilled column emits a guarded UPDATE first: the nullability
+     * tighten would reject the rows the backfill exists to fill.
      *
      * @param  Blueprint  $blueprint
      * @return list<string>
@@ -146,11 +162,57 @@ final class MySqlSchemaGrammar extends SchemaGrammar
             throw new \InvalidArgumentException('Cannot modify columns with no columns defined.');
         }
 
-        return array_map(
+        $statements = $this->compileTightenBackfills($blueprint);
+
+        return [...$statements, ...array_map(
             fn (array $column): string => 'ALTER TABLE ' . $this->wrap($table)
                 . ' MODIFY ' . $this->compileColumnDefinition($column),
             $columns,
-        );
+        )];
+    }
+
+    /**
+     * The guarded UPDATEs that fill NULL rows before a nullability
+     * tighten — one per backfilled column, ahead of the ALTER.
+     *
+     * @param  Blueprint  $blueprint
+     * @return list<string>
+     */
+    final protected function compileTightenBackfills(Blueprint $blueprint): array
+    {
+        $table = $blueprint->getTable();
+
+        $statements = [];
+
+        foreach ($blueprint->getColumns() as $column) {
+            if (!array_key_exists($column['name'], $blueprint->getBackfills())) {
+                continue;
+            }
+
+            $statements[] = $this->compileBackfillUpdate(
+                $table,
+                $column['name'],
+                $blueprint->getBackfills()[$column['name']],
+            );
+        }
+
+        return $statements;
+    }
+
+    /**
+     * The guarded UPDATE that fills a column's NULL rows before its shape
+     * tightens.
+     *
+     * @param  string  $table
+     * @param  string  $column
+     * @param  mixed  $value  A scalar or an Expression — inlined verbatim.
+     * @return string
+     */
+    final protected function compileBackfillUpdate(string $table, string $column, mixed $value): string
+    {
+        return 'UPDATE ' . $this->wrap($table) . ' SET ' . $this->wrap($column)
+            . ' = ' . $this->compileDefault($value)
+            . ' WHERE ' . $this->wrap($column) . ' IS NULL';
     }
 
     /**

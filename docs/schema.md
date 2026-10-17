@@ -241,7 +241,13 @@ A diff that adds some columns and drops others on one table emits
 **two changes** — an `AddColumn` then a `DropColumn` — never one
 merged alter. A merged record would dispatch only its dominant
 operation and silently lose the other side. Both halves carry the
-`possibleRename` advisory when the add+drop shape looks like a rename.
+`possibleRename` advisory when the add+drop shape looks like a rename;
+the destructive drop half also appends a **draft data-move skeleton** —
+the guarded UPDATEs (one per dropped column, every added column an
+`'<EDIT>'` placeholder) and the verification query the user edits,
+runs between the ADD and the DROP, and verifies before applying. It is
+output-only guidance: the framework cannot verify the transform's
+semantics, so it drafts and never executes.
 
 On SQLite an `AddColumn` normally applies in place (one `ADD COLUMN`
 statement per column — SQLite's `ALTER TABLE` accepts a single
@@ -259,21 +265,34 @@ declared default — a NOT NULL added column with **neither** fails
 fast at compile time. When both are set, `backfill()` wins for the
 **existing** rows while the declared default applies to **new** rows.
 
-How the backfill lands depends on the dialect:
+How the backfill lands depends on the dialect and the value's kind — a
+**scalar** can ride a `DEFAULT`, an SQL `Expression` **cannot** (a
+`DEFAULT` never references other columns in any dialect, and
+referencing them is the entire reason to use an Expression):
 
-- **MySQL / Postgres** — the column is added with the backfill as a
-  temporary `DEFAULT` (existing rows get it), then the declared
+- **MySQL / Postgres, scalar** — the column is added with the backfill
+  as a temporary `DEFAULT` (existing rows get it), then the declared
   default is restored (`SET DEFAULT`) or the temporary one dropped
   (`DROP DEFAULT`). No full-table scan.
+- **MySQL / Postgres, Expression** — never a `DEFAULT`. The column is
+  added nullable, an `UPDATE ... SET col = <expr>` fills every row
+  (unscoped — the column is brand-new), then the declared shape is
+  restored with `SET NOT NULL`. A bare `ADD COLUMN ... NOT NULL` would
+  fail on a non-empty table in Postgres and strict-mode MySQL, so the
+  fill must run before the tighten, not after the add.
 - **SQLite (rebuild)** — a NOT NULL add via `apply()` routes through
-  the table rebuild, which backfills in the copy projection and
-  produces the no-final-default shape in one apply.
+  the table rebuild, which inlines the backfill (scalar or Expression)
+  row-wise in the copy projection and produces the no-final-default
+  shape in one apply.
 - **SQLite (in-place nullable add)** — the column is added, then an
   `UPDATE ... SET col = value WHERE col IS NULL` fills the existing
-  rows (SQLite cannot `SET`/`DROP DEFAULT` in place).
+  rows (SQLite cannot `SET`/`DROP DEFAULT` in place). Scalar and
+  Expression values alike evaluate row-wise here.
 - **SQLite (in-place NOT NULL add, no default)** — a direct `alter()`
-  renders the backfill as a temporary inline `DEFAULT` so the `ADD
-  COLUMN` succeeds and fills the existing rows (no separate `UPDATE`).
+  renders the scalar backfill as a temporary inline `DEFAULT` so the
+  `ADD COLUMN` succeeds and fills the existing rows (no separate
+  `UPDATE`). An Expression takes the rebuild route instead — a
+  non-constant DEFAULT is invalid.
 
 #### The #[Backfill] attribute
 
@@ -300,9 +319,76 @@ orphan fails fast at metadata build — it could never be consumed), and
 its value is a scalar or an SQL `Expression`, the same vocabulary
 `backfill()` takes. `Blueprint::fromMetadata()` attaches it to the
 column, so a model-driven sync (`fromMetadata()` per model →
-`plan()` → `apply()`) backfills without hand-building blueprints. The
-attribute is consulted only when the column is being added — on a
+`plan()` → `apply()`) backfills without hand-building blueprints. On a
 fresh create it is inert.
+
+#### Backfilling a nullability tighten
+
+A `nullable → NOT NULL` tighten is a `ModifyColumn` — exactly the
+"existing rows may violate the new shape" case the differ flags
+DESTRUCTIVE. A declared backfill fills those rows first: the compiled
+change emits `UPDATE <table> SET col = <value> WHERE col IS NULL`
+BEFORE the alter (scalar or Expression — row-wise by nature on this
+path). On SQLite the fold happens inside the rebuild's copy projection
+as `COALESCE(col, <value>)`.
+
+The change **stays flagged destructive** — rows may violate other
+constraints, and the fill itself mutates data — so the confirmation
+gate is not bypassed; the differ's description names the escape hatch:
+
+```
+modify column(s) on [users]: [status (nullable -> not null)] — DESTRUCTIVE:
+existing rows may violate the new shape; a #[Backfill] /
+Blueprint::backfill() on the column fills the violating rows before the tighten
+```
+
+### Data steps
+
+A backfill fills every row with **one value**. A real migration often
+needs a *transform* — the motivating case: legacy FK columns
+(`post_id`/`event_id`/`profile_id`) become a polymorphic pair, and each
+row's `attachable_type` depends on which FK was set. That is undecidable
+for a framework, so the framework never guesses it — the transform is
+yours, and it has a first-class home:
+
+```
+plan the ADD  →  run your data step  →  plan the DROP
+```
+
+The step is a `SchemaOperation::DataStep` change — hand-authored, never
+differ-generated, never auto-ordered:
+
+```php
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
+use BlueprintAU\Radiant\Database\Schema\SchemaChange;
+
+$step = new SchemaChange(
+    'medias',
+    SchemaOperation::DataStep,
+    new Blueprint('medias'),
+    true, // destructive by default — a data step mutates rows.
+    'data step [morph-fill]: 3 statement(s)',
+    statements: [
+        "UPDATE medias SET attachable_type = 'App\\\\Models\\\\Post', attachable_id = post_id WHERE post_id IS NOT NULL",
+        "UPDATE medias SET attachable_type = 'App\\\\Models\\\\Event', attachable_id = event_id WHERE event_id IS NOT NULL",
+        "UPDATE medias SET attachable_type = 'App\\\\Models\\\\Profile', attachable_id = profile_id WHERE profile_id IS NOT NULL",
+    ],
+);
+```
+
+The contract:
+
+- Each element of `statements` is **one statement** — the framework
+  never splits strings. (Lucent's `sync --step <file>` splits a file on
+  `;\n` before building the change; that is the command's job, not the
+  connection's.)
+- Destructive by default, so the confirmation gate covers it; an
+  insert-only step passes `destructive: false` to opt out.
+- Applied by `SqlConnection::apply()` like any other change — inside
+  whatever lock/transaction discipline the plan runs under.
+- The differ **never** emits a `DataStep`, and nothing orders them for
+  you: you author, place, and own every data step between the plan's
+  ADD and its DROP.
 
 ### FK and CHECK drift
 

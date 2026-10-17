@@ -633,6 +633,7 @@ abstract class SqlConnection implements ConnectionInterface
             SchemaOperation::DropForeignKey => $this->dropForeignKey($change->table, $change->blueprint),
             SchemaOperation::AddCheck => $this->addCheck($change->table, $change->blueprint),
             SchemaOperation::DropCheck => $this->dropCheck($change->table, $change->blueprint),
+            SchemaOperation::DataStep => $this->applyDataStep($change),
         };
     }
 
@@ -711,6 +712,26 @@ abstract class SqlConnection implements ConnectionInterface
     protected function applyModifyColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
     {
         $this->modifyColumn($this->subjectBlueprint($change));
+    }
+
+    /**
+     * Apply a DataStep change — execute its hand-authored statements in
+     * order.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @throws \LogicException
+     */
+    protected function applyDataStep(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    {
+        if ($change->statements === []) {
+            throw new \LogicException(
+                "A DataStep change for [{$change->table}] carries no statements: {$change->description}"
+            );
+        }
+
+        foreach ($change->statements as $sql) {
+            $this->statement($sql);
+        }
     }
 
     /**
