@@ -461,6 +461,73 @@ final class SqlConnectionSchemaOpsTest extends TestCase
         )), 'no FK drop may compile for an FK-free column');
     }
 
+    /**
+     * A DIFFER-PRODUCED DropForeignKey change applies on MySQL — the
+     * regression test for the LogicException
+     * "A DropForeignKey change for [users] carries no constraint name":
+     * the differ used to bake the live constraint name only into the
+     * change's description, so the in-place dialect's
+     * `getDropForeignKeys()` read was empty. SQLite masked the bug (its
+     * rebuild ignores the blueprint's drop list).
+     *
+     * The MySQL shim runs the full differ → synchronizer-apply pipeline:
+     * the drifted FK (declared nowhere in the desired shape) is detected
+     * as DropForeignKey, and the apply emits the named
+     * `DROP FOREIGN KEY` statement.
+     */
+    public function testDifferProducedDropForeignKeyAppliesOnMysql(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        // The LIVE table carries an FK the desired shape will not declare.
+        $pdo->catalogTable('users', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['circle_id', 'bigint', 'YES', null, ''],
+        ]);
+        $pdo->catalogForeignKey('users_circle_id_foreign', 'users', 'circle_id', 'users', 'id');
+
+        $mysql->statement('CREATE TABLE users (id INTEGER PRIMARY KEY, circle_id INTEGER)');
+
+        // Desired shape: the column stays, the FK is undeclared.
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::BigInt, 'circle_id');
+
+        $differ = new \BlueprintAU\Radiant\Database\Schema\SchemaDiffer($mysql->schemaInspector);
+
+        // The probe shape: the shim's declared-vs-live column metadata
+        // also trips a column-type modify (int vs bigint metadata text) —
+        // filter the assertion to the FK drop only.
+        $drops = array_values(array_filter(
+            $differ->diff([$desired]),
+            fn (\BlueprintAU\Radiant\Database\Schema\SchemaChange $change) => $change->operation === SchemaOperation::DropForeignKey,
+        ));
+        self::assertCount(1, $drops);
+
+        // The fix: the constraint name rides the blueprint's drop list —
+        // the handle the in-place dialect's apply reads.
+        self::assertSame(['users_circle_id_foreign'], $drops[0]->blueprint->getDropForeignKeys());
+
+        // The apply path — this threw the LogicException before the fix.
+        $mysql->apply($drops[0]);
+
+        $fkDrops = array_values(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'DROP FOREIGN KEY'),
+        ));
+        self::assertCount(1, $fkDrops, 'exactly one named FK drop must compile');
+        self::assertStringContainsString('users_circle_id_foreign', $fkDrops[0]);
+
+        // A re-diff converges — no FK drift remains.
+        $remaining = array_filter(
+            $differ->diff([$desired]),
+            fn (\BlueprintAU\Radiant\Database\Schema\SchemaChange $change) => $change->operation === SchemaOperation::DropForeignKey,
+        );
+        self::assertSame([], $remaining);
+    }
 }
 
 /**

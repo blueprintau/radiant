@@ -1061,7 +1061,10 @@ final class SchemaDiffer
             // A live FK the desired state does not declare is a drop —
             // but ONLY when the desired state declares the table at all
             // (the differ never drops constraints from tables it is not
-            // managing). The live constraint name is the drop handle.
+            // managing). The live constraint name is the drop handle: it
+            // rides the blueprint's dropForeignKeys list — the in-place
+            // dialects read it from there, SQLite ignores it (its rebuild
+            // renders the desired shape, which simply omits the FK).
             $name = $liveFk['name'] ?? null;
 
             if ($name === null) {
@@ -1071,7 +1074,7 @@ final class SchemaDiffer
             $changes[] = new SchemaChange(
                 $table,
                 SchemaOperation::DropForeignKey,
-                $blueprint,
+                $blueprint->dropForeignKey($name),
                 false,
                 sprintf(
                     'drop foreign key [%s] on [%s] — the constraint goes, the rows stay',
