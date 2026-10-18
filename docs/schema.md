@@ -254,7 +254,13 @@ statement per column — SQLite's `ALTER TABLE` accepts a single
 clause). A **NOT NULL column without a default** cannot be added in
 place to a non-empty table, so that add routes through the table
 rebuild, which backfills the existing rows. SQLite 3.35+ drops
-columns natively, so a `DropColumn` applies in place.
+columns natively, so a `DropColumn` applies in place — **unless a
+foreign key on the table references one of the dropped columns**.
+SQLite's native `DROP COLUMN` validates the remaining schema after the
+drop and fails when any surviving FK definition still names the column
+(regardless of `foreign_keys` enforcement), so an FK-referenced drop
+routes through the table rebuild instead; the rebuild renders the full
+desired shape and any FK declared on a dropped column vanishes with it.
 
 #### Backfilling existing rows
 

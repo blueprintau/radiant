@@ -849,6 +849,213 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * A DropColumn whose column carries a live foreign-key definition
+     * routes through the table rebuild — SQLite's native `DROP COLUMN`
+     * validates the remaining schema and fails when a surviving FK still
+     * names the dropped column. Data is preserved, the FK is gone from
+     * the rebuilt schema, and the FK gate runs clean.
+     */
+    public function testForeignKeyReferencedDropColumnAppliesViaRebuild(): void
+    {
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($users);
+
+        $medias = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'circle_id', foreign: 'users.id')
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id')
+            ->column(ColumnType::String, 'original_name', length: 255);
+        $this->connection->create($medias);
+
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
+        $this->connection->statement(
+            "INSERT INTO medias (circle_id, uploader_id, original_name) VALUES (1, 1, 'a.png')",
+        );
+
+        // Drop the FK-bearing column — the desired shape drops it, and
+        // since the column vanishes, its FK vanishes with it. The differ
+        // emits the column drop FIRST, then an explicit DropForeignKey
+        // companion for the constraint the drop folds away.
+        $desired = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id')
+            ->column(ColumnType::String, 'original_name', length: 255);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$users, $desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame(
+            [SchemaOperation::DropColumn, SchemaOperation::DropForeignKey],
+            $operations,
+        );
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The column is gone; the data and the sibling FK survived.
+        $live = $this->connection->schemaInspector->table('medias');
+        $names = array_column($live->columns, 'name');
+        self::assertNotContains('circle_id', $names);
+        self::assertContains('uploader_id', $names);
+        self::assertCount(1, $live->foreignKeys, 'exactly the uploader FK must survive');
+
+        $rows = $this->connection->selectSql('SELECT uploader_id, original_name FROM medias')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('1', (string) $rows[0]->uploader_id);
+
+        // The FK gate ran clean.
+        $violations = $this->connection->selectSql('PRAGMA foreign_key_check(medias)')->all();
+        self::assertSame([], $violations);
+
+        // Convergence.
+        self::assertSame([], $differ->diff([$users, $desired]));
+    }
+
+    /**
+     * A DropColumn NO live FK references keeps the in-place fast path —
+     * the native `ALTER TABLE ... DROP COLUMN` still applies (no rebuild).
+     */
+    public function testNonForeignKeyReferencedDropColumnAppliesInPlace(): void
+    {
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50)
+            ->column(ColumnType::String, 'legacy_flag', length: 10, nullable: true);
+        $this->connection->create($blueprint);
+
+        $this->connection->statement("INSERT INTO users (name, legacy_flag) VALUES ('Alice', 'y')");
+
+        $desired = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::DropColumn, $changes[0]->operation);
+
+        // The native statement compiles — no rebuild route.
+        $this->connection->apply($changes[0]);
+
+        $live = $this->connection->schemaInspector->table('users');
+        self::assertNotContains('legacy_flag', array_column($live->columns, 'name'));
+
+        $rows = $this->connection->selectSql('SELECT name FROM users')->all();
+        self::assertCount(1, $rows);
+
+        self::assertSame([], $differ->diff([$desired]));
+    }
+
+    /**
+     * Composition: a plan carrying ONLY the FK-referenced DropColumn on a
+     * table with two FKs applies in one pass — the referenced column's FK
+     * vanishes with the rebuild, the untouched FK stays intact and still
+     * enforces afterwards.
+     */
+    public function testForeignKeyReferencedDropKeepsSiblingForeignKeyEnforced(): void
+    {
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($users);
+
+        $medias = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'circle_id', foreign: 'users.id')
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id');
+        $this->connection->create($medias);
+
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice'), ('Bob')");
+        $this->connection->statement('INSERT INTO medias (circle_id, uploader_id) VALUES (1, 2)');
+
+        $desired = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$users, $desired]);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // The remaining FK is intact — and ENFORCED: inserting a row whose
+        // uploader_id has no parent must fail under foreign_keys=ON.
+        $live = $this->connection->schemaInspector->table('medias');
+        self::assertCount(1, $live->foreignKeys);
+        self::assertSame(['uploader_id'], $live->foreignKeys[0]['columns']);
+
+        Expectation::throws(fn () => $this->connection->statement(
+            'INSERT INTO medias (uploader_id) VALUES (99)',
+        ), \Throwable::class);
+
+        $rows = $this->connection->selectSql('SELECT uploader_id FROM medias')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('2', (string) $rows[0]->uploader_id);
+    }
+
+    /**
+     * Pair case: an explicit DropForeignKey PLUS sibling changes compose
+     * — dropping an FK and an FK-referenced column on the SAME table
+     * collapse onto the rebuild route and land one final shape.
+     */
+    public function testDropForeignKeyAndForeignKeyReferencedDropCompose(): void
+    {
+        $users = (new Blueprint('users'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+        $this->connection->create($users);
+
+        $medias = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'circle_id', foreign: 'users.id')
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id');
+        $this->connection->create($medias);
+
+        $this->connection->statement("INSERT INTO users (name) VALUES ('Alice')");
+        $this->connection->statement('INSERT INTO medias (circle_id, uploader_id) VALUES (1, 1)');
+
+        // Keep circle_id's COLUMN but drop only ITS FK — uploader_id and
+        // its FK stay. The differ emits ONE explicit DropForeignKey (the
+        // constraint's columns survive, so no implicit column-drop fold
+        // applies); the FK drop rebuild-routes and lands one final shape.
+        $desired = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'circle_id')
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$users, $desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::DropForeignKey], $operations);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // circle_id survives FK-less; the uploader FK is gone.
+        $live = $this->connection->schemaInspector->table('medias');
+        $names = array_column($live->columns, 'name');
+        self::assertContains('circle_id', $names);
+        self::assertContains('uploader_id', $names);
+        self::assertCount(1, $live->foreignKeys, 'only the uploader FK may survive');
+        self::assertSame(['uploader_id'], $live->foreignKeys[0]['columns']);
+
+        $rows = $this->connection->selectSql('SELECT circle_id, uploader_id FROM medias')->all();
+        self::assertCount(1, $rows);
+        self::assertSame('1', (string) $rows[0]->circle_id);
+        self::assertSame('1', (string) $rows[0]->uploader_id);
+
+        self::assertSame([], $differ->diff([$users, $desired]));
+    }
+
+    /**
      * CHECK drift: a declared CHECK missing live is AddCheck; a
      * same-name different-expression mismatch is advisory-only (no
      * executable drop+add is emitted for it).

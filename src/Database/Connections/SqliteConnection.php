@@ -75,6 +75,8 @@ final class SqliteConnection extends SqlConnection
      *
      * A prior rebuild on the same table renders the full desired shape,
      * which excludes the dropped columns — a second drop would fail.
+     * A drop an FK definition references cannot happen natively, so it
+     * routes through the table rebuild instead.
      *
      * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
      */
@@ -89,6 +91,11 @@ final class SqliteConnection extends SqlConnection
 
         if ($pending === []) {
             return; // Already dropped (a rebuild realized the desired shape).
+        }
+
+        if ($this->changeRoutesThroughRebuild($change)) {
+            $this->rebuildTable($change->blueprint);
+            return;
         }
 
         parent::applyDropColumn($change);
@@ -259,8 +266,42 @@ final class SqliteConnection extends SqlConnection
             \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropForeignKey,
             \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddCheck,
             \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropCheck => true,
+            \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::DropColumn => $this->dropRequiresRebuild($change),
             default => false,
         };
+    }
+
+    /**
+     * Whether a drop change must route through the table rebuild.
+     *
+     * SQLite's native `DROP COLUMN` validates the remaining schema and
+     * fails when any surviving foreign-key definition references a
+     * dropped column — those drops rebuild instead. Every other drop
+     * stays in place, preserving the no-scan fast path.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * @return bool
+     */
+    private function dropRequiresRebuild(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): bool
+    {
+        // A null subject falls back to the blueprint's own dropColumn()
+        // declarations, intersected with the live columns — the same
+        // pending shape {@see applyDropColumn()} acts on.
+        $subject = $change->subject ?? $change->blueprint->getDropColumns();
+        $live = array_column($this->schemaInspector->table($change->table)->columns, 'name');
+        $pending = array_intersect($subject, $live);
+
+        if ($pending === []) {
+            return false;
+        }
+
+        foreach ($this->schemaInspector->table($change->table)->foreignKeys as $foreignKey) {
+            if (array_intersect($foreignKey['columns'], $pending) !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
