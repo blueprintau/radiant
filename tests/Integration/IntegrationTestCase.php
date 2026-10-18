@@ -263,6 +263,64 @@ abstract class IntegrationTestCase extends DatabaseTestCase
     }
 
     /**
+     * Dropping a foreign-key-referenced column works on the live server —
+     * the regression test for error 1828 (MySQL: "Cannot drop column
+     * 'circle_id': needed in a foreign key constraint"). The base
+     * applyDropColumn() drops the constraint FIRST; a driver that ran the
+     * column drop first fails here. SQLite takes the rebuild route, so
+     * this also verifies its rebuilt shape keeps the sibling FK enforced.
+     */
+    public function testDropForeignKeyReferencedColumn(): void
+    {
+        $this->createTables(
+            (new Blueprint('authors'))
+                ->id()
+                ->string('name', 100),
+            (new Blueprint('books'))
+                ->id()
+                ->column(ColumnType::BigInt, 'author_id', foreign: 'authors.id')
+                ->column(ColumnType::BigInt, 'editor_id', foreign: 'authors.id')
+                ->string('title', 255),
+        );
+
+        $this->connection->table('authors')->insert(['name' => 'Alice']);
+        $this->connection->table('books')->insert(['author_id' => 1, 'editor_id' => 1, 'title' => 'Radiant']);
+
+        // Two FKs ride the books table; both target authors.id. Drop the
+        // editor FK's column — author_id's constraint must survive.
+        $this->connection->apply(new \BlueprintAU\Radiant\Database\Schema\SchemaChange(
+            'books',
+            SchemaOperation::DropColumn,
+            (new Blueprint('books'))
+                ->id()
+                ->column(ColumnType::BigInt, 'author_id', foreign: 'authors.id')
+                ->string('title', 255),
+            true,
+            'alter table [books]: drop column(s) [editor_id]',
+            false,
+            null,
+            ['editor_id'],
+        ));
+
+        // The column is gone, the sibling FK's data survived, and the FK
+        // gate reads clean.
+        $row = $this->connection->table('books')->first();
+        self::assertNotNull($row);
+        self::assertObjectNotHasProperty('editor_id', $row);
+        self::assertSame(1, (int) $row->author_id);
+
+        $foreignKeys = $this->connection->schemaInspector->table('books')->foreignKeys;
+        $fkColumns = array_map(fn (array $fk): array => $fk['columns'], $foreignKeys);
+        self::assertContains(['author_id'], $fkColumns, 'the author FK must survive');
+        self::assertNotContains(['editor_id'], $fkColumns, 'the editor FK must be gone');
+
+        // Enforcement survived: an orphan editor/author insert must fail.
+        Expectation::throws(fn () => $this->connection->table('books')->insert([
+            'author_id' => 999, 'title' => 'orphan',
+        ]), \Throwable::class);
+    }
+
+    /**
      * A full rename + reshape sync: a sloppy all-TEXT legacy table is
      * renamed and brought to a properly-typed shape covering every change
      * kind at once — table rename, column rename, adds (incl. NOT NULL),

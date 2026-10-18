@@ -358,4 +358,304 @@ final class SqlConnectionSchemaOpsTest extends TestCase
         self::assertNotNull($first);
         self::assertNull($first->bio);
     }
+
+    /**
+     * apply(DropColumn) drops the column's foreign-key constraints FIRST
+     * — the base applyDropColumn() emits the dialect FK-drop for each
+     * live constraint naming a subject column before the native
+     * `DROP COLUMN`. MySQL/MariaDB reject the column drop otherwise
+     * (error 1828), and Postgres requires the constraint gone first.
+     *
+     * The MySQL connection over a sqlite PDO exercises the statement
+     * ORDER through a statement-logging PDO wrapper (MySQL has no live
+     * server in unit tests; the base applyDropColumn() is
+     * dialect-neutral and the FK-drop form is MySQL's).
+     */
+    public function testApplyDropColumnDropsForeignKeysFirst(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        $pdo->catalogTable('users', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['name', 'varchar(255)', 'YES', null, ''],
+            ['circle_id', 'bigint', 'YES', null, ''],
+        ]);
+        $pdo->catalogForeignKey('users_circle_id_foreign', 'users', 'circle_id', 'users', 'id');
+
+        $mysql->statement('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, circle_id INTEGER)');
+
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->string('name', 255)
+            ->column(ColumnType::BigInt, 'circle_id', foreign: 'users.id');
+
+        $mysql->apply(new SchemaChange(
+            'users',
+            SchemaOperation::DropColumn,
+            $blueprint,
+            true,
+            'alter table [users]: drop column(s) [circle_id]',
+            false,
+            null,
+            ['circle_id'],
+        ));
+
+        $fkDropIndices = array_keys(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'DROP FOREIGN KEY'),
+        ));
+        $columnDropIndices = array_keys(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'DROP COLUMN'),
+        ));
+
+        self::assertNotSame([], $fkDropIndices, 'the FK drop must be in the log');
+        self::assertNotSame([], $columnDropIndices, 'the column drop must be in the log');
+        self::assertLessThan(
+            $columnDropIndices[0],
+            $fkDropIndices[0],
+            'the DROP FOREIGN KEY must run BEFORE the DROP COLUMN',
+        );
+        self::assertStringContainsString('users_circle_id_foreign', $log->statements[$fkDropIndices[0]]);
+    }
+
+    /**
+     * apply(DropColumn) on a NON-FK-referenced column emits NO FK-drop —
+     * the fast path stays untouched.
+     */
+    public function testApplyDropColumnWithoutForeignKeysSkipsFkDrops(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        $pdo->catalogTable('users', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['name', 'varchar(255)', 'YES', null, ''],
+        ]);
+
+        $mysql->statement('CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)');
+
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->string('name', 255);
+
+        $mysql->apply(new SchemaChange(
+            'users',
+            SchemaOperation::DropColumn,
+            $blueprint,
+            true,
+            'alter table [users]: drop column(s) [name]',
+            false,
+            null,
+            ['name'],
+        ));
+
+        self::assertSame([], array_values(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'DROP FOREIGN KEY'),
+        )), 'no FK drop may compile for an FK-free column');
+    }
+
+}
+
+/**
+ * The captured statement log, shared by reference with the logging PDO.
+ */
+final class StatementLog
+{
+    /** @var list<string> */
+    public array $statements = [];
+}
+
+/**
+ * A PDO stand-in that emulates a MySQL connection on sqlite: an attached
+ * `information_schema` catalog feeds MySqlSchemaInspector, the
+ * `DATABASE()` function answers the shim's schema name, and a
+ * `DROP FOREIGN KEY` statement mutates the catalog (MySQL semantics)
+ * instead of failing sqlite's parser. Every statement is recorded — the
+ * compile-order observer for connections whose statement() is final.
+ */
+final class LoggingPdo extends \Pdo\Sqlite
+{
+    /**
+     * Build the shim: the catalog tables the MySQL inspector queries,
+     * plus the DATABASE() stub.
+     *
+     * @param  StatementLog  $log  The shared capture target.
+     */
+    public function __construct(
+        private readonly StatementLog $log,
+    ) {
+        parent::__construct('sqlite::memory:');
+        $this->createFunction('DATABASE', fn (): string => 'test', 0);
+
+        // ATTACH of a second :memory: creates a writable schema sqlite
+        // resolves `information_schema.*` through — impossible to create
+        // in the main database directly.
+        $this->exec('ATTACH DATABASE \':memory:\' AS information_schema');
+
+        foreach ([
+            'tables (table_schema TEXT, table_name TEXT)',
+            'columns (table_schema TEXT, table_name TEXT, ordinal_position INTEGER,'
+                . ' column_name TEXT, column_type TEXT, is_nullable TEXT,'
+                . ' column_default TEXT, column_key TEXT)',
+            'statistics (table_schema TEXT, table_name TEXT, index_name TEXT,'
+                . ' column_name TEXT, non_unique INTEGER, seq_in_index INTEGER)',
+            'key_column_usage (constraint_schema TEXT, constraint_name TEXT,'
+                . ' table_schema TEXT, table_name TEXT, column_name TEXT,'
+                . ' referenced_table_name TEXT, referenced_column_name TEXT,'
+                . ' ordinal_position INTEGER)',
+            'referential_constraints (constraint_schema TEXT, constraint_name TEXT,'
+                . ' delete_rule TEXT, update_rule TEXT)',
+        ] as $ddl) {
+            $this->exec("CREATE TABLE information_schema.{$ddl}");
+        }
+    }
+
+    /**
+     * Seed a catalog row for a live table — one row per MySQL column the
+     * inspector's `columns` query should answer.
+     *
+     * @param  string  $table
+     * @param  list<array{string, string, string, string|null, string}>  $columns
+     *     Each: [name, type, is_nullable, column_default, column_key].
+     */
+    public function catalogTable(string $table, array $columns): void
+    {
+        $this->exec(
+            "INSERT INTO information_schema.tables VALUES ('test', '{$table}')",
+        );
+
+        foreach ($columns as $position => [$name, $type, $nullable, $default, $key]) {
+            $default = $default === null ? 'NULL' : "'{$default}'";
+
+            $this->exec(sprintf(
+                'INSERT INTO information_schema.columns VALUES'
+                . " ('test', '%s', %d, '%s', '%s', '%s', %s, '%s')",
+                $table,
+                $position + 1,
+                $name,
+                $type,
+                $nullable,
+                $default,
+                $key,
+            ));
+        }
+    }
+
+    /**
+     * Seed a catalog FK — the constraint MySqlSchemaInspector reads and
+     * applyDropColumn() drops.
+     *
+     * @param  string  $name
+     * @param  string  $table
+     * @param  string  $column
+     * @param  string  $referencesTable
+     * @param  string  $referencesColumn
+     */
+    public function catalogForeignKey(
+        string $name,
+        string $table,
+        string $column,
+        string $referencesTable,
+        string $referencesColumn,
+    ): void {
+        $this->exec(sprintf(
+            'INSERT INTO information_schema.key_column_usage VALUES'
+            . " ('test', '%s', 'test', '%s', '%s', '%s', '%s', 1)",
+            $name,
+            $table,
+            $column,
+            $referencesTable,
+            $referencesColumn,
+        ));
+        $this->exec(sprintf(
+            'INSERT INTO information_schema.referential_constraints VALUES'
+            . " ('test', '%s', 'NO ACTION', 'NO ACTION')",
+            $name,
+        ));
+    }
+
+    /**
+     * Record the SQL; a `DROP FOREIGN KEY` mutates the catalog (MySQL
+     * emulation), everything else runs on sqlite.
+     *
+     * @param  string  $query
+     * @param  array<int, mixed>  $options
+     * @return \PDOStatement|false
+     */
+    #[\Override]
+    public function prepare(string $query, array $options = []): \PDOStatement|false
+    {
+        $this->log->statements[] = $query;
+
+        if (preg_match('/DROP\s+FOREIGN\s+KEY\s+[`"]?([A-Za-z0-9_]+)/i', $query, $matches) === 1) {
+            $name = $matches[1];
+
+            $this->exec(
+                "DELETE FROM information_schema.key_column_usage WHERE constraint_name = '{$name}'",
+            );
+            $this->exec(
+                "DELETE FROM information_schema.referential_constraints WHERE constraint_name = '{$name}'",
+            );
+
+            return new LoggingNoopStatement();
+        }
+
+        return parent::prepare($query, $options);
+    }
+
+    /**
+     * Record the SQL, then run it here.
+     *
+     * @param  string  $query
+     * @return int|false
+     */
+    #[\Override]
+    public function exec(string $query): int|false
+    {
+        $this->log->statements[] = $query;
+
+        return parent::exec($query);
+    }
+
+    /**
+     * Record the SQL, then run it here.
+     *
+     * @param  string  $query
+     * @param  int|null  $fetchMode
+     * @param  mixed  ...$fetchModeArgs
+     * @return \PDOStatement|false
+     */
+    #[\Override]
+    public function query(string $query, int|null $fetchMode = null, mixed ...$fetchModeArgs): \PDOStatement|false
+    {
+        $this->log->statements[] = $query;
+
+        return parent::query($query, $fetchMode, ...$fetchModeArgs);
+    }
+}
+
+/**
+ * The emulated MySQL statement's handle — the catalog mutation already
+ * ran; nothing left to execute.
+ */
+final class LoggingNoopStatement extends \PDOStatement
+{
+    /**
+     * Nothing to run — the emulated statement has no driver work.
+     *
+     * @param  array<int|string, mixed>|null  $params
+     * @return bool
+     */
+    #[\Override]
+    public function execute(?array $params = null): bool
+    {
+        return true;
+    }
 }

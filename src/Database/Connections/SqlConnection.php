@@ -697,13 +697,18 @@ abstract class SqlConnection implements ConnectionInterface
      * Apply a DropColumn change.
      *
      * The drop blueprint is built from the change's subject names, falling
-     * back to the blueprint's own dropColumn() declarations.
+     * back to the blueprint's own dropColumn() declarations. Any live
+     * foreign key naming a dropped column is dropped FIRST — MySQL and
+     * MariaDB reject the column drop while a constraint references it,
+     * and Postgres requires the constraint gone before the column.
      *
      * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
      */
     protected function applyDropColumn(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
     {
         $names = $change->subject ?? $change->blueprint->getDropColumns();
+
+        $this->dropForeignKeysOnColumns($change->table, $names);
 
         $drop = new Blueprint($change->table);
 
@@ -712,6 +717,47 @@ abstract class SqlConnection implements ConnectionInterface
         }
 
         $this->alter(SchemaOperation::DropColumn, $drop);
+    }
+
+    /**
+     * Drop every live foreign key whose referencing columns intersect the
+     * given columns — the FK-first prerequisite of a column drop.
+     *
+     * The dialect's own FK-drop form carries the live constraint name. A
+     * dialect without an in-place FK-drop form (SQLite — its change routes
+     * through the table rebuild instead) skips the helper silently, and a
+     * constraint the inspector cannot name is skipped too.
+     *
+     * @param  string  $table
+     * @param  list<string>  $columns
+     */
+    private function dropForeignKeysOnColumns(string $table, array $columns): void
+    {
+        try {
+            $foreignKeys = $this->schemaInspector->table($table)->foreignKeys;
+        } catch (\RuntimeException) {
+            return; // The table is gone — nothing references anything.
+        }
+
+        foreach ($foreignKeys as $foreignKey) {
+            $name = $foreignKey['name'] ?? null;
+
+            if ($name === null) {
+                continue;
+            }
+
+            if (array_intersect($foreignKey['columns'], $columns) === []) {
+                continue;
+            }
+
+            try {
+                $sql = $this->schemaGrammar->compileDropForeignKey($table, $name);
+            } catch (\BlueprintAU\Radiant\Database\Exceptions\UnsupportedFeatureException) {
+                return; // No in-place FK-drop form — the dialect rebuilds instead.
+            }
+
+            $this->statement($sql);
+        }
     }
 
     /**
