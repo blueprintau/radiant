@@ -876,8 +876,9 @@ final class MigrationSyncTest extends DatabaseTestCase
 
         // Drop the FK-bearing column — the desired shape drops it, and
         // since the column vanishes, its FK vanishes with it. The differ
-        // emits the column drop FIRST, then an explicit DropForeignKey
-        // companion for the constraint the drop folds away.
+        // folds the constraint removal into the column drop: NO explicit
+        // DropForeignKey companion is emitted (it would name an
+        // already-gone constraint — MySQL error 1091).
         $desired = (new Blueprint('medias'))
             ->id()
             ->column(ColumnType::BigInt, 'uploader_id', foreign: 'users.id')
@@ -886,11 +887,8 @@ final class MigrationSyncTest extends DatabaseTestCase
         $differ = new SchemaDiffer($this->connection->schemaInspector);
         $changes = $differ->diff([$users, $desired]);
 
-        $operations = array_map(fn ($change) => $change->operation, $changes);
-        self::assertSame(
-            [SchemaOperation::DropColumn, SchemaOperation::DropForeignKey],
-            $operations,
-        );
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::DropColumn, $changes[0]->operation);
 
         foreach ($changes as $change) {
             $this->connection->apply($change);

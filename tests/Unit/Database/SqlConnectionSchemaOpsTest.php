@@ -528,6 +528,76 @@ final class SqlConnectionSchemaOpsTest extends TestCase
         );
         self::assertSame([], $remaining);
     }
+
+    /**
+     * A plan that DROPS a column whose constraint dies with it emits the
+     * FK drop EXACTLY ONCE — the regression test for MySQL error 1091
+     * ("Can't DROP 'medias_ibfk_1'; check that column/key exists"): the
+     * differ used to emit BOTH the implicit fold (applyDropColumn's
+     * FK-first prerequisite reads the live constraint) AND an explicit
+     * companion DropForeignKey, so the second statement named a constraint
+     * the first had already removed.
+     *
+     * The shim seeds TWO FKs (the real-world medias shape); the plan
+     * drops one FK-bearing column. Full diff → apply pipeline: exactly
+     * one DROP FOREIGN KEY statement runs.
+     */
+    public function testColumnDropFoldsForeignKeyRemovalIntoSingleDrop(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        // The live medias shape: two FK columns, one survives the plan.
+        $pdo->catalogTable('parent', [['id', 'int', 'NO', null, 'PRI']]);
+        $pdo->catalogTable('medias', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['circle_id', 'bigint', 'YES', null, ''],
+            ['uploader_id', 'bigint', 'YES', null, ''],
+        ]);
+        $pdo->catalogForeignKey('medias_ibfk_1', 'medias', 'circle_id', 'parent', 'id');
+        $pdo->catalogForeignKey('medias_ibfk_2', 'medias', 'uploader_id', 'parent', 'id');
+
+        $mysql->statement('CREATE TABLE parent (id INTEGER PRIMARY KEY)');
+        $mysql->statement('CREATE TABLE medias (id INTEGER PRIMARY KEY, circle_id INTEGER, uploader_id INTEGER)');
+
+        // Desired: circle_id (and its FK) gone; uploader_id's FK stays.
+        $parent = (new Blueprint('parent'))->id();
+        $desired = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::BigInt, 'uploader_id', foreign: 'parent.id');
+
+        $differ = new \BlueprintAU\Radiant\Database\Schema\SchemaDiffer($mysql->schemaInspector);
+        $changes = $differ->diff([$parent, $desired]);
+
+        // The FK-side emission: ONLY the surviving constraint's companion
+        // actions may appear — nothing may target medias_ibfk_1.
+        $fkChanges = array_values(array_filter(
+            $changes,
+            fn (\BlueprintAU\Radiant\Database\Schema\SchemaChange $change) => $change->operation === SchemaOperation::DropForeignKey,
+        ));
+        foreach ($fkChanges as $fkChange) {
+            self::assertNotContains(
+                'medias_ibfk_1',
+                $fkChange->blueprint->getDropForeignKeys(),
+                'medias_ibfk_1 dies with its column — no explicit companion may name it',
+            );
+        }
+
+        // Apply EVERYTHING — this threw error 1091 before the fold.
+        foreach ($changes as $change) {
+            $mysql->apply($change);
+        }
+
+        // Exactly ONE statement may name medias_ibfk_1 — the FK-first fold
+        // inside the column-drop apply.
+        $ibfk1Statements = array_values(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'medias_ibfk_1') && str_contains($sql, 'DROP FOREIGN KEY'),
+        ));
+        self::assertCount(1, $ibfk1Statements, 'medias_ibfk_1 must be dropped exactly once');
+    }
 }
 
 /**
@@ -649,8 +719,10 @@ final class LoggingPdo extends \Pdo\Sqlite
     }
 
     /**
-     * Record the SQL; a `DROP FOREIGN KEY` mutates the catalog (MySQL
-     * emulation), everything else runs on sqlite.
+     * Record the SQL; a `DROP FOREIGN KEY` mutates the catalog and a
+     * MySQL-only `MODIFY` clause is answered with a no-op (sqlite cannot
+     * run either — MySQL semantics without a MySQL server), everything
+     * else runs on sqlite.
      *
      * @param  string  $query
      * @param  array<int, mixed>  $options
@@ -671,6 +743,12 @@ final class LoggingPdo extends \Pdo\Sqlite
                 "DELETE FROM information_schema.referential_constraints WHERE constraint_name = '{$name}'",
             );
 
+            return new LoggingNoopStatement();
+        }
+
+        // MySQL's `ALTER TABLE ... MODIFY <definition>` — sqlite has no
+        // MODIFY clause; the emulated environment treats it as accepted.
+        if (preg_match('/^ALTER\s+TABLE\s+.+\s+MODIFY\s/i', $query) === 1) {
             return new LoggingNoopStatement();
         }
 

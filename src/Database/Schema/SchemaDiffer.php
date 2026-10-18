@@ -1028,6 +1028,36 @@ final class SchemaDiffer
     {
         $live = $this->inspector->table($liveTable ?? $table);
 
+        // A live FK whose referencing columns the plan DROPS dies with its
+        // column — applyDropColumn()'s FK-first prerequisite removes it at
+        // apply time. An explicit companion DropForeignKey here would name
+        // an already-gone constraint and fail (MySQL error 1091), so the
+        // FK diff folds the column-drop set and skips those constraints.
+        // The comparison mirrors diffTable()'s columnSets(): live columns
+        // absent from the desired shape (explicit dropColumn() removes a
+        // column from that set; declared renames retire the live from-side
+        // without dropping it).
+        $desiredColumns = [];
+
+        foreach ($blueprint->getColumns() as $column) {
+            $desiredColumns[$column['name']] = true;
+        }
+
+        foreach ($blueprint->getDropColumns() as $name) {
+            unset($desiredColumns[$name]);
+        }
+
+        foreach ($blueprint->getColumnRenames() as $rename) {
+            // A rename RETIRES the live from-side — it leaves via the
+            // rename, not a drop, so its FK survives.
+            $desiredColumns[$rename['from']] = true;
+        }
+
+        $droppedColumns = array_filter(
+            array_map(fn (array $column): string => $column['name'], $live->columns),
+            fn (string $name): bool => !isset($desiredColumns[$name]),
+        );
+
         $liveForeignKeys = $live->foreignKeys;
         $matched = [];
 
@@ -1055,6 +1085,14 @@ final class SchemaDiffer
 
         foreach ($liveForeignKeys as $index => $liveFk) {
             if (in_array($index, $matched, true)) {
+                continue;
+            }
+
+            // The FK's referencing columns ride a column drop — the drop
+            // folds the constraint removal in (applyDropColumn's FK-first
+            // prerequisite). No explicit companion: it would target an
+            // already-gone constraint (MySQL error 1091).
+            if ($droppedColumns !== [] && array_intersect($liveFk['columns'], $droppedColumns) !== []) {
                 continue;
             }
 
