@@ -614,10 +614,20 @@ abstract class SqlConnection implements ConnectionInterface
      * Apply a differ-produced change — dispatches create/alter/drop so the
      * host never writes the match itself.
      *
-     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange  $change
+     * A callable {@see \BlueprintAU\Radiant\Database\Schema\DataStep} flows
+     * through the same dispatch: the confirm gate and transaction
+     * discipline treat it exactly as any other change.
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\SchemaChange|\BlueprintAU\Radiant\Database\Schema\DataStep  $change
      */
-    final public function apply(\BlueprintAU\Radiant\Database\Schema\SchemaChange $change): void
+    final public function apply(\BlueprintAU\Radiant\Database\Schema\SchemaChange|\BlueprintAU\Radiant\Database\Schema\DataStep $change): void
     {
+        if ($change instanceof \BlueprintAU\Radiant\Database\Schema\DataStep) {
+            $this->applyCallableStep($change);
+
+            return;
+        }
+
         match ($change->operation) {
             SchemaOperation::CreateTable => $this->create($change->blueprint),
             SchemaOperation::AddColumn => $this->applyAddColumn($change),
@@ -732,6 +742,22 @@ abstract class SqlConnection implements ConnectionInterface
         foreach ($change->statements as $sql) {
             $this->statement($sql);
         }
+    }
+
+    /**
+     * Apply a callable data step — invoke its closure against this
+     * connection.
+     *
+     * The closure runs under whatever lock and transaction discipline the
+     * caller established around apply(); a throw propagates untouched and
+     * vetoes the plan (rollback semantics identical to a statement
+     * failure).
+     *
+     * @param  \BlueprintAU\Radiant\Database\Schema\DataStep  $step
+     */
+    protected function applyCallableStep(\BlueprintAU\Radiant\Database\Schema\DataStep $step): void
+    {
+        ($step->run)($this);
     }
 
     /**

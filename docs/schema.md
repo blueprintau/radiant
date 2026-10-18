@@ -396,6 +396,76 @@ The contract:
   you: you author, place, and own every data step between the plan's
   ADD and its DROP.
 
+#### Callable data steps
+
+The SQL step carries its transform as **plan data** — printable,
+diffable, reviewable without reading any other file. That visibility is
+the default for a reason, and it stays the default. But some transforms
+have their intelligence in PHP, and forcing it into SQL strings buys
+four problems: morph aliases are full PHP class-strings whose inlined
+backslashes are dialect-dependent (MySQL eats one unless
+`NO_BACKSLASH_ESCAPES`; SQLite keeps it), hand-built SQL interpolates
+everything (every user-derived value becomes a quoting bug or an
+injection surface), veto gates need dialect forks (`RAISE` is
+SQLite-trigger-only, `SIGNAL` is MySQL-only, division-by-zero is
+silently NULL on SQLite), and a `.sql` step is only ever diff-reviewed —
+never unit-tested.
+
+For those, the callable sibling:
+
+```php
+use BlueprintAU\Radiant\Database\Schema\DataStep;
+
+$step = new DataStep(
+    'medias',
+    'morph backfill: legacy FK columns → attachable pair, gated on orphans',
+    true, // explicit — no default-true magic.
+    function (\BlueprintAU\Radiant\Database\Connections\SqlConnection $conn): void {
+        foreach ([Post::class => 'post_id', Event::class => 'event_id'] as $class => $legacy) {
+            $conn->statement(
+                "UPDATE medias SET attachable_type = ?, attachable_id = {$legacy}
+                 WHERE {$legacy} IS NOT NULL AND attachable_id IS NULL",
+                [$class], // bound — the codec owns encoding; the class-string is never inlined.
+            );
+        }
+
+        $violations = $conn->selectSql('SELECT count(*) AS violations FROM medias WHERE attachable_id IS NULL')->first();
+
+        if ($violations !== null && (int) $violations->violations > 0) {
+            throw new \DomainException("morph backfill gate: {$violations->violations} violating rows");
+        }
+    },
+);
+```
+
+The contract mirrors the SQL step exactly: `$table` is a display and
+lock-scoping label; `$destructive` is read by the confirmation gate
+identically to a `SchemaChange`'s flag; the closure runs through the
+same `SqlConnection::apply()` dispatch — same lock, same transaction
+discipline — and **a throw is a veto**: under a transactional apply the
+whole plan rolls back, with the identical semantics a failing statement
+already has. Gates are plain PHP conditionals now; delete the sentinel
+CHECK tables and the `RAISE`/`SIGNAL` forks.
+
+The division:
+
+- **Pure row transforms** → SQL step (visible, diffable — reviewers who
+  didn't write it read the actual statements).
+- **Logic-dependent transforms** — PHP class-string constants, bound
+  writes, conditionals, exceptions-as-gates → callable step (testable,
+  escape-free, description-only visibility).
+
+That last clause is the honest cost: a dry run can show **only** the
+description for a callable step. Review happens at the definition site,
+not the plan — write `$description` for the person who will read it in
+a `--dry-run` months later, and keep callable steps small enough that
+the site is readable. Interleaving is positional: callables and SQL
+steps sit in one plan list in authored order, gated and applied one by
+one. Callable steps never defer past a SQLite standalone-transaction
+rebuild (they carry no analyzable operation) — if a plan mixes the two,
+the deferred rebuild still runs after the lock closes, exactly as it
+does around other changes.
+
 ### FK and CHECK drift
 
 Foreign keys are matched **shape-first**: a live constraint with an

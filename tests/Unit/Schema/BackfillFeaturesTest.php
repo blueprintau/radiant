@@ -6,6 +6,7 @@ namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
 use BlueprintAU\Radiant\Database\Query\Expression;
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
+use BlueprintAU\Radiant\Database\Schema\DataStep;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
 use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 use BlueprintAU\Radiant\Database\Schema\SchemaChange;
@@ -127,7 +128,7 @@ final class BackfillFeaturesTest extends DatabaseTestCase
         self::assertTrue($plan[0]->destructive, 'A tightening modify stays destructive — the backfill is an escape hatch, not a gate bypass.');
         self::assertStringContainsString('#[Backfill]', $plan[0]->description);
 
-        $synchronizer->apply($plan, confirm: fn (SchemaChange $change) => true);
+        $synchronizer->apply($plan, confirm: fn (SchemaChange|DataStep $change) => true);
 
         $rows = $this->connection->selectSql('SELECT status FROM bf_tighten ORDER BY id')->all();
         self::assertSame(['unknown', 'active'], array_map(fn ($row) => $row->status, $rows));
@@ -163,7 +164,7 @@ final class BackfillFeaturesTest extends DatabaseTestCase
             ->backfill('handle', new Expression("email || '-h'"));
 
         $synchronizer = new SchemaSynchronizer($this->connection);
-        $synchronizer->apply($synchronizer->plan([$desired]), confirm: fn (SchemaChange $change) => true);
+        $synchronizer->apply($synchronizer->plan([$desired]), confirm: fn (SchemaChange|DataStep $change) => true);
 
         $rows = $this->connection->selectSql('SELECT handle FROM bf_tighten_expr ORDER BY id')->all();
         self::assertSame(['a@x.io-h', 'kept'], array_map(fn ($row) => $row->handle, $rows));
@@ -365,7 +366,7 @@ final class BackfillFeaturesTest extends DatabaseTestCase
         );
 
         $synchronizer = new SchemaSynchronizer($this->connection);
-        $applied = $synchronizer->apply([$mutating, $insertOnly], confirm: fn (SchemaChange $change) => true);
+        $applied = $synchronizer->apply([$mutating, $insertOnly], confirm: fn (SchemaChange|DataStep $change) => true);
 
         self::assertCount(2, $applied);
 
@@ -419,7 +420,7 @@ final class BackfillFeaturesTest extends DatabaseTestCase
         $synchronizer = new SchemaSynchronizer($this->connection);
 
         try {
-            $synchronizer->apply([$step], confirm: fn (SchemaChange $change) => true, transactional: true);
+            $synchronizer->apply([$step], confirm: fn (SchemaChange|DataStep $change) => true, transactional: true);
             self::fail('The failing statement should have thrown.');
         } catch (\Throwable) {
             // The first statement must have rolled back with the step.

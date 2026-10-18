@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Schema;
 
 use BlueprintAU\Radiant\Database\Connections\SqlConnection;
+use BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation;
 
 /**
  * The sync runner — diff → confirm → apply, under the schema lock.
  *
  * @see SchemaDiffer
  * @see SqlConnection::apply()
+ *
+ * @phpstan-import-type Step from \BlueprintAU\Radiant\Database\Schema\DataStep
  */
 final class SchemaSynchronizer
 {
@@ -49,6 +52,10 @@ final class SchemaSynchronizer
      * Takes no lock: the caller must hold the `radiant:schema` lock across
      * the whole plan → display → apply flow.
      *
+     * The plan may interleave {@see DataStep} callables positionally among
+     * the changes — each item runs in authored order through the same
+     * confirm gate and transaction discipline.
+     *
      * When the plan carries a change whose apply needs a transaction-free
      * connection (an FK-involved SQLite table rebuild), a `transactional:
      * true` apply degrades to a non-transactional loop — each such change
@@ -56,11 +63,11 @@ final class SchemaSynchronizer
      * transaction in that case: release the lock between planning and
      * applying.
      *
-     * @param  list<SchemaChange>  $plan
-     * @param  (callable(SchemaChange): bool)|null  $confirm  The destructive-change gate; null means fail-fast.
-     * @param  (callable(SchemaChange): void)|null  $onChange  Invoked after each change is applied successfully.
+     * @param  list<Step>  $plan
+     * @param  (callable(Step): bool)|null  $confirm  The destructive-change gate; null means fail-fast.
+     * @param  (callable(Step): void)|null  $onChange  Invoked after each change is applied successfully.
      * @param  bool  $transactional  Whether the apply loop is atomic.
-     * @return list<SchemaChange>  The changes actually applied — declined changes are excluded.
+     * @return list<Step>  The changes actually applied — declined changes are excluded.
      * @throws \LogicException
      * @throws \Throwable
      */
@@ -89,7 +96,7 @@ final class SchemaSynchronizer
      * @param  (callable(SchemaChange): bool)|null  $confirm  The destructive-change gate; null means fail-fast.
      * @param  (callable(SchemaChange): void)|null  $onChange  Invoked after each change is applied successfully.
      * @param  bool  $transactional  Whether the apply loop is atomic.
-     * @return list<SchemaChange>
+     * @return list<SchemaChange>  The differ-produced changes actually applied — sync() never emits steps.
      * @throws \LogicException
      * @throws \Throwable
      */
@@ -156,11 +163,13 @@ final class SchemaSynchronizer
     /**
      * Apply the changes in order, gated by the confirm callback.
      *
-     * @param  list<SchemaChange>  $changes
-     * @param  (callable(SchemaChange): bool)|null  $confirm
-     * @param  (callable(SchemaChange): void)|null  $onChange
+     * @template TItem of DataStep|SchemaChange
+     *
+     * @param  list<TItem>  $changes
+     * @param  (callable(TItem): bool)|null  $confirm
+     * @param  (callable(TItem): void)|null  $onChange
      * @param  bool  $transactional
-     * @return list<SchemaChange>
+     * @return list<TItem>
      * @throws \LogicException
      * @throws \Throwable
      */
@@ -170,6 +179,7 @@ final class SchemaSynchronizer
         callable|null $onChange,
         bool $transactional,
     ): array {
+        /** @var list<TItem> $applied */
         $applied = [];
 
         $apply = function () use ($changes, $confirm, $onChange, &$applied): void {
@@ -178,7 +188,7 @@ final class SchemaSynchronizer
                     if ($confirm === null) {
                         throw new \LogicException(sprintf(
                             'Refusing to apply the destructive change [%s] without confirmation: %s',
-                            $change->operation->value,
+                            $change instanceof DataStep ? SchemaOperation::DataStep->value : $change->operation->value,
                             $change->description,
                         ));
                     }
@@ -194,6 +204,7 @@ final class SchemaSynchronizer
                     $onChange($change);
                 }
 
+                /** @var TItem $change The loop item's declared type is preserved into the applied list. */
                 $applied[] = $change;
             }
         };
@@ -204,9 +215,20 @@ final class SchemaSynchronizer
         // its own. Checking once up front keeps the loop's per-change
         // atomicity boundary uniform for the whole plan. The deferred leg
         // of sync() re-derives the verdict here — the plan-aware predicate
-        // answers rename-led batches on its own.
+        // answers rename-led batches on its own. Callable steps never
+        // defer — they carry no analyzable operation, so the predicate
+        // only ever sees SchemaChange items.
+        $schemaChanges = array_values(array_filter(
+            $changes,
+            fn (DataStep|SchemaChange $step): bool => $step instanceof SchemaChange,
+        ));
+
         $degrade = $transactional
-            && array_any($changes, fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change, $changes));
+            && $schemaChanges !== []
+            && array_any(
+                $schemaChanges,
+                fn (SchemaChange $change): bool => $this->connection->changeRequiresStandaloneTransaction($change, $schemaChanges),
+            );
 
         if ($transactional && !$degrade) {
             // The connection's transaction() helper: commit on success,

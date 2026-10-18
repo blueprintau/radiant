@@ -6,6 +6,8 @@ namespace BlueprintAU\Radiant\Tests\Unit\Schema;
 
 use BlueprintAU\Radiant\Database\Schema\Blueprint;
 use BlueprintAU\Radiant\Database\Schema\Enums\ColumnType;
+use BlueprintAU\Radiant\Database\Schema\DataStep;
+use BlueprintAU\Radiant\Database\Schema\SchemaChange;
 use BlueprintAU\Radiant\Database\Schema\SchemaSynchronizer;
 use BlueprintAU\Radiant\Tests\Support\DatabaseTestCase;
 use BlueprintAU\Radiant\Tests\Support\Expectation;
@@ -80,7 +82,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
 
         $modify = array_values(array_filter(
             $applied,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
         ));
         self::assertCount(1, $modify, 'the plan must carry the parent ModifyColumn');
 
@@ -137,7 +139,8 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
 
         $modify = array_values(array_filter(
             $applied,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            fn (SchemaChange|DataStep $change) => $change instanceof SchemaChange
+                && $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
         ));
         self::assertCount(1, $modify);
 
@@ -189,7 +192,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
 
         $modify = array_values(array_filter(
             $applied,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
         ));
         self::assertCount(1, $modify);
 
@@ -295,7 +298,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
 
         $add = array_values(array_filter(
             $applied,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
         ));
         self::assertCount(1, $add);
 
@@ -371,7 +374,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
         $plan = $this->synchronizer->plan([$childDesired]);
         $childChange = array_values(array_filter(
             $plan,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
         ))[0];
         self::assertTrue(
             $this->connection->changeRequiresStandaloneTransaction($childChange),
@@ -385,7 +388,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
             ->column(ColumnType::String, 'note', length: 30, nullable: true);
         $nullableChange = array_values(array_filter(
             $this->synchronizer->plan([$childNullable]),
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
         ))[0];
         self::assertFalse(
             $this->connection->changeRequiresStandaloneTransaction($nullableChange),
@@ -425,7 +428,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::RenameTable,
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::AddColumn,
             ],
-            array_map(fn ($change) => $change->operation, $applied),
+            array_map(fn (SchemaChange|DataStep $change) => $change instanceof SchemaChange ? $change->operation : null, $applied),
             'the rename leads, the alter lands on the renamed table',
         );
 
@@ -464,7 +467,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::RenameTable,
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
             ],
-            array_map(fn ($change) => $change->operation, $plan),
+            array_map(fn (SchemaChange|DataStep $change) => $change->operation, $plan),
         );
 
         $applied = $this->synchronizer->apply(
@@ -529,7 +532,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
 
         $modify = array_values(array_filter(
             $plan,
-            fn ($change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
+            fn (SchemaChange|DataStep $change) => $change->operation === \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::ModifyColumn,
         ));
         self::assertNotSame([], $modify, 'the plan carries the FK-involved modify');
         self::assertTrue(
@@ -580,7 +583,7 @@ final class SynchronizerRebuildTransactionTest extends DatabaseTestCase
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::CreateTable,
                 \BlueprintAU\Radiant\Database\Schema\Enums\SchemaOperation::CreateTable,
             ],
-            array_map(fn ($change) => $change->operation, $plan),
+            array_map(fn (SchemaChange|DataStep $change) => $change->operation, $plan),
             'creates only — the declared shape is folded into each create',
         );
 
