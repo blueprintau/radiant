@@ -1054,6 +1054,293 @@ final class MigrationSyncTest extends DatabaseTestCase
     }
 
     /**
+     * Index add: a declared index absent live (a flag-backed `index: true`
+     * on an existing column) is ONE additive AddIndex change with the
+     * derived name; applying converges.
+     */
+    public function testFlagBackedIndexAddDiffing(): void
+    {
+        // Live: no index on country.
+        $this->connection->create(
+            (new Blueprint('geo_users'))
+                ->id()
+                ->column(ColumnType::String, 'country', length: 2),
+        );
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+
+        $desired = (new Blueprint('geo_users'))
+            ->id()
+            ->column(ColumnType::String, 'country', length: 2, index: true);
+
+        $changes = $differ->diff([$desired]);
+
+        $addChanges = array_values(array_filter(
+            $changes,
+            fn ($change) => $change->operation === SchemaOperation::AddIndex,
+        ));
+        self::assertCount(1, $addChanges);
+        self::assertFalse($addChanges[0]->destructive);
+        self::assertSame(['geo_users_country_index'], array_column($addChanges[0]->blueprint->getIndexes(), 'name'));
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        self::assertSame([], $differ->diff([$desired]));
+
+        $liveNames = array_column($this->connection->schemaInspector->table('geo_users')->indexes, 'name');
+        self::assertContains('geo_users_country_index', $liveNames);
+    }
+
+    /**
+     * An out-of-band live index the blueprint does NOT declare is
+     * preserved — no index change touches it (no drop is ever emitted for
+     * an undeclared live index).
+     */
+    public function testUndeclaredLiveIndexIsPreserved(): void
+    {
+        $this->connection->create(
+            (new Blueprint('dba_table'))
+                ->id()
+                ->column(ColumnType::String, 'slug', length: 120)
+                ->index('dba_table_slug_index', ['slug']),
+        );
+
+        // Desired state does NOT declare the index.
+        $desired = (new Blueprint('dba_table'))
+            ->id()
+            ->column(ColumnType::String, 'slug', length: 120);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        foreach ($changes as $change) {
+            self::assertNotContains($change->operation, [SchemaOperation::AlterIndexes, SchemaOperation::AddIndex]);
+            self::assertStringNotContainsString('dba_table_slug_index', $change->description);
+        }
+
+        // The out-of-band index is still live after a full apply.
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+        self::assertContains(
+            'dba_table_slug_index',
+            array_column($this->connection->schemaInspector->table('dba_table')->indexes, 'name'),
+        );
+    }
+
+    /**
+     * A plan that adds a column AND an index over it on an existing table
+     * orders AddColumn BEFORE AddIndex (the index references the
+     * just-added column); both apply, and the plan converges.
+     */
+    public function testAddColumnThenAddIndexOrdersWithinOnePlan(): void
+    {
+        $this->connection->create(
+            (new Blueprint('tagged'))
+                ->id()
+                ->column(ColumnType::String, 'title', length: 100),
+        );
+
+        $desired = (new Blueprint('tagged'))
+            ->id()
+            ->column(ColumnType::String, 'title', length: 100)
+            // Nullable — a NOT NULL add without default/backfill routes
+            // through the SQLite rebuild, muddying the ordering assertion.
+            ->column(ColumnType::String, 'tag', length: 32, nullable: true, index: true);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::AddColumn, SchemaOperation::AddIndex], $operations);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        self::assertSame([], $differ->diff([$desired]));
+    }
+
+    /**
+     * Index option drift: a live plain index under a name the blueprint
+     * declares `unique: true` is ONE AlterIndexes rebuild whose detail
+     * names the uniqueness flip; applying converges and the live index is
+     * unique.
+     */
+    public function testIndexUniqueFlagDriftRebuilds(): void
+    {
+        $this->connection->create(
+            (new Blueprint('uniq_drift'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->index('uniq_drift_email_index', ['email']),
+        );
+
+        $desired = (new Blueprint('uniq_drift'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->index('uniq_drift_email_index', ['email'], unique: true);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::AlterIndexes, $changes[0]->operation);
+        self::assertStringContainsString('unique: off -> on', $changes[0]->description);
+
+        $this->connection->apply($changes[0]);
+
+        self::assertSame([], $differ->diff([$desired]));
+
+        $liveIndex = array_values(array_filter(
+            $this->connection->schemaInspector->table('uniq_drift')->indexes,
+            fn (array $index) => $index['name'] === 'uniq_drift_email_index',
+        ))[0];
+        self::assertTrue($liveIndex['unique']);
+    }
+
+    /**
+     * A declared rename composes with a declared index: the plan carries
+     * the RenameTable AND an AddIndex targeting the NEW name; applying
+     * leaves the index live under the renamed table.
+     */
+    public function testDeclaredRenameComposesWithAddIndex(): void
+    {
+        $this->connection->create(
+            (new Blueprint('old_medias'))
+                ->id()
+                ->column(ColumnType::String, 'attachable_type', length: 64)
+                ->column(ColumnType::BigInt, 'attachable_id'),
+        );
+
+        $desired = (new Blueprint('medias'))
+            ->renamedFrom('old_medias')
+            ->id()
+            ->column(ColumnType::String, 'attachable_type', length: 64)
+            ->column(ColumnType::BigInt, 'attachable_id')
+            ->index('medias_attachable_type_attachable_id_index', ['attachable_type', 'attachable_id']);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertSame([SchemaOperation::RenameTable, SchemaOperation::AddIndex], $operations);
+        self::assertSame('medias', $changes[1]->table);
+
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        // Convergence re-diff WITHOUT the renamedFrom declaration — the
+        // rename has applied, and re-declaring it would now fail fast by
+        // design (see the rename fail-fast tests).
+        $converged = (new Blueprint('medias'))
+            ->id()
+            ->column(ColumnType::String, 'attachable_type', length: 64)
+            ->column(ColumnType::BigInt, 'attachable_id')
+            ->index('medias_attachable_type_attachable_id_index', ['attachable_type', 'attachable_id']);
+        self::assertSame([], $differ->diff([$converged]));
+    }
+
+    /**
+     * The AddIndex apply is idempotent over the same-plan rebuild
+     * interplay: a ModifyColumn (which routes through SQLite's table
+     * rebuild and materializes EVERY declared index from the desired
+     * blueprint) followed by AddIndex in one plan — the rebuild adds the
+     * index first, the AddIndex apply skips it, and the plan converges.
+     */
+    public function testAddIndexSkipsIndexAlreadyMaterializedBySamePlanRebuild(): void
+    {
+        // Live: title TEXT — the desired widens the length AND declares an
+        // index over a NEW column.
+        $this->connection->create(
+            (new Blueprint('rebuild_interplay'))
+                ->id()
+                ->column(ColumnType::String, 'title', length: 10),
+        );
+
+        $desired = (new Blueprint('rebuild_interplay'))
+            ->id()
+            ->column(ColumnType::String, 'title', length: 100)
+            // Nullable — the NOT NULL add would route through the rebuild
+            // regardless; nullable keeps the add in place so the interplay
+            // under test (rebuild materializes the index first) stays the
+            // ModifyColumn route.
+            ->column(ColumnType::String, 'code', length: 8, nullable: true)
+            ->index('rebuild_interplay_code_index', ['code']);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertContains(SchemaOperation::ModifyColumn, $operations);
+        self::assertContains(SchemaOperation::AddIndex, $operations);
+
+        // The full apply must not throw "index already exists" — the
+        // rebuild materializes the index, the AddIndex apply skips it.
+        foreach ($changes as $change) {
+            $this->connection->apply($change);
+        }
+
+        self::assertSame([], $differ->diff([$desired]));
+        self::assertContains(
+            'rebuild_interplay_code_index',
+            array_column($this->connection->schemaInspector->table('rebuild_interplay')->indexes, 'name'),
+        );
+    }
+
+    /**
+     * FK deferrability is part of the FK shape: a declared
+     * `deferrable: true` FK whose live counterpart is NOT deferrable
+     * diffs as DropForeignKey + AddForeignKey (the existing shape-first
+     * drop+add cycle — no new operation).
+     *
+     * DIFF-ONLY: SQLite cannot compile DEFERRABLE, so the apply side is
+     * exercised by the Postgres remote suite; here we pin the detection.
+     */
+    public function testForeignKeyDeferrableDriftRebuildsConstraint(): void
+    {
+        $this->createSimpleTable('parents');
+        $this->createSimpleTable('children');
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+
+        // Live FK: NOT deferrable.
+        $plain = (new Blueprint('children'))
+            ->id()
+            ->column(ColumnType::BigInt, 'parent_id', foreign: 'parents.id')
+            ->backfill('parent_id', 0);
+        $parents = (new Blueprint('parents'))
+            ->id()
+            ->column(ColumnType::String, 'name', length: 50);
+
+        foreach ($differ->diff([$parents, $plain]) as $change) {
+            $this->connection->apply($change);
+        }
+
+        // Desired: the SAME shape but deferrable — a shape mismatch.
+        $desired = (new Blueprint('children'))
+            ->id()
+            ->column(ColumnType::BigInt, 'parent_id')
+            ->foreignKey(['parent_id'], 'parents', ['id'], deferrable: true);
+
+        $changes = $differ->diff([$parents, $desired]);
+        $operations = array_map(fn ($change) => $change->operation, $changes);
+        self::assertContains(SchemaOperation::DropForeignKey, $operations);
+        self::assertContains(SchemaOperation::AddForeignKey, $operations);
+
+        // Sanity: the NON-deferrable re-declaration is IN sync (the
+        // comparison is symmetric — no false positive).
+        $same = (new Blueprint('children'))
+            ->id()
+            ->column(ColumnType::BigInt, 'parent_id')
+            ->foreignKey(['parent_id'], 'parents', ['id']);
+        self::assertSame([], $differ->diff([$parents, $same]));
+    }
+
+    /**
      * CHECK drift: a declared CHECK missing live is AddCheck; a
      * same-name different-expression mismatch is advisory-only (no
      * executable drop+add is emitted for it).

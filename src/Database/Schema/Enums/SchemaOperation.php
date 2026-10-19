@@ -26,6 +26,9 @@ enum SchemaOperation: string
     /** Rebuild the table's indexes. */
     case AlterIndexes = 'alter_indexes';
 
+    /** Add one or more missing indexes to an existing table. */
+    case AddIndex = 'add_index';
+
     /** Rename a table. */
     case RenameTable = 'rename_table';
 

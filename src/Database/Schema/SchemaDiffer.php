@@ -107,13 +107,11 @@ final class SchemaDiffer
                 // (renames precede alters in the final ordering).
                 foreach ([
                     ...$this->diffTable($table, $blueprint, $renamedFrom),
-                    $this->diffIndexes($table, $blueprint, $renamedFrom),
+                    ...$this->diffIndexes($table, $blueprint, $renamedFrom),
                     ...$this->diffForeignKeys($table, $blueprint, $renamedFrom),
                     ...$this->diffChecks($table, $blueprint, $renamedFrom),
                 ] as $change) {
-                    if ($change !== null) {
-                        $alters[] = $change;
-                    }
+                    $alters[] = $change;
                 }
                 continue;
             }
@@ -135,13 +133,11 @@ final class SchemaDiffer
             // reference a just-added column).
             foreach ([
                 ...$this->diffTable($table, $blueprint),
-                $this->diffIndexes($table, $blueprint),
+                ...$this->diffIndexes($table, $blueprint),
                 ...$this->diffForeignKeys($table, $blueprint),
                 ...$this->diffChecks($table, $blueprint),
             ] as $change) {
-                if ($change !== null) {
-                    $alters[] = $change;
-                }
+                $alters[] = $change;
             }
         }
 
@@ -1181,7 +1177,16 @@ final class SchemaDiffer
         $desiredDelete = $desiredFk['onDelete']?->value;
         $desiredUpdate = $desiredFk['onUpdate']?->value;
 
-        return $desiredDelete === $liveFk['onDelete'] && $desiredUpdate === $liveFk['onUpdate'];
+        if ($desiredDelete !== $liveFk['onDelete'] || $desiredUpdate !== $liveFk['onUpdate']) {
+            return false;
+        }
+
+        // Deferrability is part of the shape (Postgres reads it live;
+        // MySQL/SQLite always report false on BOTH sides, so the
+        // comparison never false-positives there). `initiallyDeferred` is
+        // deliberately NOT compared — no inspector reports it live, so
+        // every converged deferrable FK would re-plan forever.
+        return $desiredFk['deferrable'] === $liveFk['deferrable'];
     }
 
     /**
@@ -1354,15 +1359,15 @@ final class SchemaDiffer
     }
 
     /**
-     * Diff one table's declared indexes against the live ones — option
-     * drift only.
+     * Diff one table's declared indexes against the live ones — missing
+     * indexes add, option drift rebuilds.
      *
      * @param  string  $table
      * @param  Blueprint  $blueprint
      * @param  string|null  $liveTable  The live table to read, when it differs from the target (a declared rename).
-     * @return SchemaChange|null
+     * @return list<SchemaChange>
      */
-    private function diffIndexes(string $table, Blueprint $blueprint, string|null $liveTable = null): ?SchemaChange
+    private function diffIndexes(string $table, Blueprint $blueprint, string|null $liveTable = null): array
     {
         $live = $this->inspector->table($liveTable ?? $table);
 
@@ -1376,6 +1381,7 @@ final class SchemaDiffer
             }
         }
 
+        $missing = new Blueprint($table);
         $rebuild = new Blueprint($table);
         $detailed = [];
 
@@ -1383,14 +1389,21 @@ final class SchemaDiffer
             $name = $index['name'];
             $liveIndex = $liveIndexes[$name] ?? null;
 
+            // A declared index with NO live counterpart is not a
+            // deployment gap — it is schema divergence the sync exists to
+            // reconcile, exactly like a declared-but-missing column. The
+            // reverse (a live index the blueprint does not declare) is
+            // preserved: an out-of-band/DBA index is never dropped.
             if ($liveIndex === null) {
-                continue; // absent live = deployment gap, not option drift.
+                $missing = $missing->index($name, $index['columns'], unique: $index['unique'], where: $index['where'], nullsNotDistinct: $index['nullsNotDistinct']);
+                continue;
             }
 
             $whereMatches = ($index['where'] ?? null) === ($liveIndex['where'] ?? null);
             $nullsMatch = $index['nullsNotDistinct'] === $liveIndex['nullsNotDistinct'];
+            $uniqueMatches = $index['unique'] === $liveIndex['unique'];
 
-            if ($whereMatches && $nullsMatch) {
+            if ($whereMatches && $nullsMatch && $uniqueMatches) {
                 continue;
             }
 
@@ -1399,6 +1412,14 @@ final class SchemaDiffer
             // WHICH option drifted and from what to what — rendered while
             // the live/desired pair is in hand.
             $options = [];
+
+            if (!$uniqueMatches) {
+                $options[] = sprintf(
+                    'unique: %s -> %s',
+                    $liveIndex['unique'] ? 'on' : 'off',
+                    $index['unique'] ? 'on' : 'off',
+                );
+            }
 
             if (!$whereMatches) {
                 $options[] = sprintf(
@@ -1419,16 +1440,35 @@ final class SchemaDiffer
             $detailed[] = sprintf('%s (%s)', $name, implode('; ', $options));
         }
 
-        if ($detailed === []) {
-            return null;
+        $changes = [];
+
+        // Missing indexes first — an additive create (no drop involved),
+        // then any option-drift rebuild on the indexes that DO exist.
+        if ($missing->getIndexes() !== []) {
+            $names = implode(', ', array_map(
+                fn (array $index) => "[{$index['name']}]",
+                $missing->getIndexes(),
+            ));
+
+            $changes[] = new SchemaChange(
+                $table,
+                SchemaOperation::AddIndex,
+                $missing,
+                false,
+                sprintf('add index(es) on [%s]: %s', $table, $names),
+            );
         }
 
-        $description = sprintf(
-            'alter indexes on [%s]: rebuild [%s] — index options drifted (partial predicate / NULLS NOT DISTINCT)',
-            $table,
-            implode(', ', $detailed),
-        );
+        if ($detailed !== []) {
+            $description = sprintf(
+                'alter indexes on [%s]: rebuild [%s] — index options drifted (uniqueness / partial predicate / NULLS NOT DISTINCT)',
+                $table,
+                implode(', ', $detailed),
+            );
 
-        return new SchemaChange($table, SchemaOperation::AlterIndexes, $rebuild, false, $description);
+            $changes[] = new SchemaChange($table, SchemaOperation::AlterIndexes, $rebuild, false, $description);
+        }
+
+        return $changes;
     }
 }

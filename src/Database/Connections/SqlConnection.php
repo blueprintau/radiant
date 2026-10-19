@@ -634,6 +634,7 @@ abstract class SqlConnection implements ConnectionInterface
             SchemaOperation::DropColumn => $this->applyDropColumn($change),
             SchemaOperation::DropTable => $this->drop($change->table),
             SchemaOperation::AlterIndexes => $this->rebuildIndexes($change->blueprint),
+            SchemaOperation::AddIndex => $this->addIndexes($change->blueprint),
             SchemaOperation::RenameTable => $this->renameTable($change->blueprint->getRenamedFrom() ?? throw new \LogicException(
                 "A RenameTable change for [{$change->table}] carries no renamedFrom declaration."
             ), $change->table),
@@ -922,6 +923,45 @@ abstract class SqlConnection implements ConnectionInterface
 
         foreach ($this->schemaGrammar->compileIndexes($blueprint) as $indexSql) {
             $this->statement($indexSql);
+        }
+    }
+
+    /**
+     * Add the blueprint's missing indexes to an existing table — every
+     * index whose name is already live is skipped.
+     *
+     * The skip keeps the apply idempotent and guards the same-plan
+     * rebuild interplay: an earlier change on the table (e.g. a SQLite
+     * ModifyColumn routing through the table rebuild) may already have
+     * materialized the index from the full desired blueprint before this
+     * change applies.
+     *
+     * @param  Blueprint  $blueprint
+     */
+    final public function addIndexes(Blueprint $blueprint): void
+    {
+        $liveNames = [];
+
+        foreach ($this->schemaInspector->table($blueprint->getTable())->indexes as $index) {
+            if ($index['name'] !== null) {
+                $liveNames[$index['name']] = true;
+            }
+        }
+
+        foreach ($blueprint->getIndexes() as $index) {
+            if (isset($liveNames[$index['name']])) {
+                continue; // A rebuild realized the desired shape — nothing to add.
+            }
+
+            $this->statement($this->schemaGrammar->compileIndexes(
+                (new Blueprint($blueprint->getTable()))->index(
+                    $index['name'],
+                    $index['columns'],
+                    unique: $index['unique'],
+                    where: $index['where'],
+                    nullsNotDistinct: $index['nullsNotDistinct'],
+                ),
+            )[0]);
         }
     }
 

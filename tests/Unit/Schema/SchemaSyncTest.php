@@ -651,11 +651,12 @@ final class SchemaSyncTest extends DatabaseTestCase
     }
 
     /**
-     * A declared index absent from the live table is NOT option drift —
-     * the differ reports no AlterIndexes for it (creating declared indexes
-     * on a live table is a deployment concern, not a v2 differ job).
+     * A declared index absent from the live table is schema divergence —
+     * the differ emits ONE additive, non-destructive AddIndex change
+     * carrying it; applying converges (a re-diff is empty) and the live
+     * inspector reports the index under its declared name.
      */
-    public function testDiffIgnoresDeclaredIndexesAbsentLive(): void
+    public function testDiffAddsDeclaredIndexAbsentLive(): void
     {
         $this->connection->create(
             (new Blueprint('sync_gap'))
@@ -668,8 +669,70 @@ final class SchemaSyncTest extends DatabaseTestCase
             ->column(ColumnType::String, 'email', length: 255)
             ->index('sync_gap_email_unique', ['email'], unique: true);
 
-        $changes = (new SchemaDiffer($this->connection->schemaInspector))->diff([$desired]);
-        self::assertSame([], $changes);
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $changes = $differ->diff([$desired]);
+
+        self::assertCount(1, $changes);
+        self::assertSame(SchemaOperation::AddIndex, $changes[0]->operation);
+        self::assertFalse($changes[0]->destructive);
+        self::assertStringContainsString('sync_gap_email_unique', $changes[0]->description);
+
+        $this->connection->apply($changes[0]);
+
+        // Converged: a re-diff is empty, and the index is live.
+        self::assertSame([], $differ->diff([$desired]));
+
+        $live = $this->connection->schemaInspector->table('sync_gap');
+        $index = array_values(array_filter(
+            $live->indexes,
+            fn (array $candidate) => $candidate['name'] === 'sync_gap_email_unique',
+        ))[0] ?? null;
+
+        self::assertNotNull($index);
+        self::assertTrue($index['unique']);
+        self::assertSame(['email'], $index['columns']);
+    }
+
+    /**
+     * Multiple declared indexes absent from the live table ride ONE
+     * AddIndex change — the batching mirrors AddColumn, and applying
+     * creates every missing index.
+     */
+    public function testDiffBatchesMissingIndexesIntoOneAddIndexChange(): void
+    {
+        $this->connection->create(
+            (new Blueprint('sync_multi_gap'))
+                ->id()
+                ->column(ColumnType::String, 'email', length: 255)
+                ->column(ColumnType::String, 'country', length: 2),
+        );
+
+        $desired = (new Blueprint('sync_multi_gap'))
+            ->id()
+            ->column(ColumnType::String, 'email', length: 255)
+            ->column(ColumnType::String, 'country', length: 2)
+            ->index('sync_multi_gap_email_unique', ['email'], unique: true)
+            ->index('sync_multi_gap_country_index', ['country']);
+
+        $differ = new SchemaDiffer($this->connection->schemaInspector);
+        $addChanges = array_values(array_filter(
+            $differ->diff([$desired]),
+            fn (\BlueprintAU\Radiant\Database\Schema\SchemaChange $change) => $change->operation === SchemaOperation::AddIndex,
+        ));
+
+        self::assertCount(1, $addChanges);
+        self::assertStringContainsString('sync_multi_gap_email_unique', $addChanges[0]->description);
+        self::assertStringContainsString('sync_multi_gap_country_index', $addChanges[0]->description);
+
+        foreach ($differ->diff([$desired]) as $change) {
+            $this->connection->apply($change);
+        }
+
+        self::assertSame([], $differ->diff([$desired]));
+
+        $liveNames = array_column($this->connection->schemaInspector->table('sync_multi_gap')->indexes, 'name');
+        self::assertContains('sync_multi_gap_email_unique', $liveNames);
+        self::assertContains('sync_multi_gap_country_index', $liveNames);
     }
 
     // ---- Live SQLite round-trips for the new options ----

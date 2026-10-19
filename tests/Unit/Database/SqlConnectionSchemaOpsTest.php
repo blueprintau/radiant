@@ -598,6 +598,105 @@ final class SqlConnectionSchemaOpsTest extends TestCase
         ));
         self::assertCount(1, $ibfk1Statements, 'medias_ibfk_1 must be dropped exactly once');
     }
+
+    /**
+     * apply(AddIndex) on the MySQL shim emits ONE `CREATE INDEX` per
+     * missing index and ZERO `DROP INDEX` statements — an additive change
+     * never rides the rebuild's drop-first sequence. Non-destructive by
+     * construction (the confirm gate would not fire).
+     */
+    public function testApplyAddIndexEmitsCreateWithoutDrop(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        // Live table WITHOUT the index.
+        $pdo->catalogTable('medias', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['attachable_type', 'varchar(255)', 'YES', null, ''],
+            ['attachable_id', 'bigint', 'YES', null, ''],
+        ]);
+
+        $mysql->statement('CREATE TABLE medias (id INTEGER PRIMARY KEY, attachable_type TEXT, attachable_id INTEGER)');
+
+        $blueprint = (new Blueprint('medias'))
+            ->id()
+            ->string('attachable_type', 255)
+            ->column(ColumnType::BigInt, 'attachable_id')
+            ->index('medias_attachable_type_attachable_id_index', ['attachable_type', 'attachable_id']);
+
+        $change = new SchemaChange(
+            'medias',
+            SchemaOperation::AddIndex,
+            $blueprint,
+            false,
+            'add index(es) on [medias]: [medias_attachable_type_attachable_id_index]',
+        );
+
+        self::assertFalse($change->destructive, 'an AddIndex change must be non-destructive');
+
+        $mysql->apply($change);
+
+        $creates = array_values(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'CREATE INDEX'),
+        ));
+        $drops = array_values(array_filter(
+            $log->statements,
+            fn (string $sql) => str_contains($sql, 'DROP INDEX'),
+        ));
+
+        self::assertCount(1, $creates, 'exactly one CREATE INDEX must compile');
+        self::assertStringContainsString('medias_attachable_type_attachable_id_index', $creates[0]);
+        self::assertSame([], $drops, 'an AddIndex apply must never DROP INDEX');
+    }
+
+    /**
+     * apply(AddIndex) skips indexes already live — the idempotence guard
+     * for the same-plan rebuild interplay (an earlier change materialized
+     * the index from the full desired blueprint): no statement at all.
+     */
+    public function testApplyAddIndexSkipsAlreadyLiveIndex(): void
+    {
+        $log = new StatementLog();
+
+        $pdo = new LoggingPdo($log);
+        $mysql = new MySqlConnection($pdo);
+
+        $pdo->catalogTable('users', [
+            ['id', 'int', 'NO', null, 'PRI'],
+            ['email', 'varchar(255)', 'YES', null, ''],
+        ]);
+        $pdo->catalogIndex('users_email_index', 'users', 'email');
+
+        $mysql->statement('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+        $mysql->statement('CREATE INDEX users_email_index ON users (email)');
+
+        $blueprint = (new Blueprint('users'))
+            ->id()
+            ->string('email', 255)
+            ->index('users_email_index', ['email']);
+
+        // The setup statements above are in the log too — clear it so the
+        // assertion observes ONLY what the apply emits.
+        $log->statements = [];
+
+        $mysql->apply(new SchemaChange(
+            'users',
+            SchemaOperation::AddIndex,
+            $blueprint,
+            false,
+            'add index(es) on [users]: [users_email_index]',
+        ));
+
+        self::assertSame(
+            [],
+            array_filter($log->statements, fn (string $sql) => str_contains($sql, 'CREATE INDEX')),
+            'an index already live must not be re-created',
+        );
+    }
 }
 
 /**
@@ -715,6 +814,25 @@ final class LoggingPdo extends \Pdo\Sqlite
             'INSERT INTO information_schema.referential_constraints VALUES'
             . " ('test', '%s', 'NO ACTION', 'NO ACTION')",
             $name,
+        ));
+    }
+
+    /**
+     * Seed a catalog index — the row MySqlSchemaInspector's statistics
+     * query reads back as a live index.
+     *
+     * @param  string  $name
+     * @param  string  $table
+     * @param  string  $column
+     */
+    public function catalogIndex(string $name, string $table, string $column): void
+    {
+        $this->exec(sprintf(
+            'INSERT INTO information_schema.statistics VALUES'
+            . " ('test', '%s', '%s', '%s', 1, 1)",
+            $table,
+            $name,
+            $column,
         ));
     }
 

@@ -162,16 +162,16 @@ $conn->withLock(function () use ($differ, $desired, $conn): void {
 ```
 
 Each returned `SchemaChange` carries the table, the operation
-(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`/`AlterIndexes`/
-`RenameTable`/`RenameColumn`/`ModifyColumn`/`AddForeignKey`/
+(`CreateTable`/`AddColumn`/`DropColumn`/`DropTable`/`AddIndex`/
+`AlterIndexes`/`RenameTable`/`RenameColumn`/`ModifyColumn`/`AddForeignKey`/
 `DropForeignKey`/`AddCheck`/`DropCheck`), a `destructive` flag (anything
 that can lose data), and a human-readable `description` for dry-run
 output. Modify and index-drift descriptions carry the drift **detail** —
 per column, the facets that changed with old → new values (type,
 nullability, default, enum values), e.g.
 `modify column(s) on [users]: [age (int -> bigint), status (nullable -> not null), role (enum values changed: ['admin', 'member'])]`;
-per index, the option that changed (partial predicate / `NULLS NOT
-DISTINCT`), e.g. `rebuild [idx (where: none -> 'email IS NOT NULL')]`.
+per index, the option that changed (uniqueness / partial predicate /
+`NULLS NOT DISTINCT`), e.g. `rebuild [idx (where: none -> 'email IS NOT NULL')]`.
 Changes are ordered **creates → renames → alters → drops**;
 creates are **dependency-ordered** (referenced tables first — `posts`
 with an FK to `users` is created after `users` even when declared
@@ -646,12 +646,26 @@ convergence check.
 
 ### Remaining limits
 
-A declared index absent from the live table is a deployment gap the
-differ does not create. A CHECK whose expression changed but kept its
-name is reported as a suggestion, not an executable change. The SQLite
-rebuild loses triggers and views on the table (Radiant does not manage
-them) and re-seeds `AUTOINCREMENT` from the max rowid. Review the plan
-before applying.
+Removing an inline `unique: true` column flag is not detected as drift
+(the constraint rides the column shape, not the index list — drop it by
+hand if intended). Primary-key changes are not diffed (a PK change is a
+table rebuild with no in-place form). A live index the blueprint does
+NOT declare is preserved — an out-of-band/DBA index is never dropped. A
+CHECK whose expression changed but kept its name is reported as a
+suggestion, not an executable change. The SQLite rebuild loses triggers
+and views on the table (Radiant does not manage them) and re-seeds
+`AUTOINCREMENT` from the max rowid. Review the plan before applying.
+
+### Declared-but-missing indexes: AddIndex
+
+An index declared on a blueprint whose name has no live counterpart is
+ONE additive, non-destructive `AddIndex` change (all missing indexes on
+a table batch into one change, one `CREATE INDEX` per index). Applying
+is idempotent: an index already live under the declared name is skipped
+— the same-plan guard for SQLite, where an earlier table rebuild
+materializes every declared index before the `AddIndex` change applies.
+The reverse direction is preservation, not drift: a live index the
+blueprint does not declare is untouched (the out-of-band index above).
 
 ## Locking
 
