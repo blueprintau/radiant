@@ -771,9 +771,11 @@ final class ModelQueryBuilder extends QueryBuilder
      * preserves everything before it (contrast with {@see select()},
      * which replaces). A later select() keeps the accumulated columns.
      *
+     * @template TRelated of Model
+     *
      * @param  string  $alias  The result column name — a bare identifier, radiant_* reserved.
-     * @param  class-string<\BlueprintAU\Radiant\Model>  $related  The related model the subquery reads.
-     * @param  callable(ModelQueryBuilder<\BlueprintAU\Radiant\Model>, string): (ModelQueryBuilder<\BlueprintAU\Radiant\Model>|void)  $build  Receives the related model's builder and this query's FROM identity; must return the builder (falling off the end throws).
+     * @param  class-string<TRelated>  $related  The related model the subquery reads.
+     * @param  callable(ModelQueryBuilder<TRelated>, string): (ModelQueryBuilder<TRelated>|void)  $build  Receives the related model's builder and this query's FROM identity; must return the builder (falling off the end throws).
      * @return static
      * @throws \InvalidArgumentException
      */
