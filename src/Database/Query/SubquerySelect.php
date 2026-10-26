@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace BlueprintAU\Radiant\Database\Query;
 
 use BlueprintAU\Radiant\Database\Query\Enums\BindingCategory;
+use BlueprintAU\Radiant\Model;
 
 /**
  * A scalar-subquery select column: `(SELECT …) AS alias`.
@@ -33,6 +34,18 @@ final class SubquerySelect
         if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $alias) !== 1) {
             throw new \InvalidArgumentException(
                 "A subquery select alias must be a bare identifier; got [{$alias}]."
+            );
+        }
+
+        // The reserved prefix names the ORM's internal alias namespace
+        // (radiant_pivot_*, radiant_scalar, ...). A user alias under it
+        // would either be lifted as pivot data or dropped outright at
+        // hydration — reject it up front instead of silently mis-storing.
+        if (str_starts_with($alias, Model::RESERVED_PREFIX)) {
+            throw new \InvalidArgumentException(
+                'A subquery select alias [' . $alias . '] starts with the reserved prefix ['
+                    . Model::RESERVED_PREFIX . '] — the ORM uses that namespace for its internal '
+                    . 'select aliases. Rename the alias.'
             );
         }
 

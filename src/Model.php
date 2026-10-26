@@ -108,6 +108,14 @@ abstract class Model
     protected array $pivotValues = [];
 
     /**
+     * Undeclared select columns retained at hydration, keyed by their row
+     * alias — read them through {@see attribute()}.
+     *
+     * @var array<string, mixed>
+     */
+    protected array $extraColumnValues = [];
+
+    /**
      * Fail fast when a column name starts with the ORM's reserved prefix.
      *
      * @param  string  $column
@@ -519,10 +527,10 @@ abstract class Model
     /**
      * Start a model query with an explicit column selection.
      *
-     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate  ...$columns
+     * @param  string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate|\BlueprintAU\Radiant\Database\Query\SubquerySelect  ...$columns
      * @return ModelQueryBuilder<static>
      */
-    final public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate ...$columns): ModelQueryBuilder
+    final public static function select(string|\BlueprintAU\Radiant\Database\Query\Expression|\BlueprintAU\Radiant\Database\Query\Aggregate|\BlueprintAU\Radiant\Database\Query\SubquerySelect ...$columns): ModelQueryBuilder
     {
         return static::newQuery()->select(...$columns);
     }
@@ -1650,8 +1658,11 @@ abstract class Model
     {
         $instance = static::newInstance();
 
+        $declared = [];
+
         foreach (static::getProperties() as $mapping) {
             $columnName = $mapping->columnName;
+            $declared[$columnName] = true;
 
             if (!property_exists($row, $columnName)) {
                 continue;
@@ -1679,10 +1690,30 @@ abstract class Model
         // Pivot columns from a BelongsToMany eager select ride the row as
         // `radiant_pivot_{column}` aliases — lift them onto the instance's
         // pivot store (a model hydrated WITHOUT a pivot join has none).
+        // Every other `radiant_*` alias is internal machinery (scalar,
+        // through-parent, grouping keys) and is dropped outright. Each
+        // remaining undeclared alias is retained read-only so callers can
+        // read it through attribute() — subquery scalars, computed values
+        // — anything the SELECT list produced that no property maps.
         foreach (get_object_vars($row) as $field => $value) {
             if (str_starts_with($field, 'radiant_pivot_')) {
                 $instance->pivotValues[substr($field, strlen('radiant_pivot_'))] = $value;
+
+                continue;
             }
+
+            if (str_starts_with($field, self::RESERVED_PREFIX)) {
+                continue;
+            }
+
+            // Declared columns hydrate through the mappings above; the bag
+            // holds ONLY what no property maps, so a plain hydration (whose
+            // row carries every declared column) retains nothing.
+            if (isset($declared[$field])) {
+                continue;
+            }
+
+            $instance->extraColumnValues[$field] = $value;
         }
 
         return $instance;
@@ -1744,7 +1775,24 @@ abstract class Model
      */
     final public function attribute(string $columnName): mixed
     {
-        $mapping = MetadataFactory::for(static::class)->mappingFor($columnName);
+        $metadata = MetadataFactory::for(static::class);
+
+        // An undeclared select alias (a subquery scalar, a computed value)
+        // has no mapping and no property slot — it survives hydration only
+        // through the retention bag, so consult it before failing.
+        if (!$metadata->hasColumn($columnName)) {
+            if (array_key_exists($columnName, $this->extraColumnValues)) {
+                return $this->extraColumnValues[$columnName];
+            }
+
+            // Nothing declared and nothing retained — reproduce the
+            // canonical unknown-column failure with its original message.
+            $metadata->mappingFor($columnName);
+
+            throw new \LogicException('unreachable');
+        }
+
+        $mapping = $metadata->mappingFor($columnName);
 
         if ($mapping->property === null) {
             // Runtime override wins; else decode the loaded snapshot.

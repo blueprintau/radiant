@@ -198,13 +198,19 @@ one-time value existing rows receive when the column is added — see
 Schema sync. It is deliberately not a `#[Column]` option: a backfill
 is transient, the column declaration is permanent.
 
-**Synthetic columns.** A column may exist in the metadata without a
-property backing it — useful for columns the model reads and writes but
-doesn't want as a typed field. Read it with
-`$model->attribute('column_name')`; a value written with
-`$model->setAttribute('column_name', $value)` is held in a runtime store
-and survives re-loading the model. A column backed by a typed property
-rejects `setAttribute()` — write the property directly.
+**Undeclared select columns.** A select list may also produce values the
+model does not declare — a scalar subquery alias, a computed expression.
+Nothing is dropped: every undeclared, non-reserved row field is retained
+on the hydrated model in a read-only bag and read back through the same
+`attribute('alias')` call, so a one-query feed (`select(new
+SubquerySelect(...), ...)` returning the count alongside the row) works
+without a second round trip. Declared columns always win — the bag is
+only consulted for names the model does not map. The values never enter
+the write path: they are excluded from dirty tracking, from `save()`
+payloads, and from serialization, and being query-derived rather than row
+state they are not re-selected by a later query — a refreshed or
+re-fetched model no longer carries them. `SubquerySelect` aliases
+starting with the reserved `radiant_` prefix throw at declaration.
 
 ## Constraints
 

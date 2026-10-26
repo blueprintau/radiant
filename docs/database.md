@@ -203,6 +203,14 @@ Correlated references to the OUTER query's tables ride a base builder
 (`$db->table(...)`); a model builder's column allowlist correctly refuses
 columns it does not own.
 
+When a model builder selects a `SubquerySelect`, the alias is not a
+declared column — it is retained on each hydrated model read-only and
+read back with `attribute('order_count')` (see
+[Undeclared select columns](orm.md#undeclared-select-columns) in the ORM
+guide). The values are query-derived, not row state: they are excluded
+from writes and dirty tracking, and they are not re-selected by a later
+query — a refreshed or re-fetched model no longer carries them.
+
 Every method validates its inputs and fails fast rather than compiling
 broken SQL — an empty `whereIn([])` throws, aggregate arguments fail
 closed on non-column shapes, and clause fragments that cannot be bound as

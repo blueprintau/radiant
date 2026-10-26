@@ -461,9 +461,9 @@ writes exist — a missing pivot column fails at the database, not silently.
 **Reserved prefix.** Column names starting with `radiant_` are reserved —
 the ORM uses that prefix for its internal select aliases
 (`radiant_pivot_{column}`, `radiant_pivot_parent_{table}`,
-`radiant_scalar`, `radiant_through_parent_{table}`), and any row field
-with that prefix is treated as internal bookkeeping rather than model
-data. `withPivot()` rejects a reserved pivot column name; a declared
+`radiant_scalar`, `radiant_through_parent_{table}`), and read as internal bookkeeping rather than model
+ data. `withPivot()` rejects a reserved pivot column name; a
+`SubquerySelect` alias with the prefix throws at declaration; a declared
 model column with the prefix collides the same way the moment it rides a
 reserved alias — name your columns anything else.
 

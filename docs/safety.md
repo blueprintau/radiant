@@ -59,6 +59,10 @@ No silent fallbacks. Examples of what throws instead of misbehaving:
   node with `bad alias!` throws at declaration instead of compiling
   broken AS
   SQL.
+- A subquery select alias starting with the reserved `radiant_` prefix
+  throws at declaration — the prefix names the ORM's internal aliases, so
+  a user alias under it would be lifted as pivot data or dropped at
+  hydration instead of readable.
 - A non-SQL connection rejects EXISTS constraints and subquery select
   columns by name (`subquery-where` / `subquery-select`) before any
   compilation — the CSV engine never walks a clause shape it cannot
