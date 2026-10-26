@@ -199,13 +199,67 @@ $rows = $db->table('users')
 
 Both features are SQL-only: a non-SQL connection rejects them with the
 named feature (`subquery-where` / `subquery-select`) before compiling.
-Correlated references to the OUTER query's tables ride a base builder
-(`$db->table(...)`); a model builder's column allowlist correctly refuses
-columns it does not own.
 
-When a model builder selects a `SubquerySelect`, the alias is not a
-declared column — it is retained on each hydrated model read-only and
-read back with `attribute('order_count')` (see
+#### Correlated model subqueries
+
+On a MODEL builder, correlated references need explicit admission:
+`correlateWith($outerBuilder)` stamps the outer's tables (its FROM
+identity, join tables and join aliases) onto the sub-builder's column
+allowlist. Declare it BEFORE the correlated clauses — column validation
+is eager, so a foreign-table reference without it throws at the clause
+call. Admission is by TABLE only: a typo in the outer table's column is
+not caught at declaration (the driver fails fast on the unknown column
+instead). Base builders (`$db->table(...)`) need no stamp — their
+validation is not column-scoped.
+
+```php
+$users = FvUser::whereExists(
+    FvPost::newQuery()
+        ->correlateWith(FvUser::newQuery())
+        ->whereColumn('fv_posts.user_id', '=', 'fv_users.id')
+        ->where('views', '>', 100),
+)->get();
+```
+
+When the outer selects from a subquery (`fromSub($q, 'recent_users')`),
+the FROM identity is the ALIAS: correlated references must write
+`recent_users.id` — the underlying table name is runtime-dead and
+throws.
+
+For scalar correlations the model builder offers
+`ModelQueryBuilder::correlate($alias, $related, $build)`: it builds a
+correlated scalar subquery against a related model and APPENDS it to the
+column list. Chained `correlate()` calls ACCUMULATE — each adds one
+column and preserves everything before it (contrast with `select()`,
+which replaces). The build closure receives the related model's builder
+and the outer's FROM identity, and must RETURN the builder:
+
+```php
+$rows = FvUser::newQuery()
+    ->correlate('post_count', FvPost::class,
+        fn ($posts, $users) => $posts
+            ->select(Aggregate::count())
+            ->whereColumn('user_id', '=', "{$users}.id"))
+    ->correlate('popular_count', FvPost::class,
+        fn ($posts, $users) => $posts
+            ->select(Aggregate::count())
+            ->whereColumn('user_id', '=', "{$users}.id")
+            ->where('views', '>', 300))
+    ->orderBy('id')
+    ->get();
+
+$rows[0]->attribute('post_count');     // 2
+$rows[0]->attribute('popular_count');  // 1
+```
+
+The declaration fails fast: the closure must return the builder, the
+subquery must select exactly one column, an alias may not repeat an
+earlier correlation's alias, and `radiant_*` aliases are reserved.
+
+When a model builder selects a `SubquerySelect` (directly or through
+`correlate()`), the alias is not a declared column — it is retained on
+each hydrated model read-only and read back with
+`attribute('order_count')` (see
 [Undeclared select columns](orm.md#undeclared-select-columns) in the ORM
 guide). The values are query-derived, not row state: they are excluded
 from writes and dirty tracking, and they are not re-selected by a later

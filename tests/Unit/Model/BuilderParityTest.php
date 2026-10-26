@@ -177,14 +177,16 @@ final class BuilderParityTest extends DatabaseTestCase
             'a mixed aggregate shape keeps its aggregate and qualifies the rest',
         );
 
-        // A hand-built raw star beside other specs: each star qualifies IN
-        // PLACE — the aggregate and the bare column both survive.
+        // A hand-built raw star beside other specs: the star EXPANDS IN
+        // PLACE to the model's qualified columns — the aggregate, the
+        // star's columns and the bare column all survive.
         self::assertSame(
-            'SELECT count(*) AS "total", "bp_users".*, "bp_users"."name" FROM "bp_users"'
+            'SELECT count(*) AS "total", "bp_users"."id", "bp_users"."name",'
+            . ' "bp_users"."signed_up_at", "bp_users"."meta", "bp_users"."name" FROM "bp_users"'
             . ' INNER JOIN "bp_users" AS "other" ON "bp_users"."id" = "other"."id"',
             $sqlFor(BpUser::newQuery()->select(Aggregate::count('*', 'total'), '*', 'name')
                 ->join('bp_users as other', 'bp_users.id', '=', 'other.id')),
-            'a raw star beside other specs shields in place, not by collapse',
+            'a raw star beside other specs expands in place, not by collapse',
         );
 
         // select('*') expands to the model's columns (PK first) — the

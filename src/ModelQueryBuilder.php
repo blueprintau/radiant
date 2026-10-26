@@ -138,6 +138,14 @@ final class ModelQueryBuilder extends QueryBuilder
     protected array $correlationTables = [];
 
     /**
+     * Correlated scalar-subquery nodes declared by {@see correlate()} —
+     * re-spliced after the column list on every select() call.
+     *
+     * @var list<\BlueprintAU\Radiant\Database\Query\SubquerySelect>
+     */
+    protected array $pendingCorrelations = [];
+
+    /**
      * Create a builder bound to a model class on a connection.
      *
      * @param  class-string<TModel>  $modelClass
@@ -709,7 +717,7 @@ final class ModelQueryBuilder extends QueryBuilder
      *
      * Column validation is eager, so this must be called before the
      * correlated clauses: afterward, qualified specs may reference the
-     * outer's tables (plus its join tables and aliases), while a
+     * outer's FROM identity (plus its join tables and aliases), while a
      * foreign-table reference without it still throws at the clause call.
      *
      * @param  QueryBuilder  $outer  The builder this subquery correlates against.
@@ -717,7 +725,31 @@ final class ModelQueryBuilder extends QueryBuilder
      */
     public function correlateWith(QueryBuilder $outer): static
     {
-        $tables = [$outer->table];
+        $clone = clone $this;
+        $clone->correlationTables = $this->correlationTablesFor($outer);
+        return $clone;
+    }
+
+    /**
+     * The tables a subquery correlated against $outer may reference.
+     *
+     * The FROM identity comes first: the alias when the outer selects
+     * from a subquery, the alias part of a `table as alias` reference,
+     * otherwise the table itself. Compiled SQL names the FROM by that
+     * identity, so correlated references must use it — the underlying
+     * metadata table under fromSub() is runtime-dead.
+     *
+     * @param  QueryBuilder  $outer
+     * @return list<string>
+     */
+    private function correlationTablesFor(QueryBuilder $outer): array
+    {
+        $table = $outer->table;
+        $from = $outer->getFromAlias()
+            ?? (preg_match('/^(.*?)\s+as\s+(\S+)$/i', $table, $m) === 1 ? $m[2] : null)
+            ?? $table;
+
+        $tables = [$from];
 
         foreach ($outer->getJoins() as $join) {
             if (preg_match('/^(.*?)\s+as\s+(\S+)$/i', $join['table'], $m) === 1) {
@@ -728,8 +760,91 @@ final class ModelQueryBuilder extends QueryBuilder
             }
         }
 
+        return $tables;
+    }
+
+    /**
+     * Select a correlated scalar subquery from a related model, appending
+     * it to the column list.
+     *
+     * Chained correlate() calls ACCUMULATE — each adds one column and
+     * preserves everything before it (contrast with {@see select()},
+     * which replaces). A later select() keeps the accumulated columns.
+     *
+     * @param  string  $alias  The result column name — a bare identifier, radiant_* reserved.
+     * @param  class-string<\BlueprintAU\Radiant\Model>  $related  The related model the subquery reads.
+     * @param  callable(ModelQueryBuilder<\BlueprintAU\Radiant\Model>, string): (ModelQueryBuilder<\BlueprintAU\Radiant\Model>|void)  $build  Receives the related model's builder and this query's FROM identity; must return the builder (falling off the end throws).
+     * @return static
+     * @throws \InvalidArgumentException
+     */
+    public function correlate(string $alias, string $related, callable $build): static
+    {
+        foreach ($this->pendingCorrelations as $pending) {
+            if ($pending->alias === $alias) {
+                throw new \InvalidArgumentException(
+                    "A correlation with alias [{$alias}] already exists on this query."
+                );
+            }
+        }
+
+        $identity = $this->correlationTablesFor($this)[0];
+
+        $sub = $related::newQuery()->correlateWith($this);
+
+        $built = $build($sub, $identity);
+
+        if (!$built instanceof self) {
+            throw new \InvalidArgumentException(
+                "The correlate() builder callback for [{$alias}] must return the model query builder."
+            );
+        }
+
+        if (count($built->getColumns()) !== 1) {
+            throw new \InvalidArgumentException(
+                "The correlate() subquery for [{$alias}] must select exactly one column."
+            );
+        }
+
         $clone = clone $this;
-        $clone->correlationTables = $tables;
+        $clone->pendingCorrelations[] = new SubquerySelect($built, $alias);
+
+        return $clone->select(...$this->columns());
+    }
+
+    /**
+     * The user-owned column specs — the current list minus any spliced
+     * correlation nodes.
+     *
+     * @return list<string|Expression|Aggregate|SubquerySelect>
+     */
+    private function columns(): array
+    {
+        return array_values(array_filter(
+            $this->columns,
+            fn(string|Expression|Aggregate|SubquerySelect $column) => !in_array($column, $this->pendingCorrelations, true),
+        ));
+    }
+
+    /**
+     * Drop every correlation declared through {@see correlate()}.
+     *
+     * The explicit opt-out — mirrors {@see withoutScope()}: stripping is
+     * a deliberate act, never a side effect of select(). Useful when the
+     * builder arrived pre-correlated (a relation's getQuery()), where
+     * branching off an earlier immutable clone is not available.
+     *
+     * @return static
+     */
+    public function withoutCorrelations(): static
+    {
+        if ($this->pendingCorrelations === []) {
+            return $this; // nothing to remove — reuse the instance.
+        }
+
+        $clone = clone $this;
+        $clone->pendingCorrelations = [];
+        $clone->columns = $this->columns();
+
         return $clone;
     }
 
@@ -2050,7 +2165,15 @@ final class ModelQueryBuilder extends QueryBuilder
      * The PK columns and the soft-delete column (when the model uses
      * {@see SoftDeletes}) are always present so hydration, `whereKey()`
      * and the trash-state reads work. An {@see Expression} bypasses
-     * validation — raw SQL by contract.
+     * validation — raw SQL by contract. Every bare `*` expands IN PLACE,
+     * so a mixed list keeps its sibling specs on both sides of the
+     * expansion.
+     *
+     * Calling select() again REPLACES the list (Laravel parity) — use
+     * {@see correlate()} to APPEND correlated scalars instead. Columns
+     * declared through correlate() ride every select() call: they are
+     * re-spliced after the computed list, so an explicit select() never
+     * drops them.
      *
      * When the builder already JOINs another table, every bare spec is
      * QUALIFIED to this model's table (`table.column`) — unqualified
@@ -2068,81 +2191,108 @@ final class ModelQueryBuilder extends QueryBuilder
     {
         $flat = $columns === [] ? ['*'] : array_values($columns);
 
-        if ($flat === ['*']) {
-            // `*` → the model's own columns (PK first, then the rest).
-            $flat = array_values(array_unique(array_merge(
-                $this->forcedKeys,
-                array_diff($this->modelColumns, $this->forcedKeys),
-            )));
-        } else {
-            foreach ($flat as $column) {
-                if ($column instanceof Aggregate) {
-                    // The aggregate's column gets the same allowlist check
-                    // as a plain select column; an Expression argument is
-                    // raw SQL by contract and passes through.
-                    if (!$column->column instanceof Expression && $column->column !== '*') {
-                        $this->validateColumn($column->column);
-                    }
-                } elseif ($column instanceof SubquerySelect) {
-                    // The node's sub-builder validates its columns
-                    // against its own model; the alias was validated by
-                    // the constructor. No outer validation applies.
-                } elseif (!$column instanceof Expression) {
-                    $this->validateColumn($column);
+        // Every bare `*` expands in place to the model's own columns
+        // (PK first, then the rest) — mixed lists keep their node and
+        // aggregate siblings instead of compiling a raw star beside them.
+        $expanded = [];
+        foreach ($flat as $column) {
+            if (is_string($column) && $column === '*') {
+                foreach (array_values(array_unique(array_merge(
+                    $this->forcedKeys,
+                    array_diff($this->modelColumns, $this->forcedKeys),
+                ))) as $modelColumn) {
+                    $expanded[] = $this->qualifyForJoin([$modelColumn])[0];
                 }
+            } else {
+                $expanded[] = $column;
             }
+        }
+        $flat = $expanded;
 
-            // An explicit list containing QUALIFIED specs (or `table.*`)
-            // is caller-owned — typically a joined read where a bare PK
-            // would be ambiguous. No forced-key merge. Every string spec has
-            // been allowlist-validated above (validateColumn's qualified
-            // branch checks the partition map / own table / joined tables),
-            // so a typo'd or attacker-influenced `table.column` fails fast
-            // here rather than compiling into the SQL quote-only.
-            $callerOwned = (bool) array_filter(
-                $flat,
-                fn(string|Expression|Aggregate|SubquerySelect $column) => !is_string($column)
-                    ? true
-                    : str_contains($column, '.'),
-            );
-
-            if ($callerOwned) {
-                // Order-stable qualification: each spec qualifies in its
-                // own position — bare strings map to `table.col`, objects
-                // (Aggregate/Expression/SubquerySelect) pass through
-                // verbatim — so the compiled list matches the caller's
-                // written order.
-                return parent::select(...array_map(
-                    fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column)
-                        ? $this->qualifyForJoin([$column])[0]
-                        : $column,
-                    $flat,
-                ));
+        foreach ($flat as $column) {
+            if ($column instanceof Aggregate) {
+                // The aggregate's column gets the same allowlist check
+                // as a plain select column; an Expression argument is
+                // raw SQL by contract and passes through.
+                if (!$column->column instanceof Expression && $column->column !== '*') {
+                    $this->validateColumn($column->column);
+                }
+            } elseif ($column instanceof SubquerySelect) {
+                // The node's sub-builder validates its columns
+                // against its own model; the alias was validated by
+                // the constructor. No outer validation applies.
+            } elseif (!$column instanceof Expression) {
+                $this->validateColumn($column);
             }
         }
 
+        // An explicit list containing QUALIFIED specs (or `table.*`)
+        // is caller-owned — typically a joined read where a bare PK
+        // would be ambiguous. No forced-key merge. Every string spec has
+        // been allowlist-validated above (validateColumn's qualified
+        // branch checks the partition map / own table / joined tables),
+        // so a typo'd or attacker-influenced `table.column` fails fast
+        // here rather than compiling into the SQL quote-only. Node,
+        // Aggregate and Expression specs mark the list caller-owned too
+        // — EXCEPT a lone node-only select, which still merges the
+        // forced keys so hydration never loses the model's columns.
+        $hasNode = false;
+        $callerOwned = false;
+        foreach ($flat as $column) {
+            if ($column instanceof SubquerySelect) {
+                $hasNode = true;
+            } elseif (!is_string($column) || str_contains($column, '.')) {
+                $callerOwned = true;
+            }
+        }
+
+        if ($callerOwned) {
+            // Order-stable qualification: each spec qualifies in its
+            // own position — bare strings map to `table.col`, objects
+            // (Aggregate/Expression/SubquerySelect) pass through
+            // verbatim — so the compiled list matches the caller's
+            // written order.
+            return parent::select(...array_map(
+                fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column)
+                    ? $this->qualifyForJoin([$column])[0]
+                    : $column,
+                $flat,
+            ), ...$this->pendingCorrelations);
+        }
+
+        // A grouped builder's select is its exact column shape (the
+        // grouped aggregates' contract) — no forced-key merge, specs
+        // qualify in place.
         if ($this->getGroups() !== []) {
             return parent::select(...array_map(
                 fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column)
                     ? $this->qualifyForJoin([$column])[0]
                     : $column,
                 $flat,
-            ));
+            ), ...$this->pendingCorrelations);
         }
 
         // Merge forced keys (PK always selected), dedupe, preserve order.
-        // At this point every entry is a validated string column (all
-        // Expression entries exited via the caller-owned branch above — and
-        // an aggregate query with an Expression select skips the merge too,
-        // since grouping changes the shape). Filter defensively for the
-        // type system: array_unique/array_merge need strings here.
+        // Nodes reach this path ONLY as a lone node-only select (the
+        // caller-owned branch takes everything else); their specs ride
+        // AFTER the merge below.
         $stringColumns = array_values(array_filter(
             $flat,
             fn(string|Expression|Aggregate|SubquerySelect $column) => is_string($column),
         ));
         $merged = array_values(array_unique(array_merge($this->forcedKeys, $stringColumns)));
 
-        return parent::select(...$this->qualifyForJoin($merged));
+        $qualified = $this->qualifyForJoin($merged);
+
+        if ($hasNode) {
+            foreach ($flat as $column) {
+                if ($column instanceof SubquerySelect) {
+                    $qualified[] = $column;
+                }
+            }
+        }
+
+        return parent::select(...$qualified, ...$this->pendingCorrelations);
     }
 
     /**
