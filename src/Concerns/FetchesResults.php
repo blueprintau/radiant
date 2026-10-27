@@ -46,6 +46,13 @@ trait FetchesResults
     abstract protected function eagerCache(): Collection;
 
     /**
+     * The eagerly-loaded result with the relation's with() paths applied.
+     *
+     * @return Collection<int, TRelated>
+     */
+    abstract protected function eagerCacheWithRelations(): Collection;
+
+    /**
      * Whether the eagerly-loaded result can serve the row reads.
      *
      * @return bool
@@ -73,7 +80,7 @@ trait FetchesResults
     {
         if (!$fresh && $this->servesCache()) {
             /** @var TRelated|null */
-            return $this->eagerCache()->first();
+            return $this->eagerCacheWithRelations()->first();
         }
 
         return $this->readQuery()->first();
@@ -95,7 +102,7 @@ trait FetchesResults
     {
         if (!$fresh && $this->servesCache()) {
             /** @var TRelated|null */
-            return $this->eagerCache()->find($id);
+            return $this->eagerCacheWithRelations()->find($id);
         }
 
         return $this->readQuery()->find($id);
@@ -165,7 +172,7 @@ trait FetchesResults
     final public function sole(bool $fresh = false): Model
     {
         if (!$fresh && $this->servesCache()) {
-            $models = $this->eagerCache();
+            $models = $this->eagerCacheWithRelations();
             $count = $models->count();
 
             if ($count === 0) {
@@ -273,7 +280,7 @@ trait FetchesResults
     final public function cursor(bool $fresh = false): \Generator
     {
         if (!$fresh && $this->servesCache()) {
-            yield from $this->eagerCache();
+            yield from $this->eagerCacheWithRelations();
 
             return;
         }

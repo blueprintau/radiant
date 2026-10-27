@@ -70,6 +70,13 @@ abstract class Relation
     private bool $composed = false;
 
     /**
+     * The nested eager-load paths registered with with().
+     *
+     * @var list<string>
+     */
+    private array $withPaths = [];
+
+    /**
      * Create a relation.
      *
      * @param  Model  $parent
@@ -185,6 +192,31 @@ abstract class Relation
         }
 
         return $this->wrapCached($this->parent->cachedRelation($this->name));
+    }
+
+    /**
+     * The eagerly-loaded result with the with() paths applied.
+     *
+     * The loads re-run per read — the same always-fresh rule the lazy
+     * path follows; the snapshot itself is never re-queried.
+     *
+     * @return Collection<int, TRelated>
+     */
+    protected function eagerCacheWithRelations(): Collection
+    {
+        $models = $this->eagerCache();
+
+        if ($this->withPaths === []) {
+            return $models;
+        }
+
+        $loader = $this->parent->newQuery();
+
+        foreach ($this->withPaths as $path) {
+            $loader->loadRelationPath($models, $path);
+        }
+
+        return $models;
     }
 
     /**
@@ -363,7 +395,7 @@ abstract class Relation
     final public function get(bool $fresh = false): Collection
     {
         if (!$fresh && $this->servesCache()) {
-            return $this->eagerCache();
+            return $this->eagerCacheWithRelations();
         }
 
         return $this->executeResults();
@@ -404,6 +436,32 @@ abstract class Relation
     final public function getQuery(): ModelQueryBuilder
     {
         return $this->query;
+    }
+
+    /**
+     * Register relations to eager-load onto the read results.
+     *
+     * The paths validate against the related model at the call. The
+     * loads apply when the results are fetched: a fresh read registers
+     * them on the query, a snapshot-served read applies them to the
+     * cached models. Unlike the filters, with() keeps the snapshot
+     * servable — loading relations changes no rows.
+     *
+     * @param  string  ...$relations
+     * @return static
+     * @throws \InvalidArgumentException
+     * @throws \LogicException
+     */
+    final public function with(string ...$relations): static
+    {
+        $clone = clone $this;
+
+        // The query registration validates every path fail-fast and
+        // covers the fresh-read path in one call.
+        $clone->query = $this->compositionQuery()->with(...$relations);
+        array_push($clone->withPaths, ...$relations);
+
+        return $clone;
     }
 
     /**

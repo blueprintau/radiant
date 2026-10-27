@@ -62,6 +62,20 @@ foreach ($user->posts()->orderBy('created_at')->get() as $post) { ... }
 $recent = $user->posts()->where('active', '=', 1)->limit(5)->get();
 ```
 
+`with()` also composes on the relation: it registers nested eager-load
+paths on the related models, validated against the related model at the
+call. The loads apply when results are fetched — a fresh read carries
+them on the query, a snapshot-served read applies them to the cached
+models. Unlike the filters, `with()` is not a filter: loading relations
+changes no rows, so the eagerly-loaded snapshot stays servable. The
+loads re-run on every read (the same always-fresh rule the lazy path
+follows); the snapshot itself is never re-queried.
+
+```php
+// Every post comes back with its author loaded.
+$posts = $user->posts()->with('author')->get();
+```
+
 **Relations are immutable.** Every filter and configurator (`withPivot()`,
 `withTimestamps()`) returns a NEW relation — the original is never
 modified, and a discarded call is a no-op. A composed chain always
